@@ -90,20 +90,51 @@ pub fn format_cyclonedx_sbom(
             });
 
             if let Some(l) = lic {
-                comp_obj["licenses"] = json!([
-                    {
-                        "license": {
-                            "id": l
+                if l.contains(" OR ") || l.contains(" AND ") || l.contains('/') {
+                    let sanitized = l.replace('/', " OR ");
+                    comp_obj["licenses"] = json!([
+                        {
+                            "expression": sanitized
                         }
-                    }
-                ]);
+                    ]);
+                } else if l.to_uppercase() == "UNKNOWN" {
+                    comp_obj["licenses"] = json!([
+                        {
+                            "license": {
+                                "name": "UNKNOWN"
+                            }
+                        }
+                    ]);
+                } else {
+                    comp_obj["licenses"] = json!([
+                        {
+                            "license": {
+                                "id": l
+                            }
+                        }
+                    ]);
+                }
             }
 
             if let Some(integrity) = &node.info.integrity {
+                let alg = if integrity.starts_with("sha512-") || integrity.len() == 128 {
+                    "SHA-512"
+                } else if integrity.starts_with("sha256-") || integrity.len() == 64 {
+                    "SHA-256"
+                } else if integrity.starts_with("sha1-") || integrity.len() == 40 {
+                    "SHA-1"
+                } else {
+                    "SHA-256"
+                };
+                let clean_hash = integrity
+                    .trim_start_matches("sha512-")
+                    .trim_start_matches("sha256-")
+                    .trim_start_matches("sha1-");
+
                 comp_obj["hashes"] = json!([
                     {
-                        "alg": "SHA-512",
-                        "content": integrity
+                        "alg": alg,
+                        "content": clean_hash
                     }
                 ]);
             }
@@ -125,15 +156,37 @@ pub fn format_cyclonedx_sbom(
     let mut vulnerabilities = Vec::new();
     if let Some(sr) = scan_result {
         for v in &sr.vulnerabilities {
-            let mut ratings = Vec::new();
-            ratings.push(json!({
+            let mut rating = json!({
                 "source": { "name": "NVD" },
                 "score": v.severity.score,
                 "severity": v.severity.level.as_str().to_lowercase(),
                 "method": "CVSSv3"
-            }));
+            });
+            if let Some(vec) = &v.severity.vector {
+                rating["vector"] = json!(vec);
+            }
+            let ratings = vec![rating];
 
-            vulnerabilities.push(json!({
+            let target_ref = all_nodes
+                .iter()
+                .find(|n| {
+                    if let Some(pkg) = dep_graph.get_pkg(&n.pkg_id) {
+                        pkg.name == v.package && pkg.version == v.version
+                    } else {
+                        false
+                    }
+                })
+                .map(|n| n.node_id.clone())
+                .unwrap_or_else(|| {
+                    let prefix = if !dep_graph.pkg_manager.name.is_empty() {
+                        dep_graph.pkg_manager.name.as_str()
+                    } else {
+                        "cargo"
+                    };
+                    format!("{}:{}@{}", prefix, v.package, v.version)
+                });
+
+            let mut vuln_obj = json!({
                 "id": v.cve.as_deref().unwrap_or(&v.id),
                 "source": {
                     "name": if v.id.starts_with("GHSA") { "GitHub Advisory Database" } else { "OSV" },
@@ -143,10 +196,47 @@ pub fn format_cyclonedx_sbom(
                 "description": v.details.as_deref().unwrap_or(&v.title),
                 "affects": [
                     {
-                        "ref": format!("{}@{}", v.package, v.version)
+                        "ref": target_ref
                     }
                 ]
-            }));
+            });
+
+            // Add CWEs if available
+            let cwe_ids: Vec<u32> = v
+                .cwes
+                .iter()
+                .filter_map(|c| {
+                    c.trim_start_matches("CWE-")
+                        .trim_start_matches("cwe-")
+                        .parse::<u32>()
+                        .ok()
+                })
+                .collect();
+            if !cwe_ids.is_empty() {
+                vuln_obj["cwes"] = json!(cwe_ids);
+            }
+
+            // VEX / Reachability analysis state
+            if let Some(reach) = &v.reachability {
+                use crate::types::ReachabilityStatus;
+                let state = match reach.status {
+                    ReachabilityStatus::Reachable => "exploitable",
+                    ReachabilityStatus::Unreachable => "not_affected",
+                    ReachabilityStatus::Unknown => "in_triage",
+                };
+                let mut analysis = json!({
+                    "state": state
+                });
+                if reach.status == ReachabilityStatus::Unreachable {
+                    analysis["justification"] = json!("code_not_reachable");
+                    analysis["detail"] = json!("AST call graph analysis confirmed vulnerability code is not executed.");
+                } else if reach.status == ReachabilityStatus::Reachable {
+                    analysis["detail"] = json!("AST call graph analysis detected active call path to vulnerable function.");
+                }
+                vuln_obj["analysis"] = analysis;
+            }
+
+            vulnerabilities.push(vuln_obj);
         }
     }
 
@@ -178,9 +268,22 @@ pub fn format_cyclonedx_sbom(
     serde_json::to_string_pretty(&cyclonedx).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// Sanitizes license string for SPDX 2.3 expression compliance
+fn sanitize_spdx_license(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("UNKNOWN") {
+        "NOASSERTION".to_string()
+    } else if trimmed.contains('/') {
+        trimmed.replace(" / ", " OR ").replace('/', " OR ")
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Generates a standard SPDX v2.3 JSON Software Bill of Materials (SBOM)
 pub fn format_spdx_sbom(
     dep_graph: &DepGraph,
+    scan_result: Option<&ScanResult>,
     license_audit: Option<&LicenseAudit>,
 ) -> String {
     let timestamp = Utc::now().to_rfc3339();
@@ -189,7 +292,7 @@ pub fn format_spdx_sbom(
 
     let doc_namespace = format!(
         "https://spdx.org/spdxdocs/{}-{}-{}",
-        root_pkg.name.replace('/', "-"),
+        root_pkg.name.replace('/', "-").replace('\\', "-"),
         root_pkg.version,
         Utc::now().format("%Y%m%d%H%M%S")
     );
@@ -216,13 +319,15 @@ pub fn format_spdx_sbom(
         "relatedSpdxElement": root_spdx_id.clone()
     }));
 
-    // Add root package
+    // Add root package (with NTIA and SPDX mandatory fields)
     packages.push(json!({
         "SPDXID": root_spdx_id.clone(),
         "name": root_pkg.name,
         "versionInfo": root_pkg.version,
+        "supplier": "NOASSERTION",
         "downloadLocation": "NOASSERTION",
         "filesAnalyzed": false,
+        "copyrightText": "NOASSERTION",
         "licenseConcluded": "NOASSERTION",
         "licenseDeclared": "NOASSERTION",
         "externalRefs": [
@@ -250,27 +355,75 @@ pub fn format_spdx_sbom(
             node_to_spdx.insert(node.node_id.clone(), spdx_id.clone());
 
             let pkg_key = format!("{}@{}", pkg.name, pkg.version);
-            let lic = license_map
+            let raw_lic = license_map
                 .get(&pkg_key)
-                .cloned()
-                .unwrap_or_else(|| "NOASSERTION".to_string());
+                .map(|s| s.as_str())
+                .unwrap_or("NOASSERTION");
+            let lic = sanitize_spdx_license(raw_lic);
 
-            packages.push(json!({
+            let mut external_refs = vec![json!({
+                "referenceCategory": "PACKAGE-MANAGER",
+                "referenceType": "purl",
+                "referenceLocator": pkg.purl
+            })];
+
+            // If scan_result is available, link security advisories affecting this component
+            if let Some(sr) = scan_result {
+                for v in &sr.vulnerabilities {
+                    if v.package == pkg.name && v.version == pkg.version {
+                        let ref_loc = v.references.first().cloned().unwrap_or_else(|| {
+                            if v.id.starts_with("GHSA") {
+                                format!("https://github.com/advisories/{}", v.id)
+                            } else {
+                                format!("https://osv.dev/vulnerability/{}", v.id)
+                            }
+                        });
+                        external_refs.push(json!({
+                            "referenceCategory": "SECURITY",
+                            "referenceType": "advisory",
+                            "referenceLocator": ref_loc,
+                            "comment": format!("{}: {}", v.id, v.title)
+                        }));
+                    }
+                }
+            }
+
+            let mut pkg_obj = json!({
                 "SPDXID": spdx_id,
                 "name": pkg.name,
                 "versionInfo": pkg.version,
+                "supplier": "NOASSERTION",
                 "downloadLocation": "NOASSERTION",
                 "filesAnalyzed": false,
+                "copyrightText": "NOASSERTION",
                 "licenseConcluded": lic,
                 "licenseDeclared": lic,
-                "externalRefs": [
+                "externalRefs": external_refs
+            });
+
+            // Add artifact verification checksum if available
+            if let Some(integrity) = &node.info.integrity {
+                let (alg, val) = if let Some(stripped) = integrity.strip_prefix("sha512-") {
+                    ("SHA512", stripped)
+                } else if let Some(stripped) = integrity.strip_prefix("sha256-") {
+                    ("SHA256", stripped)
+                } else if integrity.len() == 64 {
+                    ("SHA256", integrity.as_str())
+                } else if integrity.len() == 128 {
+                    ("SHA512", integrity.as_str())
+                } else {
+                    ("SHA256", integrity.as_str())
+                };
+
+                pkg_obj["checksums"] = json!([
                     {
-                        "referenceCategory": "PACKAGE-MANAGER",
-                        "referenceType": "purl",
-                        "referenceLocator": pkg.purl
+                        "algorithm": alg,
+                        "checksumValue": val
                     }
-                ]
-            }));
+                ]);
+            }
+
+            packages.push(pkg_obj);
         }
     }
 
@@ -298,7 +451,8 @@ pub fn format_spdx_sbom(
         "creationInfo": {
             "created": timestamp,
             "creators": [
-                "Tool: vexa-sca-1.0.0"
+                "Tool: vexa-sca-1.0.0",
+                "Organization: Vexa"
             ]
         },
         "packages": packages,
@@ -359,11 +513,191 @@ mod tests {
     #[test]
     fn test_spdx_sbom_generation() {
         let graph = build_test_graph();
-        let spdx_json = format_spdx_sbom(&graph, None);
+        let spdx_json = format_spdx_sbom(&graph, None, None);
         let parsed: Value = serde_json::from_str(&spdx_json).expect("valid SPDX JSON");
 
         assert_eq!(parsed["spdxVersion"], "SPDX-2.3");
         assert_eq!(parsed["dataLicense"], "CC0-1.0");
-        assert!(parsed["packages"].as_array().unwrap().len() >= 2);
+        let pkgs = parsed["packages"].as_array().unwrap();
+        assert!(pkgs.len() >= 2);
+        // Verify NTIA Minimum Elements and SPDX 2.3 mandatory fields
+        assert_eq!(pkgs[0]["supplier"], "NOASSERTION");
+        assert_eq!(pkgs[0]["copyrightText"], "NOASSERTION");
+        assert_eq!(pkgs[1]["supplier"], "NOASSERTION");
+        assert_eq!(pkgs[1]["copyrightText"], "NOASSERTION");
+    }
+
+    #[test]
+    fn test_spdx_sbom_compliance_and_security_advisories() {
+        use crate::types::{SeverityInfo, SeverityLevel, VulnerabilityFinding};
+        use crate::licenses::license_scanner::{LicenseAudit, PackageLicenseResult, LicenseCategory, LicenseRisk};
+
+        let root = PkgInfo::new("agentcontrol", "1.0.95", "cargo");
+        let mut graph = DepGraph::new(
+            root,
+            PkgManagerInfo {
+                name: "cargo".to_string(),
+                version: "1.90.0".to_string(),
+            },
+        );
+
+        let pkg = PkgInfo::new("jsonwebtoken", "9.3.1", "cargo");
+        graph.add_pkg(pkg.clone());
+        let node_id = "cargo:jsonwebtoken@9.3.1".to_string();
+        graph.add_node(
+            node_id.clone(),
+            pkg.id.clone(),
+            NodeInfo {
+                scope: "prod".to_string(),
+                path: None,
+                integrity: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+            },
+        );
+        let _ = graph.add_edge(&graph.root_node_id.clone(), &node_id);
+
+        let scan_result = ScanResult {
+            vulnerabilities: vec![VulnerabilityFinding {
+                id: "CVE-2026-25537".to_string(),
+                title: "Type confusion in jsonwebtoken".to_string(),
+                package: "jsonwebtoken".to_string(),
+                version: "9.3.1".to_string(),
+                ecosystem: "cargo".to_string(),
+                pkg_id: "crates.io/jsonwebtoken@9.3.1".to_string(),
+                severity: SeverityInfo {
+                    level: SeverityLevel::High,
+                    score: 7.5,
+                    vector: Some("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H".to_string()),
+                },
+                cve: Some("CVE-2026-25537".to_string()),
+                cwes: vec!["CWE-843".to_string()],
+                fixed_in: vec![],
+                is_transitive: false,
+                paths: vec![],
+                details: Some("Validation logic bypass".to_string()),
+                references: vec!["https://github.com/Keats/jsonwebtoken".to_string()],
+                reachability: None,
+                aliases: vec![],
+                advisory_category: Default::default(),
+            }],
+            ..Default::default()
+        };
+
+        let license_audit = LicenseAudit {
+            summary: Default::default(),
+            results: vec![PackageLicenseResult {
+                package: "jsonwebtoken".to_string(),
+                version: "9.3.1".to_string(),
+                ecosystem: "cargo".to_string(),
+                license: "MIT/Apache-2.0".to_string(), // Slashes should be sanitized to "MIT OR Apache-2.0"
+                category: LicenseCategory::Permissive,
+                risk: LicenseRisk { level: "LOW".to_string(), score: 0 },
+                ..Default::default()
+            }],
+        };
+
+        let spdx_json = format_spdx_sbom(&graph, Some(&scan_result), Some(&license_audit));
+        let parsed: Value = serde_json::from_str(&spdx_json).expect("valid SPDX JSON");
+
+        let pkgs = parsed["packages"].as_array().unwrap();
+        let target_pkg = pkgs.iter().find(|p| p["name"] == "jsonwebtoken").expect("jsonwebtoken package");
+
+        // Verify license was sanitized from "MIT/Apache-2.0" to "MIT OR Apache-2.0"
+        assert_eq!(target_pkg["licenseConcluded"], "MIT OR Apache-2.0");
+        assert_eq!(target_pkg["licenseDeclared"], "MIT OR Apache-2.0");
+
+        // Verify checksums
+        assert_eq!(target_pkg["checksums"][0]["algorithm"], "SHA256");
+        assert_eq!(target_pkg["checksums"][0]["checksumValue"], "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+        // Verify security advisory externalRefs
+        let refs = target_pkg["externalRefs"].as_array().unwrap();
+        let sec_ref = refs.iter().find(|r| r["referenceCategory"] == "SECURITY").expect("security externalRef");
+        assert_eq!(sec_ref["referenceType"], "advisory");
+        assert_eq!(sec_ref["referenceLocator"], "https://github.com/Keats/jsonwebtoken");
+    }
+
+    #[test]
+    fn test_cyclonedx_sbom_affects_ref_and_spdx_expression() {
+        use crate::types::{SeverityInfo, SeverityLevel, VulnerabilityFinding};
+        use crate::licenses::license_scanner::{LicenseAudit, PackageLicenseResult, LicenseCategory, LicenseRisk};
+
+        let root = PkgInfo::new("agentcontrol", "1.0.95", "cargo");
+        let mut graph = DepGraph::new(
+            root,
+            PkgManagerInfo {
+                name: "cargo".to_string(),
+                version: "1.90.0".to_string(),
+            },
+        );
+
+        let pkg = PkgInfo::new("jsonwebtoken", "9.3.1", "cargo");
+        graph.add_pkg(pkg.clone());
+        let node_id = "cargo:jsonwebtoken@9.3.1".to_string();
+        graph.add_node(
+            node_id.clone(),
+            pkg.id.clone(),
+            NodeInfo {
+                scope: "prod".to_string(),
+                path: None,
+                integrity: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+            },
+        );
+        let _ = graph.add_edge(&graph.root_node_id.clone(), &node_id);
+
+        let scan_result = ScanResult {
+            vulnerabilities: vec![VulnerabilityFinding {
+                id: "CVE-2026-25537".to_string(),
+                title: "Type confusion in jsonwebtoken".to_string(),
+                package: "jsonwebtoken".to_string(),
+                version: "9.3.1".to_string(),
+                ecosystem: "cargo".to_string(),
+                pkg_id: "crates.io/jsonwebtoken@9.3.1".to_string(),
+                severity: SeverityInfo {
+                    level: SeverityLevel::High,
+                    score: 7.5,
+                    vector: Some("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H".to_string()),
+                },
+                cve: Some("CVE-2026-25537".to_string()),
+                cwes: vec!["CWE-843".to_string()],
+                fixed_in: vec![],
+                is_transitive: false,
+                paths: vec![],
+                details: Some("Validation logic bypass".to_string()),
+                references: vec!["https://github.com/Keats/jsonwebtoken".to_string()],
+                reachability: None,
+                aliases: vec![],
+                advisory_category: Default::default(),
+            }],
+            ..Default::default()
+        };
+
+        let license_audit = LicenseAudit {
+            summary: Default::default(),
+            results: vec![PackageLicenseResult {
+                package: "jsonwebtoken".to_string(),
+                version: "9.3.1".to_string(),
+                ecosystem: "cargo".to_string(),
+                license: "(MIT OR Apache-2.0) AND Unicode-3.0".to_string(),
+                category: LicenseCategory::Permissive,
+                risk: LicenseRisk { level: "LOW".to_string(), score: 0 },
+                ..Default::default()
+            }],
+        };
+
+        let cdx_json = format_cyclonedx_sbom(&graph, Some(&scan_result), Some(&license_audit));
+        let parsed: Value = serde_json::from_str(&cdx_json).expect("valid CycloneDX JSON");
+
+        // Verify component bom-ref and hash
+        let comp = &parsed["components"][0];
+        assert_eq!(comp["bom-ref"], "cargo:jsonwebtoken@9.3.1");
+        assert_eq!(comp["licenses"][0]["expression"], "(MIT OR Apache-2.0) AND Unicode-3.0");
+        assert_eq!(comp["hashes"][0]["alg"], "SHA-256");
+
+        // Verify vulnerability affects matches bom-ref exactly!
+        let vuln = &parsed["vulnerabilities"][0];
+        assert_eq!(vuln["id"], "CVE-2026-25537");
+        assert_eq!(vuln["affects"][0]["ref"], "cargo:jsonwebtoken@9.3.1");
+        assert_eq!(vuln["ratings"][0]["vector"], "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H");
+        assert_eq!(vuln["cwes"][0], 843);
     }
 }

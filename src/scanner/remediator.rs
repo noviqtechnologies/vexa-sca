@@ -51,18 +51,31 @@ impl Remediator {
                 }
             });
 
-            let target_version = valid_upgrades.first().cloned();
+            // Pick the highest required upgrade version to ensure all candidate vulnerabilities are resolved
+            let target_version = valid_upgrades.last().cloned();
 
             let (action_type, advice) = match &target_version {
                 Some(target) => {
                     if !is_transitive {
-                        (
-                            "UPGRADE_DIRECT".to_string(),
-                            format!(
-                                "Upgrade direct dependency \"{}\" from {} to {} in your manifest.",
+                        let direct_msg = match sample.ecosystem.as_str() {
+                            "crates.io" => format!(
+                                "Upgrade direct dependency \"{}\" from {} to {} in Cargo.toml.",
                                 sample.package, current_version, target
                             ),
-                        )
+                            "Go" => format!(
+                                "Upgrade direct dependency \"{}\" from {} to {} via 'go get {}@{}'.",
+                                sample.package, current_version, target, sample.package, target
+                            ),
+                            "PyPI" => format!(
+                                "Upgrade direct dependency \"{}\" from {} to {} in requirements.txt or pyproject.toml.",
+                                sample.package, current_version, target
+                            ),
+                            _ => format!(
+                                "Upgrade direct dependency \"{}\" from {} to {} in package.json.",
+                                sample.package, current_version, target
+                            ),
+                        };
+                        ("UPGRADE_DIRECT".to_string(), direct_msg)
                     } else {
                         let mut introducers = BTreeSet::new();
                         for v in &vulns {
@@ -78,13 +91,26 @@ impl Remediator {
                             introducers.into_iter().collect::<Vec<_>>().join(", ")
                         };
 
-                        (
-                            "UPGRADE_TRANSITIVE".to_string(),
-                            format!(
+                        let trans_msg = match sample.ecosystem.as_str() {
+                            "crates.io" => format!(
+                                "Transitive vulnerability introduced by {}. Update via 'cargo update -p {} --precise {}' or specify in [patch.crates-io].",
+                                introducer_list, sample.package, target
+                            ),
+                            "Go" => format!(
+                                "Transitive vulnerability introduced by {}. Update via 'go get {}@{}' in go.mod.",
+                                introducer_list, sample.package, target
+                            ),
+                            "PyPI" => format!(
+                                "Transitive vulnerability introduced by {}. Pin {}=={} in requirements or lockfile.",
+                                introducer_list, sample.package, target
+                            ),
+                            _ => format!(
                                 "Transitive vulnerability introduced by {}. Upgrade top-level parent or add package override \"{}\": \"{}\".",
                                 introducer_list, sample.package, target
                             ),
-                        )
+                        };
+
+                        ("UPGRADE_TRANSITIVE".to_string(), trans_msg)
                     }
                 }
                 None => (
@@ -96,6 +122,19 @@ impl Remediator {
                 ),
             };
 
+            let mut highest_sev: Option<crate::types::SeverityLevel> = None;
+            for v in &vulns {
+                let s = v.severity.level;
+                match highest_sev {
+                    None => highest_sev = Some(s),
+                    Some(cur) => {
+                        if s.weight() > cur.weight() {
+                            highest_sev = Some(s);
+                        }
+                    }
+                }
+            }
+
             remediations.push(RemediationAction {
                 package: sample.package.clone(),
                 current_version: current_version.clone(),
@@ -105,6 +144,7 @@ impl Remediator {
                 advice,
                 resolved_vulnerability_count: vulns.len(),
                 vulnerability_ids: vulns.iter().map(|v| v.id.clone()).collect(),
+                highest_severity: highest_sev,
             });
         }
 
@@ -112,3 +152,57 @@ impl Remediator {
         remediations
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{SeverityInfo, SeverityLevel};
+
+    #[test]
+    fn test_remediator_picks_highest_required_upgrade() {
+        let vuln1 = VulnerabilityFinding {
+            id: "RUSTSEC-1".to_string(),
+            title: "Issue 1".to_string(),
+            package: "quinn-proto".to_string(),
+            version: "0.11.16".to_string(),
+            ecosystem: "crates.io".to_string(),
+            pkg_id: "quinn-proto@0.11.16".to_string(),
+            severity: SeverityInfo {
+                level: SeverityLevel::Medium,
+                score: 5.5,
+                vector: None,
+            },
+            fixed_in: vec!["0.11.17".to_string()],
+            is_transitive: true,
+            paths: vec![vec!["my-app@1.0.0".to_string(), "quinn@0.11.11".to_string(), "quinn-proto@0.11.16".to_string()]],
+            ..Default::default()
+        };
+
+        let vuln2 = VulnerabilityFinding {
+            id: "RUSTSEC-2".to_string(),
+            title: "Issue 2".to_string(),
+            package: "quinn-proto".to_string(),
+            version: "0.11.16".to_string(),
+            ecosystem: "crates.io".to_string(),
+            pkg_id: "quinn-proto@0.11.16".to_string(),
+            severity: SeverityInfo {
+                level: SeverityLevel::High,
+                score: 7.5,
+                vector: None,
+            },
+            fixed_in: vec!["0.11.18".to_string()],
+            is_transitive: true,
+            paths: vec![vec!["my-app@1.0.0".to_string(), "quinn@0.11.11".to_string(), "quinn-proto@0.11.16".to_string()]],
+            ..Default::default()
+        };
+
+        let remediations = Remediator::generate_remediation(&[vuln1, vuln2]);
+        assert_eq!(remediations.len(), 1);
+        let rem = &remediations[0];
+        assert_eq!(rem.package, "quinn-proto");
+        assert_eq!(rem.target_version.as_deref(), Some("0.11.18"));
+        assert!(rem.advice.contains("0.11.18"));
+        assert_eq!(rem.resolved_vulnerability_count, 2);
+    }
+}
+

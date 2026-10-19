@@ -78,7 +78,18 @@ impl ContainerScanner {
         let scan_result = scanner.scan_graph(&graph).await?;
 
         // License audit
-        let license_audit = Some(LicenseScanner::scan_graph_licenses(&graph, target_path));
+        let mut os_licenses = std::collections::HashMap::new();
+        for pkg in &packages {
+            if let Some(lic) = &pkg.license {
+                os_licenses.insert(pkg.name.clone(), lic.clone());
+                os_licenses.insert(format!("{}@{}", pkg.name, pkg.version), lic.clone());
+            }
+        }
+        let license_audit = Some(LicenseScanner::scan_graph_licenses_with_overrides(
+            &graph,
+            target_path,
+            Some(&os_licenses),
+        ));
 
         Ok(ContainerScanOutput {
             target: target_str,

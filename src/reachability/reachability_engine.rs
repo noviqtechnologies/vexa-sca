@@ -116,6 +116,13 @@ impl ReachabilityEngine {
                 .get(vuln.id.as_str())
                 .map(|list| list.iter().map(|s| s.to_string()).collect())
         })
+        .or_else(|| {
+            vuln.aliases.iter().find_map(|alias| {
+                self.known_functions
+                    .get(alias.as_str())
+                    .map(|list| list.iter().map(|s| s.to_string()).collect())
+            })
+        })
         .or_else(|| self.infer_functions_from_details(vuln));
 
         let pkg_name = if let Some(idx) = vuln.package.find(':') {
@@ -337,11 +344,7 @@ mod tests {
             cve: Some("CVE-2021-23337".to_string()),
             cwes: vec![],
             fixed_in: vec!["4.17.21".to_string()],
-            is_transitive: false,
-            paths: vec![],
-            details: None,
-            references: vec![],
-            reachability: None,
+            ..Default::default()
         };
 
         let res1 = engine.check_vulnerability(&template_vuln);
@@ -362,13 +365,7 @@ mod tests {
                 vector: None,
             },
             cve: Some("CVE-2026-2950".to_string()),
-            cwes: vec![],
-            fixed_in: vec![],
-            is_transitive: false,
-            paths: vec![],
-            details: None,
-            references: vec![],
-            reachability: None,
+            ..Default::default()
         };
 
         let res2 = engine.check_vulnerability(&unset_vuln);

@@ -7,7 +7,7 @@ use crate::core::dep_graph::DepGraph;
 use crate::licenses::license_scanner::LicenseScanner;
 use crate::parsers::detector::detect_and_parse;
 use crate::container::container_scanner::ContainerScanner;
-use crate::patcher::lockfile_patcher::LockfilePatcher;
+use crate::patcher;
 use crate::patcher::pr_creator::PrCreator;
 use crate::reporters::export::{
     format_cyclonedx_sbom, format_html_report, format_json_report, format_markdown_report,
@@ -55,6 +55,10 @@ pub enum Commands {
         #[arg(long)]
         severity_threshold: Option<String>,
 
+        /// Ignore vulnerabilities without a known fixed version (only show actionable fixes)
+        #[arg(long, visible_alias = "only-fixed")]
+        ignore_unfixed: bool,
+
         /// Output report in JSON format
         #[arg(long)]
         json: bool,
@@ -98,6 +102,10 @@ pub enum Commands {
         /// CI/CD Quality Gate: fail on license risk category (e.g. strong-copyleft, weak-copyleft)
         #[arg(long)]
         fail_on_licenses: Option<String>,
+
+        /// CI/CD Quality Gate: fail on unmaintained or deprecated dependencies
+        #[arg(long)]
+        fail_on_unmaintained: bool,
     },
 
     /// Automatically patch dependencies and overrides
@@ -136,6 +144,18 @@ pub enum Commands {
         /// Target path (defaults to current directory)
         #[arg(default_value = ".")]
         path: PathBuf,
+
+        /// Display all individual packages including compliant permissive ones
+        #[arg(long, short)]
+        all: bool,
+
+        /// Output report in JSON format
+        #[arg(long)]
+        json: bool,
+
+        /// CI/CD Quality Gate: fail on license risk category (e.g. strong-copyleft, weak-copyleft)
+        #[arg(long)]
+        fail_on: Option<String>,
     },
 
     /// Visualize dependency graph
@@ -147,6 +167,10 @@ pub enum Commands {
         /// Output graph in standard JSON schema format
         #[arg(long)]
         json: bool,
+
+        /// Maximum tree depth to render (defaults to 6)
+        #[arg(long)]
+        max_depth: Option<usize>,
     },
 
     /// Test a single package version (e.g. lodash@4.17.15)
@@ -157,6 +181,14 @@ pub enum Commands {
         /// Ecosystem (npm, PyPI, Go, crates.io, Maven)
         #[arg(default_value = "npm")]
         ecosystem: String,
+
+        /// Output report in JSON format
+        #[arg(long)]
+        json: bool,
+
+        /// Minimum severity threshold (low, medium, high, critical)
+        #[arg(long)]
+        severity_threshold: Option<String>,
     },
 
     /// Scan container image archive (.tar/.tar.gz), rootfs directory, or Dockerfile for OS package vulnerabilities
@@ -168,6 +200,10 @@ pub enum Commands {
         /// Minimum severity threshold (low, medium, high, critical)
         #[arg(long)]
         severity_threshold: Option<String>,
+
+        /// Ignore vulnerabilities without a known fixed version (only show actionable fixes)
+        #[arg(long, visible_alias = "only-fixed")]
+        ignore_unfixed: bool,
 
         /// Output report in JSON format
         #[arg(long)]
@@ -216,7 +252,7 @@ pub async fn run() {
 
     match cli.command {
 
-        Commands::Licenses { path } => {
+        Commands::Licenses { path, all, json, fail_on } => {
             let detection = match detect_and_parse(&path, true) {
                 Ok(d) => d,
                 Err(e) => {
@@ -226,21 +262,199 @@ pub async fn run() {
             };
 
             let audit = LicenseScanner::scan_graph_licenses(&detection.graph, &path);
-            println!("\nLicense Compliance for {}:", path.display());
-            println!(
-                "Total: {} | Permissive: {} | Weak Copyleft: {} | Strong Copyleft: {}",
-                audit.summary.total,
-                audit.summary.permissive.to_string().green(),
-                audit.summary.weak_copyleft.to_string().yellow(),
-                if audit.summary.strong_copyleft > 0 {
-                    audit.summary.strong_copyleft.to_string().red().bold().to_string()
+
+            // Group by license name to show distribution table
+            let mut lic_counts: std::collections::HashMap<String, (usize, crate::licenses::license_scanner::LicenseCategory)> =
+                std::collections::HashMap::new();
+            for r in &audit.results {
+                let entry = lic_counts.entry(r.license.clone()).or_insert((0, r.category));
+                entry.0 += 1;
+            }
+            let mut sorted_lics: Vec<(String, usize, crate::licenses::license_scanner::LicenseCategory)> = lic_counts
+                .into_iter()
+                .map(|(lic, (cnt, cat))| (lic, cnt, cat))
+                .collect();
+            sorted_lics.sort_by(|a, b| b.1.cmp(&a.1));
+
+            // Actionable Flagged Items (Copyleft & Unknown)
+            let flagged: Vec<_> = audit
+                .results
+                .iter()
+                .filter(|r| {
+                    r.category == crate::licenses::license_scanner::LicenseCategory::StrongCopyleft
+                        || r.category == crate::licenses::license_scanner::LicenseCategory::WeakCopyleft
+                        || r.category == crate::licenses::license_scanner::LicenseCategory::Unknown
+                })
+                .collect();
+
+            if json {
+                let dist_json: Vec<serde_json::Value> = sorted_lics
+                    .iter()
+                    .map(|(lic, cnt, cat)| {
+                        serde_json::json!({
+                            "license": lic,
+                            "category": cat.as_str(),
+                            "count": cnt,
+                        })
+                    })
+                    .collect();
+
+                let flagged_json: Vec<serde_json::Value> = flagged
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "package": r.package,
+                            "version": r.version,
+                            "license": r.license,
+                            "category": r.category.as_str(),
+                            "depPath": r.dep_path,
+                            "resolutionNote": r.resolution_note,
+                        })
+                    })
+                    .collect();
+
+                let all_deps_json: Option<Vec<serde_json::Value>> = if all {
+                    Some(
+                        audit
+                            .results
+                            .iter()
+                            .map(|r| {
+                                serde_json::json!({
+                                    "package": r.package,
+                                    "version": r.version,
+                                    "license": r.license,
+                                    "category": r.category.as_str(),
+                                    "depPath": r.dep_path,
+                                    "resolutionNote": r.resolution_note,
+                                })
+                            })
+                            .collect(),
+                    )
                 } else {
-                    "0".green().to_string()
+                    None
+                };
+
+                let out = serde_json::json!({
+                    "target": path.display().to_string(),
+                    "summary": {
+                        "total": audit.summary.total,
+                        "permissive": audit.summary.permissive,
+                        "weakCopyleft": audit.summary.weak_copyleft,
+                        "strongCopyleft": audit.summary.strong_copyleft,
+                        "unknown": audit.summary.unknown,
+                    },
+                    "distribution": dist_json,
+                    "flagged": flagged_json,
+                    "dependencies": all_deps_json,
+                });
+                println!("{}", serde_json::to_string_pretty(&out).unwrap());
+            } else {
+                let path_display = path.display().to_string();
+                let clean_path = path_display.strip_prefix(r"\\?\").unwrap_or(&path_display);
+                println!("\nLicense Compliance Report: {}", clean_path.bold());
+                println!(
+                    "Total: {} | Permissive: {} | Weak Copyleft: {} | Strong Copyleft: {} | Unknown: {}",
+                    audit.summary.total,
+                    audit.summary.permissive.to_string().green(),
+                    if audit.summary.weak_copyleft > 0 {
+                        audit.summary.weak_copyleft.to_string().yellow().to_string()
+                    } else {
+                        "0".green().to_string()
+                    },
+                    if audit.summary.strong_copyleft > 0 {
+                        audit.summary.strong_copyleft.to_string().red().bold().to_string()
+                    } else {
+                        "0".green().to_string()
+                    },
+                    if audit.summary.unknown > 0 {
+                        audit.summary.unknown.to_string().dimmed().to_string()
+                    } else {
+                        "0".to_string()
+                    }
+                );
+                println!("{}", "-".repeat(78));
+
+                let max_lic_len = sorted_lics
+                    .iter()
+                    .map(|(lic, _, _)| lic.len())
+                    .max()
+                    .unwrap_or(7)
+                    .max("License".len());
+                let lic_col_width = max_lic_len.max(45);
+                let table_width = lic_col_width + 18 + 8 + 4;
+
+                println!("\n{}", "License Distribution:".bold());
+                println!("  {:<width$} {:<18} {:>6}", "License", "Category", "Count", width = lic_col_width);
+                println!("  {}", "-".repeat(table_width));
+                for (lic, count, cat) in &sorted_lics {
+                    let cat_colored = match cat {
+                        crate::licenses::license_scanner::LicenseCategory::Permissive => cat.as_str().green(),
+                        crate::licenses::license_scanner::LicenseCategory::WeakCopyleft => cat.as_str().yellow(),
+                        crate::licenses::license_scanner::LicenseCategory::StrongCopyleft => cat.as_str().red().bold(),
+                        crate::licenses::license_scanner::LicenseCategory::Unknown => cat.as_str().dimmed(),
+                    };
+                    println!("  {:<width$} {:<18} {:>6}", lic, cat_colored, count, width = lic_col_width);
                 }
-            );
-            println!("{}", "-".repeat(60));
-            for r in audit.results {
-                println!("- {}@{}: {} [{}]", r.package, r.version, r.license, r.category.as_str());
+
+                if !flagged.is_empty() {
+                    println!("\n{}", "Flagged Dependencies (Action Recommended):".yellow().bold());
+                    println!("  {}", "-".repeat(table_width.min(78)));
+                    for r in &flagged {
+                        let risk_colored = match r.category {
+                            crate::licenses::license_scanner::LicenseCategory::StrongCopyleft => {
+                                format!("[{}]", r.category.as_str()).red().bold()
+                            }
+                            crate::licenses::license_scanner::LicenseCategory::WeakCopyleft => {
+                                format!("[{}]", r.category.as_str()).yellow()
+                            }
+                            _ => format!("[{}]", r.category.as_str()).dimmed(),
+                        };
+                        println!("  • {}@{}: {} {}", r.package.bold(), r.version, r.license.cyan(), risk_colored);
+                        if let Some(path) = &r.dep_path {
+                            println!("    {} {}", "Path:".dimmed(), path);
+                        }
+                        if let Some(note) = &r.resolution_note {
+                            println!("    {} {}", "Policy:".dimmed(), note.italic());
+                        }
+                    }
+                } else {
+                    println!("\n{}", "✔ All evaluated dependencies comply with permissive license policies.".green().bold());
+                }
+
+                if all {
+                    println!("\n{}", "All Dependencies:".bold());
+                    println!("  {}", "-".repeat(table_width.min(78)));
+                    for r in &audit.results {
+                        println!("  - {}@{}: {} [{}]", r.package, r.version, r.license, r.category.as_str());
+                        if let Some(path) = &r.dep_path {
+                            println!("    {} {}", "Path:".dimmed(), path.dimmed());
+                        }
+                    }
+                } else if flagged.len() < audit.results.len() {
+                    println!("\n  {}", format!("💡 Showing flagged/breakdown only. Pass '--all' to display all {} individual dependencies.", audit.summary.total).dimmed());
+                }
+            }
+
+            if let Some(target_risk) = &fail_on {
+                let risk_lower = target_risk.to_lowercase();
+                let has_violation = if risk_lower.contains("strong") {
+                    audit.summary.strong_copyleft > 0
+                } else if risk_lower.contains("weak") {
+                    audit.summary.strong_copyleft > 0 || audit.summary.weak_copyleft > 0
+                } else if risk_lower.contains("unknown") {
+                    audit.summary.unknown > 0
+                } else {
+                    false
+                };
+
+                if has_violation {
+                    if !json {
+                        eprintln!("\n{}", format!("✖ CI/CD QUALITY GATE FAILED: License risk policy violated ({})", target_risk).red().bold());
+                    }
+                    exit(1);
+                } else if !json {
+                    println!("\n{}", "✔ CI/CD QUALITY GATE PASSED: License policies satisfied.".green().bold());
+                }
             }
         }
 
@@ -267,29 +481,159 @@ pub async fn run() {
                 return;
             }
 
-            match LockfilePatcher::apply_fixes(&path, &output.remediations, dry_run) {
+            let manifest_type = &output.manifest_type;
+            match patcher::apply_fixes(&path, manifest_type, &output.remediations, dry_run) {
                 Ok(patch_res) => {
+                    let target_desc = match manifest_type {
+                        crate::parsers::detector::ManifestType::RustCargoLock => "Cargo.toml / Cargo.lock",
+                        _ => "package.json",
+                    };
+
                     if patch_res.modified || dry_run {
                         if dry_run {
-                            println!("\n{}", "🔍 [Dry Run] Proposed patches for package.json:".cyan().bold());
+                            println!("\n{}", format!("🔍 [Dry Run] Proposed patches for {}:", target_desc).cyan().bold());
                         } else {
-                            println!("\n{}", "✔ Successfully applied patches to package.json!".green().bold());
+                            println!("\n{}", format!("✔ Successfully applied patches to {}!", target_desc).green().bold());
                             if let Some(bak) = &patch_res.backup_file {
                                 println!("  Backup created: {}", bak.display());
                             }
                         }
 
+                        let mut total_vulns = 0;
+                        let mut breaking_count = 0;
+                        let mut sev_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
                         if !patch_res.changes.direct_upgrades.is_empty() {
-                            println!("\n  Direct Upgrades:");
+                            let dir_header = match manifest_type {
+                                crate::parsers::detector::ManifestType::RustCargoLock => "Direct Manifest Upgrades (Cargo.toml):",
+                                _ => "Direct Manifest Upgrades (package.json):",
+                            };
+                            println!("\n  {}", dir_header.bold());
                             for u in &patch_res.changes.direct_upgrades {
-                                println!("   ↳ {}: {} ➔ {} ({})", u.package, u.from, u.to, u.section);
+                                if u.is_breaking {
+                                    breaking_count += 1;
+                                }
+                                total_vulns += u.vulnerability_ids.len();
+                                if let Some(s) = u.highest_severity {
+                                    *sev_counts.entry(s.as_str().to_string()).or_default() += u.vulnerability_ids.len();
+                                }
+
+                                let badge = if u.is_breaking {
+                                    "⚠️  [MAJOR]".yellow().bold()
+                                } else if !u.semver_change.is_empty() {
+                                    format!("✔  [{}]", u.semver_change).green().bold()
+                                } else {
+                                    "✔  [SAFE]".green().bold()
+                                };
+
+                                println!("   {} {}: {} ➔ {} ({})", badge, u.package.bold(), u.from, u.to.cyan().bold(), u.section);
+                                if !u.vulnerability_ids.is_empty() {
+                                    let ids_formatted = u.vulnerability_ids.join(", ");
+                                    let sev_badge = match u.highest_severity {
+                                        Some(crate::types::SeverityLevel::Critical) => " [CRITICAL]".red().bold().to_string(),
+                                        Some(crate::types::SeverityLevel::High) => " [HIGH]".bright_red().bold().to_string(),
+                                        Some(crate::types::SeverityLevel::Medium) => " [MEDIUM]".yellow().bold().to_string(),
+                                        Some(crate::types::SeverityLevel::Low) => " [LOW]".blue().to_string(),
+                                        _ => String::new(),
+                                    };
+                                    println!("      ↳ Resolves: {}{}", ids_formatted, sev_badge);
+                                }
+                                if u.is_breaking {
+                                    println!("      ↳ {}", "Warning: Major version bump may introduce breaking API changes.".yellow());
+                                }
                             }
                         }
+
                         if !patch_res.changes.transitive_overrides.is_empty() {
-                            println!("\n  Transitive Overrides:");
+                            let trans_header = match manifest_type {
+                                crate::parsers::detector::ManifestType::RustCargoLock => "Transitive Dependency Updates (Cargo.lock):",
+                                _ => "Transitive Overrides:",
+                            };
+                            println!("\n  {}", trans_header.bold());
                             for o in &patch_res.changes.transitive_overrides {
-                                println!("   ↳ {} pinned to {}", o.package, o.pinned_to);
+                                if o.is_breaking {
+                                    breaking_count += 1;
+                                }
+                                total_vulns += o.vulnerability_ids.len();
+                                if let Some(s) = o.highest_severity {
+                                    *sev_counts.entry(s.as_str().to_string()).or_default() += o.vulnerability_ids.len();
+                                }
+
+                                let from_str = o.current_version.as_deref().map(|v| format!("{} ➔ ", v)).unwrap_or_default();
+                                let mut line = match manifest_type {
+                                    crate::parsers::detector::ManifestType::RustCargoLock => {
+                                        format!("   ↳ {}: {}{}", o.package.bold(), from_str, o.pinned_to.cyan().bold())
+                                    }
+                                    _ => {
+                                        format!("   ↳ {} pinned to {}", o.package.bold(), o.pinned_to.cyan().bold())
+                                    }
+                                };
+
+                                if !o.vulnerability_ids.is_empty() {
+                                    let ids_formatted = o.vulnerability_ids.join(", ");
+                                    let sev_badge = match o.highest_severity {
+                                        Some(crate::types::SeverityLevel::Critical) => " [CRITICAL]".red().bold().to_string(),
+                                        Some(crate::types::SeverityLevel::High) => " [HIGH]".bright_red().bold().to_string(),
+                                        Some(crate::types::SeverityLevel::Medium) => " [MEDIUM]".yellow().bold().to_string(),
+                                        Some(crate::types::SeverityLevel::Low) => " [LOW]".blue().to_string(),
+                                        _ => String::new(),
+                                    };
+                                    line.push_str(&format!(" (fixes: {}{})", ids_formatted, sev_badge));
+                                }
+                                println!("{}", line);
+                                if o.is_breaking {
+                                    println!("      ↳ {}", "Warning: Transitive major bump may require upstream parent update.".yellow());
+                                }
                             }
+                        }
+
+                        if !patch_res.warnings.is_empty() {
+                            println!("\n  {}", "Warnings during update:".yellow().bold());
+                            for w in &patch_res.warnings {
+                                println!("   ⚠️  {}", w.yellow());
+                            }
+                        }
+
+                        // Summary Section
+                        let direct_count = patch_res.changes.direct_upgrades.len();
+                        let trans_count = patch_res.changes.transitive_overrides.len();
+                        let total_pkgs = direct_count + trans_count;
+
+                        println!("\n{}", "Summary:".bold());
+                        println!("  • {} package{} to update ({} manifest, {} lockfile)",
+                            total_pkgs,
+                            if total_pkgs == 1 { "" } else { "s" },
+                            direct_count,
+                            trans_count
+                        );
+                        if total_vulns > 0 {
+                            let mut sev_parts = Vec::new();
+                            for sev in &["CRITICAL", "HIGH", "MEDIUM", "LOW"] {
+                                if let Some(&c) = sev_counts.get(*sev) {
+                                    sev_parts.push(format!("{} {}", c, sev));
+                                }
+                            }
+                            let sev_detail = if sev_parts.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" ({})", sev_parts.join(", "))
+                            };
+                            println!("  • {} vulnerabilit{} remediated{}",
+                                total_vulns,
+                                if total_vulns == 1 { "y" } else { "ies" },
+                                sev_detail
+                            );
+                        }
+                        if breaking_count > 0 {
+                            println!("  • {}", format!("{} potentially breaking upgrade{} detected", breaking_count, if breaking_count == 1 { "" } else { "s" }).yellow().bold());
+                        }
+
+                        if dry_run {
+                            println!("\n{}", "Next Steps:".bold());
+                            println!("  • Run without --dry-run to apply changes:");
+                            println!("      {}", format!("vexa-sca fix \"{}\"", path.display()).cyan());
+                            println!("  • Or open an automated GitHub Pull Request:");
+                            println!("      {}", format!("vexa-sca fix \"{}\" --create-pr", path.display()).cyan());
                         }
 
                         if create_pr {
@@ -314,7 +658,14 @@ pub async fn run() {
                                 }
                             }
                         } else if !dry_run {
-                            println!("\nRun \"npm install\", \"yarn\", or \"pnpm install\" to update your lockfile.");
+                            match manifest_type {
+                                crate::parsers::detector::ManifestType::RustCargoLock => {
+                                    println!("\nRun \"cargo check\" or \"cargo test\" to verify the updated dependencies.");
+                                }
+                                _ => {
+                                    println!("\nRun \"npm install\", \"yarn\", or \"pnpm install\" to update your lockfile.");
+                                }
+                            }
                         }
                     } else {
                         println!("No modifications were made.");
@@ -327,7 +678,7 @@ pub async fn run() {
             }
         }
 
-        Commands::Graph { path, json } => {
+        Commands::Graph { path, json, max_depth } => {
             let detection = match detect_and_parse(&path, true) {
                 Ok(d) => d,
                 Err(e) => {
@@ -339,24 +690,36 @@ pub async fn run() {
             if json {
                 println!("{}", serde_json::to_string_pretty(&detection.graph.to_json()).unwrap());
             } else {
-                println!("Dependency Graph for {}:", detection.manifest_file.display());
-                println!("Root: {}", detection.graph.root_node_id);
-                println!("Total packages: {}", detection.graph.get_all_pkgs().len());
-                println!("Total nodes: {}", detection.graph.get_all_nodes().len());
-                println!("Cycles: {}", if detection.graph.has_cycles() { "Yes".yellow() } else { "No".green() });
+                let manifest_display = detection.manifest_file.display().to_string();
+                let clean_manifest = manifest_display.strip_prefix(r"\\?\").unwrap_or(&manifest_display);
+                println!("Dependency Graph for {}:", clean_manifest.bold());
+                println!("  Root Package : {}@{} ({})", detection.graph.root_pkg.name.bold(), detection.graph.root_pkg.version, detection.graph.root_pkg.ecosystem);
+                println!("  Total Unique : {} packages", detection.graph.get_all_pkgs().len());
+                println!("  Total Nodes  : {} dependency nodes", detection.graph.get_all_nodes().len());
+                println!("  Cycles       : {}", if detection.graph.has_cycles() { "Yes".yellow().bold() } else { "No".green() });
+                println!("\nDependency Tree:");
+                print!("{}", detection.graph.render_ascii_tree(max_depth));
             }
         }
 
-        Commands::Test { target, ecosystem } => {
+        Commands::Test {
+            target,
+            ecosystem,
+            json,
+            severity_threshold,
+        } => {
             let parts: Vec<&str> = target.split('@').collect();
             if parts.len() < 2 {
-                eprintln!("Error: specify package and version, e.g. \"vexa test lodash@4.17.15\"");
+                eprintln!("Error: specify package and version, e.g. \"vexa-sca test lodash@4.17.15\"");
                 exit(1);
             }
             let name = parts[0];
             let version = parts[1];
 
-            println!("Checking {}@{} ({})...", name, version, ecosystem);
+            if !json {
+                println!("Testing {}@{} ({})...", name, version, ecosystem);
+            }
+
             let root_pkg = PkgInfo::new("adhoc-test", "1.0.0", &ecosystem);
             let mut graph = DepGraph::new(
                 root_pkg,
@@ -382,12 +745,34 @@ pub async fn run() {
 
             let scanner = VulnScanner::default();
             match scanner.scan_graph(&graph).await {
-                Ok(res) => {
-                    render_terminal_report(&res, &[], &[], None, None);
+                Ok(mut res) => {
+                    if let Some(thresh) = &severity_threshold {
+                        let min_level = SeverityLevel::from_str_loose(thresh);
+                        res.vulnerabilities.retain(|v| v.severity.level.weight() >= min_level.weight());
+                        res.vulnerabilities_count = res.vulnerabilities.len();
+                    }
+
+                    if json {
+                        println!(
+                            "{}",
+                            format_json_report(&res, &[], &[], None, None)
+                        );
+                    } else {
+                        render_terminal_report(&res, &[], &[], None, None);
+                    }
+
+                    if res.vulnerabilities_count > 0 {
+                        if !json {
+                            eprintln!("\n{}", format!("✖ Security Test Failed: Found {} active vulnerabilities in {}@{}", res.vulnerabilities_count, name, version).red().bold());
+                        }
+                        exit(1);
+                    } else if !json {
+                        println!("\n{}", format!("✔ Security Test Passed: No vulnerabilities found in {}@{}", name, version).green().bold());
+                    }
                 }
                 Err(e) => {
                     eprintln!("Scan error: {}", e);
-                    exit(1);
+                    exit(2);
                 }
             }
         }
@@ -398,6 +783,7 @@ pub async fn run() {
             prod_only,
             policy,
             severity_threshold,
+            ignore_unfixed,
             json,
             markdown,
             sarif,
@@ -409,11 +795,13 @@ pub async fn run() {
             fail_on,
             fail_on_reachable,
             fail_on_licenses,
+            fail_on_unmaintained,
         } => {
             let options = ScanOptions {
                 dev: !prod_only,
                 reachable_only,
                 severity_threshold,
+                ignore_unfixed,
                 policy_file: policy,
                 timeout_secs: 15,
                 licenses: true,
@@ -484,6 +872,7 @@ pub async fn run() {
                             ),
                             SbomFormat::Spdx => format_spdx_sbom(
                                 &output.dep_graph,
+                                Some(&output.scan_result),
                                 output.license_audit.as_ref(),
                             ),
                         })
@@ -500,15 +889,15 @@ pub async fn run() {
                     }
 
                     // 4. Output routing
-                    if html {
+                    if html && html_file.is_none() {
                         if let Some(content) = &html_output {
                             println!("{}", content);
                         }
-                    } else if sbom.is_some() {
+                    } else if sbom.is_some() && sbom_file.is_none() {
                         if let Some(content) = &sbom_output {
                             println!("{}", content);
                         }
-                    } else if sarif {
+                    } else if sarif && sarif_file.is_none() {
                         if let Some(content) = &sarif_output {
                             println!("{}", content);
                         }
@@ -545,10 +934,27 @@ pub async fn run() {
                     }
 
                     // 5. CI/CD Quality Gate Evaluation
+                    let mut effective_fail_on_reachable = fail_on_reachable;
+                    let mut effective_severity = None;
+
+                    if let Some(fo) = &fail_on {
+                        let lower = fo.trim().to_lowercase();
+                        if lower == "reachable" {
+                            effective_fail_on_reachable = true;
+                        } else if lower.starts_with("reachable-") || lower.starts_with("reachable_") {
+                            effective_fail_on_reachable = true;
+                            let sev_str = &lower[10..];
+                            effective_severity = Some(SeverityLevel::from_str_loose(sev_str));
+                        } else {
+                            effective_severity = Some(SeverityLevel::from_str_loose(&lower));
+                        }
+                    }
+
                     let gate_opts = QualityGateOptions {
-                        fail_on_severity: fail_on.as_deref().map(SeverityLevel::from_str_loose),
-                        fail_on_reachable,
+                        fail_on_severity: effective_severity,
+                        fail_on_reachable: effective_fail_on_reachable,
                         fail_on_licenses,
+                        fail_on_unmaintained,
                     };
                     let gate_res = QualityGate::evaluate(
                         &output.scan_result,
@@ -574,6 +980,7 @@ pub async fn run() {
         Commands::Container {
             target,
             severity_threshold,
+            ignore_unfixed,
             json,
             markdown,
             sarif,
@@ -591,6 +998,11 @@ pub async fn run() {
                     if let Some(thresh) = &severity_threshold {
                         let min_level = SeverityLevel::from_str_loose(thresh);
                         output.scan_result.vulnerabilities.retain(|v| v.severity.level.weight() >= min_level.weight());
+                        output.scan_result.vulnerabilities_count = output.scan_result.vulnerabilities.len();
+                    }
+
+                    if ignore_unfixed {
+                        output.scan_result.vulnerabilities.retain(|v| !v.fixed_in.is_empty());
                         output.scan_result.vulnerabilities_count = output.scan_result.vulnerabilities.len();
                     }
 
@@ -638,6 +1050,7 @@ pub async fn run() {
                             ),
                             SbomFormat::Spdx => format_spdx_sbom(
                                 &output.dep_graph,
+                                Some(&output.scan_result),
                                 output.license_audit.as_ref(),
                             ),
                         })
@@ -650,15 +1063,15 @@ pub async fn run() {
                         println!("✔ SBOM saved to {}", file_path.display());
                     }
 
-                    if html {
+                    if html && html_file.is_none() {
                         if let Some(content) = &html_output {
                             println!("{}", content);
                         }
-                    } else if sbom.is_some() {
+                    } else if sbom.is_some() && sbom_file.is_none() {
                         if let Some(content) = &sbom_output {
                             println!("{}", content);
                         }
-                    } else if sarif {
+                    } else if sarif && sarif_file.is_none() {
                         if let Some(content) = &sarif_output {
                             println!("{}", content);
                         }
@@ -698,6 +1111,7 @@ pub async fn run() {
                         fail_on_severity: fail_on.as_deref().map(SeverityLevel::from_str_loose),
                         fail_on_reachable: false,
                         fail_on_licenses,
+                        fail_on_unmaintained: false,
                     };
                     let gate_res = QualityGate::evaluate(
                         &output.scan_result,

@@ -5,8 +5,18 @@
 [![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-brightgreen.svg)](#cross-platform-installation--setup)
 [![Tests](https://img.shields.io/badge/Tests-34%2F34%20Passing-success.svg)](#automated-tests--verification)
 [![Node.js CLI Shim](https://img.shields.io/badge/Node.js%20Wrapper-npx%20vexa--sca%20ready-339933?logo=node.js&logoColor=white)](#option-2-run-via-nodejs--npx-wrapper-all-platforms)
+[![Docs](https://img.shields.io/badge/Docs-Guides%20%26%20Reference-blueviolet?logo=read-the-docs&logoColor=white)](#-documentation--workflow-guides)
 
 **Vexa SCA** (`vexa-sca`) is its commercial-grade, blazingly fast Software Composition Analysis & Security Engine. Built with a native **Rust Core Engine** (`vexa-sca`, with backwards-compatible binary aliases `vexa` and `sca`) and an optional cross-platform Node.js launcher (`bin/vexa-sca.js`), Vexa SCA audits vulnerabilities across 6+ package ecosystems, performs AST runtime reachability analysis to eliminate false positives, audits open source licenses, generates CycloneDX v1.5 and SPDX v2.3 SBOMs, inspects container filesystems and tarballs, enforces CI/CD quality gates, and automatically patches lockfiles or opens GitHub pull requests.
+
+<p align="center">
+  <a href="#quick-start"><b>Quick Start</b></a> •
+  <a href="#-documentation--workflow-guides"><b>Documentation</b></a> •
+  <a href="docs/cli-usage.md"><b>CLI Guide</b></a> •
+  <a href="docs/cicd-integration.md"><b>CI/CD Pipelines</b></a> •
+  <a href="docs/container-deployment.md"><b>Containers</b></a> •
+  <a href="docs/git-hooks.md"><b>Git Hooks</b></a>
+</p>
 
 ---
 
@@ -75,12 +85,12 @@
   - [`vexa-sca graph`](#4-vexa-sca-graph)
   - [`vexa-sca test`](#5-vexa-sca-test)
   - [`vexa-sca container`](#6-vexa-sca-container)
-- [Usage Across Workflows (CLI, CI/CD, Container, Git Hooks)](#usage-across-workflows-cli-cicd-container-git-hooks)
-  - [1. Local Developer Terminal Workflow](#1-local-developer-terminal-workflow)
-  - [2. GitHub Actions (with SARIF & Code Scanning Alerts)](#2-github-actions-with-sarif--code-scanning-alerts)
-  - [3. GitLab CI/CD Pipeline](#3-gitlab-cicd-pipeline)
-  - [4. Azure DevOps Pipelines](#4-azure-devops-pipelines)
-  - [5. Git Pre-Commit Security Hook](#5-git-pre-commit-security-hook)
+- [Documentation & Workflow Guides](#-documentation--workflow-guides)
+  - [💻 CLI Usage Guide (`docs/cli-usage.md`)](docs/cli-usage.md)
+  - [🚀 CI/CD Integration Guide (`docs/cicd-integration.md`)](docs/cicd-integration.md)
+  - [🐳 Container Deployment Guide (`docs/container-deployment.md`)](docs/container-deployment.md)
+  - [🪝 Git Hooks Setup Guide (`docs/git-hooks.md`)](docs/git-hooks.md)
+  - [Quick Implementation Snippets](#quick-implementation-snippets-by-workflow)
 - [Automated Tests & Verification](#automated-tests--verification)
 - [License](#license)
 
@@ -571,11 +581,22 @@ vexa-sca container my-image.tar.gz --json
 vexa-sca container /path/to/rootfs --fail-on high
 ```
 
+## 📖 Documentation & Workflow Guides
+
+Vexa SCA provides dedicated, production-ready operational guides tailored for specific engineering workflows, with complete copy-pasteable instructions for **Linux**, **macOS**, and **Windows**:
+
+| Guide | Target Workflow | Key Focus Areas |
+| :--- | :--- | :--- |
+| 💻 [**CLI Usage Guide**](docs/cli-usage.md) | Local Developer Terminal & Workstations | Global/local installation, reachability analysis, multi-format reporting (HTML, SARIF, SBOM, JSON), automated fixes (`vexa-sca fix`), license auditing |
+| 🚀 [**CI/CD Integration Guide**](docs/cicd-integration.md) | Automated Pipelines & Security Dashboards | GitHub Actions, GitLab CI, Bitbucket Pipelines, Azure DevOps, SARIF upload to Code Scanning, automated PR workflows, secret management |
+| 🐳 [**Container Deployment Guide**](docs/container-deployment.md) | Containers, Registries & OS Packaging | Multi-stage production `Dockerfile`, Docker Compose, rootless runtime, scanning Docker images (`.tar`/`.tar.gz`), Alpine (`apk`) & Debian (`dpkg`) |
+| 🪝 [**Git Hooks Setup Guide**](docs/git-hooks.md) | Shift-Left Developer Commits & Pushes | Native `.git/hooks/pre-commit` & `pre-push`, Husky integration, Python `pre-commit`, incremental manifest scanning, `.vexa-sca` suppressions |
+
 ---
 
-## Usage Across Workflows (CLI, CI/CD, Container, Git Hooks)
+### Quick Implementation Snippets by Workflow
 
-### 1. Local Developer Terminal Workflow
+#### 1. Local Developer Terminal Workflow
 
 Quickly audit code, reachability, and licenses locally before committing:
 

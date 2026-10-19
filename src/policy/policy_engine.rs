@@ -132,6 +132,9 @@ impl PolicyEngine {
         if let Some(cve) = &vuln.cve {
             ids_to_check.push(cve.as_str());
         }
+        for alias in &vuln.aliases {
+            ids_to_check.push(alias.as_str());
+        }
         ids_to_check.push(vuln.pkg_id.as_str());
 
         for id in ids_to_check {
@@ -219,13 +222,7 @@ mod tests {
                 vector: None,
             },
             cve: Some("CVE-2021-23337".to_string()),
-            cwes: vec![],
-            fixed_in: vec![],
-            is_transitive: false,
-            paths: vec![],
-            details: None,
-            references: vec![],
-            reachability: None,
+            ..Default::default()
         };
 
         let vuln2 = VulnerabilityFinding {
@@ -241,13 +238,7 @@ mod tests {
                 vector: None,
             },
             cve: Some("CVE-2099-0000".to_string()),
-            cwes: vec![],
-            fixed_in: vec![],
-            is_transitive: false,
-            paths: vec![],
-            details: None,
-            references: vec![],
-            reachability: None,
+            ..Default::default()
         };
 
         let date_2026 = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
@@ -284,13 +275,7 @@ ignore:
                 vector: None,
             },
             cve: Some("CVE-2020-0001".to_string()),
-            cwes: vec![],
-            fixed_in: vec![],
-            is_transitive: false,
-            paths: vec![],
-            details: None,
-            references: vec![],
-            reachability: None,
+            ..Default::default()
         };
 
         let date_2026 = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();

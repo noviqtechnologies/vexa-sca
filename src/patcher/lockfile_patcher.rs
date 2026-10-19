@@ -1,21 +1,40 @@
-use crate::types::RemediationAction;
+use crate::core::semver_utils::classify_semver_change;
+use crate::types::{RemediationAction, SeverityLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DirectUpgrade {
     pub package: String,
     pub from: String,
     pub to: String,
     pub section: String,
+    #[serde(default)]
+    pub vulnerability_ids: Vec<String>,
+    #[serde(default)]
+    pub highest_severity: Option<SeverityLevel>,
+    #[serde(default)]
+    pub is_breaking: bool,
+    #[serde(default)]
+    pub semver_change: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TransitiveOverride {
     pub package: String,
+    #[serde(default)]
+    pub current_version: Option<String>,
     pub pinned_to: String,
+    #[serde(default)]
+    pub vulnerability_ids: Vec<String>,
+    #[serde(default)]
+    pub highest_severity: Option<SeverityLevel>,
+    #[serde(default)]
+    pub is_breaking: bool,
+    #[serde(default)]
+    pub semver_change: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +55,8 @@ pub struct PatchResult {
     pub modified: bool,
     pub backup_file: Option<PathBuf>,
     pub changes: PatchChanges,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 pub struct LockfilePatcher;
@@ -79,12 +100,17 @@ impl LockfilePatcher {
                 if let Some(deps) = pkg_json.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
                     if let Some(old_val) = deps.get(&rem.package).cloned() {
                         let old_ver = old_val.as_str().unwrap_or("").to_string();
+                        let (change, is_breaking) = classify_semver_change(&old_ver, target_version);
                         deps.insert(rem.package.clone(), Value::String(new_ver.clone()));
                         changes.direct_upgrades.push(DirectUpgrade {
                             package: rem.package.clone(),
                             from: old_ver,
                             to: new_ver.clone(),
                             section: "dependencies".to_string(),
+                            vulnerability_ids: rem.vulnerability_ids.clone(),
+                            highest_severity: rem.highest_severity,
+                            is_breaking,
+                            semver_change: change.as_str().to_string(),
                         });
                         found = true;
                         modified = true;
@@ -94,12 +120,17 @@ impl LockfilePatcher {
                 if let Some(dev_deps) = pkg_json.get_mut("devDependencies").and_then(|d| d.as_object_mut()) {
                     if let Some(old_val) = dev_deps.get(&rem.package).cloned() {
                         let old_ver = old_val.as_str().unwrap_or("").to_string();
+                        let (change, is_breaking) = classify_semver_change(&old_ver, target_version);
                         dev_deps.insert(rem.package.clone(), Value::String(new_ver.clone()));
                         changes.direct_upgrades.push(DirectUpgrade {
                             package: rem.package.clone(),
                             from: old_ver,
                             to: new_ver.clone(),
                             section: "devDependencies".to_string(),
+                            vulnerability_ids: rem.vulnerability_ids.clone(),
+                            highest_severity: rem.highest_severity,
+                            is_breaking,
+                            semver_change: change.as_str().to_string(),
                         });
                         found = true;
                         modified = true;
@@ -109,17 +140,29 @@ impl LockfilePatcher {
                 if !found {
                     // Add to overrides
                     Self::insert_override(&mut pkg_json, &rem.package, &new_ver);
+                    let (change, is_breaking) = classify_semver_change(&rem.current_version, target_version);
                     changes.transitive_overrides.push(TransitiveOverride {
                         package: rem.package.clone(),
+                        current_version: Some(rem.current_version.clone()),
                         pinned_to: new_ver,
+                        vulnerability_ids: rem.vulnerability_ids.clone(),
+                        highest_severity: rem.highest_severity,
+                        is_breaking,
+                        semver_change: change.as_str().to_string(),
                     });
                     modified = true;
                 }
             } else {
                 Self::insert_override(&mut pkg_json, &rem.package, &new_ver);
+                let (change, is_breaking) = classify_semver_change(&rem.current_version, target_version);
                 changes.transitive_overrides.push(TransitiveOverride {
                     package: rem.package.clone(),
+                    current_version: Some(rem.current_version.clone()),
                     pinned_to: new_ver,
+                    vulnerability_ids: rem.vulnerability_ids.clone(),
+                    highest_severity: rem.highest_severity,
+                    is_breaking,
+                    semver_change: change.as_str().to_string(),
                 });
                 modified = true;
             }
@@ -140,6 +183,7 @@ impl LockfilePatcher {
             modified,
             backup_file,
             changes,
+            warnings: vec![],
         })
     }
 
@@ -182,6 +226,7 @@ mod tests {
                 advice: "".to_string(),
                 resolved_vulnerability_count: 1,
                 vulnerability_ids: vec![],
+                highest_severity: None,
             },
             RemediationAction {
                 package: "minimist".to_string(),
@@ -192,6 +237,7 @@ mod tests {
                 advice: "".to_string(),
                 resolved_vulnerability_count: 1,
                 vulnerability_ids: vec![],
+                highest_severity: None,
             },
         ];
 

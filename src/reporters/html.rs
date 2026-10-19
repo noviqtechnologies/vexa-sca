@@ -1,4 +1,4 @@
-use crate::licenses::license_scanner::LicenseAudit;
+use crate::licenses::license_scanner::{LicenseAudit, LicenseCategory};
 use crate::policy::policy_engine::SuppressedFinding;
 use crate::scanner::vuln_scanner::ScanResult;
 use crate::types::{ReachabilityStatus, RemediationAction, SeverityLevel};
@@ -53,7 +53,11 @@ pub fn format_html_report(
         .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Unreachable).unwrap_or(false))
         .count();
 
-    let rem_map: HashMap<&str, &RemediationAction> = remediations
+    let rem_map: HashMap<(&str, &str), &RemediationAction> = remediations
+        .iter()
+        .map(|r| ((r.package.as_str(), r.current_version.as_str()), r))
+        .collect();
+    let rem_by_pkg: HashMap<&str, &RemediationAction> = remediations
         .iter()
         .map(|r| (r.package.as_str(), r))
         .collect();
@@ -83,7 +87,10 @@ pub fn format_html_report(
         let sev_level = vuln.severity.level.as_str().to_lowercase();
         let cve_str = vuln.cve.as_deref().unwrap_or(&vuln.id);
 
-        let remediation_html = if let Some(rem) = rem_map.get(vuln.package.as_str()) {
+        let remediation_html = if let Some(rem) = rem_map
+            .get(&(vuln.package.as_str(), vuln.version.as_str()))
+            .or_else(|| rem_by_pkg.get(vuln.package.as_str()))
+        {
             let target_str = rem.target_version.as_deref().unwrap_or("latest non-vulnerable");
             format!(
                 "<div class=\"rem-box\"><span class=\"rem-icon\">💡</span> <div><strong>Remediation:</strong> {} (target: <code>{}</code>)</div></div>",
@@ -154,11 +161,11 @@ pub fn format_html_report(
     let licenses_section = if let Some(audit) = license_audit {
         let mut rows = String::new();
         for r in &audit.results {
-            let cat_class = match r.category.as_str() {
-                "Permissive" => "cat-permissive",
-                "Weak Copyleft" => "cat-weak",
-                "Strong Copyleft" => "cat-strong",
-                _ => "cat-unknown",
+            let cat_class = match r.category {
+                LicenseCategory::Permissive => "cat-permissive",
+                LicenseCategory::WeakCopyleft => "cat-weak",
+                LicenseCategory::StrongCopyleft => "cat-strong",
+                LicenseCategory::Unknown => "cat-unknown",
             };
             rows.push_str(&format!(
                 "<tr><td><code>{}@{}</code></td><td><span class=\"badge {cat_class}\">{}</span></td><td>{}</td></tr>",
@@ -568,6 +575,7 @@ mod tests {
             details: Some("Command injection in template function".to_string()),
             references: vec!["https://nvd.nist.gov".to_string()],
             reachability: None,
+            ..Default::default()
         });
 
         let html = format_html_report(
@@ -585,5 +593,93 @@ mod tests {
         assert!(html.contains("Command Injection in lodash"));
         assert!(html.contains("CVE-2021-23337"));
         assert!(html.contains("badge-critical"));
+    }
+
+    #[test]
+    fn test_html_multi_version_and_license_badges() {
+        use crate::licenses::license_scanner::{LicenseAudit, LicenseRisk, LicenseSummary, PackageLicenseResult};
+
+        let mut scan_result = ScanResult::default();
+        scan_result.vulnerabilities.push(VulnerabilityFinding {
+            id: "VULN-1".to_string(),
+            title: "H2 vuln 1".to_string(),
+            package: "h2".to_string(),
+            version: "0.4.13".to_string(),
+            pkg_id: "h2@0.4.13".to_string(),
+            severity: SeverityInfo {
+                level: SeverityLevel::Medium,
+                score: 5.5,
+                vector: None,
+            },
+            ..Default::default()
+        });
+        scan_result.vulnerabilities.push(VulnerabilityFinding {
+            id: "VULN-2".to_string(),
+            title: "H2 vuln 2".to_string(),
+            package: "h2".to_string(),
+            version: "0.3.27".to_string(),
+            pkg_id: "h2@0.3.27".to_string(),
+            severity: SeverityInfo {
+                level: SeverityLevel::Medium,
+                score: 5.5,
+                vector: None,
+            },
+            ..Default::default()
+        });
+
+        let rems = vec![
+            RemediationAction {
+                package: "h2".to_string(),
+                current_version: "0.4.13".to_string(),
+                is_transitive: true,
+                target_version: Some("0.4.16".to_string()),
+                action_type: "UPGRADE_TRANSITIVE".to_string(),
+                advice: "Introduced by hyper-rustls".to_string(),
+                resolved_vulnerability_count: 1,
+                vulnerability_ids: vec!["VULN-1".to_string()],
+                highest_severity: None,
+            },
+            RemediationAction {
+                package: "h2".to_string(),
+                current_version: "0.3.27".to_string(),
+                is_transitive: true,
+                target_version: Some("0.4.16".to_string()),
+                action_type: "UPGRADE_TRANSITIVE".to_string(),
+                advice: "Introduced by jsonschema".to_string(),
+                resolved_vulnerability_count: 1,
+                vulnerability_ids: vec!["VULN-2".to_string()],
+                highest_severity: None,
+            },
+        ];
+
+        let audit = LicenseAudit {
+            summary: LicenseSummary::default(),
+            results: vec![
+                PackageLicenseResult {
+                    package: "colored".to_string(),
+                    version: "2.2.0".to_string(),
+                    ecosystem: "crates.io".to_string(),
+                    license: "MPL-2.0".to_string(),
+                    category: LicenseCategory::WeakCopyleft,
+                    risk: LicenseRisk { level: "MEDIUM".to_string(), score: 2 },
+                    ..Default::default()
+                },
+                PackageLicenseResult {
+                    package: "tokio".to_string(),
+                    version: "1.0.0".to_string(),
+                    ecosystem: "crates.io".to_string(),
+                    license: "MIT".to_string(),
+                    category: LicenseCategory::Permissive,
+                    risk: LicenseRisk { level: "LOW".to_string(), score: 0 },
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let html = format_html_report(&scan_result, &[], &rems, Some(&audit), "app", None);
+        assert!(html.contains("Introduced by hyper-rustls"));
+        assert!(html.contains("Introduced by jsonschema"));
+        assert!(html.contains("cat-weak"));
+        assert!(html.contains("cat-permissive"));
     }
 }

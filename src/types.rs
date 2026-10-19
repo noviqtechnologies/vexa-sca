@@ -143,6 +143,22 @@ pub struct ReachabilityResult {
     pub target_functions: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdvisoryCategory {
+    #[serde(rename = "vulnerability")]
+    Vulnerability,
+    #[serde(rename = "unmaintained")]
+    Unmaintained,
+    #[serde(rename = "informational")]
+    Informational,
+}
+
+impl Default for AdvisoryCategory {
+    fn default() -> Self {
+        AdvisoryCategory::Vulnerability
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VulnerabilityFinding {
     pub id: String,
@@ -160,6 +176,38 @@ pub struct VulnerabilityFinding {
     pub details: Option<String>,
     pub references: Vec<String>,
     pub reachability: Option<ReachabilityResult>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub advisory_category: AdvisoryCategory,
+}
+
+impl Default for VulnerabilityFinding {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            title: String::new(),
+            package: String::new(),
+            version: String::new(),
+            ecosystem: String::new(),
+            pkg_id: String::new(),
+            severity: SeverityInfo {
+                level: SeverityLevel::Unknown,
+                score: 0.0,
+                vector: None,
+            },
+            cve: None,
+            cwes: vec![],
+            fixed_in: vec![],
+            is_transitive: false,
+            paths: vec![],
+            details: None,
+            references: vec![],
+            reachability: None,
+            aliases: vec![],
+            advisory_category: AdvisoryCategory::Vulnerability,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,4 +220,6 @@ pub struct RemediationAction {
     pub advice: String,
     pub resolved_vulnerability_count: usize,
     pub vulnerability_ids: Vec<String>,
+    #[serde(default)]
+    pub highest_severity: Option<SeverityLevel>,
 }

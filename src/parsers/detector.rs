@@ -126,10 +126,39 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
         });
     }
 
-    Err(format!(
+    // Check if subdirectories contain manifests to provide helpful monorepo guidance
+    let mut sub_hints = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&abs_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let dirname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if dirname.starts_with('.') || dirname == "node_modules" || dirname == "target" || dirname == "vendor" {
+                    continue;
+                }
+                for manifest in &["package.json", "package-lock.json", "Cargo.toml", "requirements.txt", "go.mod", "pom.xml"] {
+                    if path.join(manifest).exists() {
+                        let rel = path.strip_prefix(&abs_dir).unwrap_or(&path);
+                        sub_hints.push(format!("{}/{}", rel.display(), manifest));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut err_msg = format!(
         "No supported lockfile found in {}. Supported: package-lock.json, yarn.lock, pnpm-lock.yaml, requirements.txt, Cargo.lock, go.sum, pom.xml",
         abs_dir.display()
-    ))
+    );
+    if !sub_hints.is_empty() {
+        err_msg.push_str("\n\nDetected subproject manifests:");
+        for hint in sub_hints {
+            err_msg.push_str(&format!("\n  ↳ {}", hint));
+        }
+        err_msg.push_str("\nTip: Run vexa on the target subproject path directly (e.g. vexa fix <subproject-path>).");
+    }
+
+    Err(err_msg)
 }
 
 #[cfg(test)]

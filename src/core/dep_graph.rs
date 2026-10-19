@@ -325,6 +325,100 @@ impl DepGraph {
             }
         })
     }
+
+    /// Renders an industry-standard ASCII tree representation of the dependency graph.
+    pub fn render_ascii_tree(&self, max_depth: Option<usize>) -> String {
+        let mut out = String::new();
+        let root_label = format!("{}@{}", self.root_pkg.name, self.root_pkg.version);
+        out.push_str(&root_label);
+        out.push('\n');
+
+        let max_d = max_depth.unwrap_or(6);
+        let mut visited_path = HashSet::new();
+        visited_path.insert(self.root_node_id.clone());
+
+        if let Some(root_node) = self.nodes.get(&self.root_node_id) {
+            let mut sorted_deps = root_node.deps.clone();
+            sorted_deps.sort();
+            let total = sorted_deps.len();
+            for (idx, child_id) in sorted_deps.into_iter().enumerate() {
+                let is_last = idx + 1 == total;
+                self.render_tree_dfs(
+                    &child_id,
+                    "",
+                    is_last,
+                    1,
+                    max_d,
+                    &mut visited_path,
+                    &mut out,
+                );
+            }
+        }
+
+        out
+    }
+
+    fn render_tree_dfs(
+        &self,
+        node_id: &str,
+        prefix: &str,
+        is_last: bool,
+        current_depth: usize,
+        max_depth: usize,
+        visited_path: &mut HashSet<String>,
+        out: &mut String,
+    ) {
+        let branch = if is_last { "└── " } else { "├── " };
+        let node = match self.nodes.get(node_id) {
+            Some(n) => n,
+            None => {
+                out.push_str(&format!("{}{}{}\n", prefix, branch, node_id));
+                return;
+            }
+        };
+
+        let pkg_label = match self.pkgs.get(&node.pkg_id) {
+            Some(p) => format!("{}@{}", p.name, p.version),
+            None => node.pkg_id.clone(),
+        };
+
+        if visited_path.contains(node_id) {
+            out.push_str(&format!("{}{}{} (*)\n", prefix, branch, pkg_label));
+            return;
+        }
+
+        out.push_str(&format!("{}{}{}\n", prefix, branch, pkg_label));
+
+        if current_depth >= max_depth {
+            if !node.deps.is_empty() {
+                let next_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+                out.push_str(&format!("{}└── ... ({} dependencies truncated)\n", next_prefix, node.deps.len()));
+            }
+            return;
+        }
+
+        visited_path.insert(node_id.to_string());
+        let next_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+
+        let mut sorted_deps = node.deps.clone();
+        sorted_deps.sort();
+        let total = sorted_deps.len();
+
+        for (idx, child_id) in sorted_deps.into_iter().enumerate() {
+            let child_is_last = idx + 1 == total;
+            self.render_tree_dfs(
+                &child_id,
+                &next_prefix,
+                child_is_last,
+                current_depth + 1,
+                max_depth,
+                visited_path,
+                out,
+            );
+        }
+
+        visited_path.remove(node_id);
+    }
 }
 
 #[cfg(test)]

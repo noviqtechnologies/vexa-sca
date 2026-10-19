@@ -26,6 +26,7 @@ pub struct ScanOptions {
     pub dev: bool,
     pub reachable_only: bool,
     pub severity_threshold: Option<String>,
+    pub ignore_unfixed: bool,
     pub policy_file: Option<PathBuf>,
     pub timeout_secs: u64,
     pub licenses: bool,
@@ -37,6 +38,7 @@ impl Default for ScanOptions {
             dev: true,
             reachable_only: false,
             severity_threshold: None,
+            ignore_unfixed: false,
             policy_file: None,
             timeout_secs: 15,
             licenses: true,
@@ -79,6 +81,11 @@ pub async fn scan_project(
     let reachability_engine = ReachabilityEngine::new(project_dir);
     active = reachability_engine.evaluate_reachability(active);
 
+    let unreachable_total = active
+        .iter()
+        .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Unreachable).unwrap_or(false))
+        .count();
+
     // Filter to reachable only if requested
     if options.reachable_only {
         active.retain(|v| {
@@ -93,6 +100,11 @@ pub async fn scan_project(
     if let Some(thresh) = &options.severity_threshold {
         let min_level = SeverityLevel::from_str_loose(thresh);
         active.retain(|v| v.severity.level.weight() >= min_level.weight());
+    }
+
+    // 6. Filter unfixed if requested
+    if options.ignore_unfixed {
+        active.retain(|v| !v.fixed_in.is_empty());
     }
 
     // Sort: Reachable first, then by severity
@@ -117,6 +129,7 @@ pub async fn scan_project(
 
     raw_scan_result.vulnerabilities = active;
     raw_scan_result.vulnerabilities_count = raw_scan_result.vulnerabilities.len();
+    raw_scan_result.unreachable_count = unreachable_total;
 
     // 6. Generate remediations
     let remediations = Remediator::generate_remediation(&raw_scan_result.vulnerabilities);

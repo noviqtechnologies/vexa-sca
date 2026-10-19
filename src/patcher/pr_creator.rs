@@ -115,20 +115,44 @@ impl PrCreator {
 
         if !patch_res.changes.direct_upgrades.is_empty() {
             body.push_str("### ⬆️ Direct Dependency Upgrades\n\n");
-            body.push_str("| Package | Current Version | Upgraded Version | Section |\n");
-            body.push_str("| :--- | :--- | :--- | :--- |\n");
+            body.push_str("| Package | Current Version | Upgraded Version | Section | Type | Advisory Fixes |\n");
+            body.push_str("| :--- | :--- | :--- | :--- | :--- | :--- |\n");
             for u in &patch_res.changes.direct_upgrades {
-                body.push_str(&format!("| `{}` | `{}` | `^`**{}** | `{}` |\n", u.package, u.from, u.to, u.section));
+                let badge = if u.is_breaking {
+                    "⚠️ **MAJOR (Breaking)**"
+                } else if !u.semver_change.is_empty() {
+                    match u.semver_change.as_str() {
+                        "PATCH" => "✔ Patch",
+                        "MINOR" => "✔ Minor",
+                        _ => "✔ SemVer-compatible",
+                    }
+                } else {
+                    "✔ Safe Upgrade"
+                };
+                let vulns = if u.vulnerability_ids.is_empty() {
+                    "—".to_string()
+                } else {
+                    u.vulnerability_ids.join(", ")
+                };
+                body.push_str(&format!(
+                    "| `{}` | `{}` | `^`**{}** | `{}` | {} | {} |\n",
+                    u.package, u.from, u.to, u.section, badge, vulns
+                ));
             }
             body.push('\n');
         }
 
         if !patch_res.changes.transitive_overrides.is_empty() {
-            body.push_str("### 🔒 Transitive Overrides (npm overrides / yarn resolutions)\n\n");
-            body.push_str("| Package | Forced Secure Version |\n");
-            body.push_str("| :--- | :--- |\n");
+            body.push_str("### 🔒 Transitive Overrides & Lockfile Updates\n\n");
+            body.push_str("| Package | Forced Secure Version | Advisory Fixes |\n");
+            body.push_str("| :--- | :--- | :--- |\n");
             for o in &patch_res.changes.transitive_overrides {
-                body.push_str(&format!("| `{}` | `^{}` |\n", o.package, o.pinned_to));
+                let vulns = if o.vulnerability_ids.is_empty() {
+                    "—".to_string()
+                } else {
+                    o.vulnerability_ids.join(", ")
+                };
+                body.push_str(&format!("| `{}` | `^{}` | {} |\n", o.package, o.pinned_to, vulns));
             }
             body.push('\n');
         }
@@ -136,10 +160,8 @@ impl PrCreator {
         body.push_str("---\n\n");
         body.push_str("### 🔍 Verification Instructions\n");
         body.push_str("1. Review the modified manifest file(s).\n");
-        body.push_str("2. Run your package manager install command to regenerate lockfiles:\n");
-        body.push_str("   ```bash\n   npm install # or yarn install / pnpm install\n   ```\n");
-        body.push_str("3. Run automated tests to verify backwards compatibility:\n");
-        body.push_str("   ```bash\n   npm test\n   ```\n\n");
+        body.push_str("2. Run package manager commands to regenerate lockfiles & run tests:\n");
+        body.push_str("   ```bash\n   # Cargo (Rust):\n   cargo check && cargo test\n\n   # Node.js (npm / yarn / pnpm):\n   npm install && npm test\n   ```\n\n");
         body.push_str("*(Created automatically by Vexa SCA engine)*\n");
 
         body
@@ -207,23 +229,19 @@ impl PrCreator {
             return Err(format!("git checkout -b failed: {}", err));
         }
 
-        // 2. Stage modified files
-        let add_res = Command::new("git")
-            .args(["add", "package.json"])
-            .current_dir(project_dir)
-            .output()
-            .map_err(|e| format!("Failed to stage modified files: {}", e))?;
-
-        if !add_res.status.success() {
-            let err = String::from_utf8_lossy(&add_res.stderr);
-            return Err(format!("git add failed: {}", err));
-        }
-
-        // Also add lockfile if updated
-        for lock in &["package-lock.json", "yarn.lock", "pnpm-lock.yaml"] {
-            if project_dir.join(lock).exists() {
+        // 2. Stage modified manifest and lock files
+        let manifest_candidates = [
+            "package.json",
+            "package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "Cargo.toml",
+            "Cargo.lock",
+        ];
+        for file in &manifest_candidates {
+            if project_dir.join(file).exists() {
                 let _ = Command::new("git")
-                    .args(["add", lock])
+                    .args(["add", file])
                     .current_dir(project_dir)
                     .output();
             }
@@ -370,16 +388,19 @@ mod tests {
             from: "4.17.15".to_string(),
             to: "4.17.21".to_string(),
             section: "dependencies".to_string(),
+            ..Default::default()
         });
         changes.transitive_overrides.push(TransitiveOverride {
             package: "minimist".to_string(),
             pinned_to: "1.2.8".to_string(),
+            ..Default::default()
         });
 
         let patch_res = PatchResult {
             modified: true,
             backup_file: None,
             changes,
+            warnings: vec![],
         };
 
         let body = PrCreator::generate_pr_body(&patch_res);

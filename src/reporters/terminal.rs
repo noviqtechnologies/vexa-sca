@@ -1,7 +1,7 @@
 use crate::licenses::license_scanner::{LicenseAudit, LicenseCategory};
 use crate::policy::policy_engine::SuppressedFinding;
 use crate::scanner::vuln_scanner::ScanResult;
-use crate::types::{ReachabilityResult, ReachabilityStatus, RemediationAction, SeverityLevel};
+use crate::types::{AdvisoryCategory, ReachabilityResult, ReachabilityStatus, RemediationAction, SeverityLevel};
 use colored::*;
 use std::path::Path;
 
@@ -53,24 +53,41 @@ pub fn render_terminal_report(
         .iter()
         .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false))
         .count();
-    let unreachable_count = vulns
-        .iter()
-        .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Unreachable).unwrap_or(false))
-        .count();
+    let unreachable_count = if scan_result.unreachable_count > 0 {
+        scan_result.unreachable_count
+    } else {
+        vulns
+            .iter()
+            .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Unreachable).unwrap_or(false))
+            .count()
+    };
 
-    println!(
-        "Reachability (Deep)  : 🚨 {} | 🛡️ {}",
-        if reachable_count > 0 {
-            format!("{} Active Call-sites", reachable_count).red().bold().to_string()
-        } else {
-            "0".green().to_string()
-        },
-        if unreachable_count > 0 {
-            format!("{} Not Called (Low Risk)", unreachable_count).green().to_string()
-        } else {
-            "0".to_string()
-        }
-    );
+    if reachable_count > 0 || unreachable_count > 0 {
+        println!(
+            "Reachability (Deep)  : 🚨 {} | 🛡️ {}",
+            if reachable_count > 0 {
+                format!("{} Active Call-sites", reachable_count).red().bold().to_string()
+            } else {
+                "0".green().to_string()
+            },
+            if unreachable_count > 0 {
+                if vulns.is_empty() {
+                    format!("{} Filtered (Low Risk / Unreachable)", unreachable_count).green().to_string()
+                } else {
+                    format!("{} Not Called (Low Risk)", unreachable_count).green().to_string()
+                }
+            } else {
+                "0".to_string()
+            }
+        );
+    } else if vulns.is_empty() {
+        println!("Reachability (Deep)  : {}", "0 (Clean)".green());
+    } else {
+        println!(
+            "Reachability (Deep)  : {}",
+            "N/A (OS Binary Packages - Call-path AST requires application source code)".dimmed()
+        );
+    }
 
     if let Some(pf) = policy_file {
         println!("Policy File          : {}", pf.display().to_string().dimmed());
@@ -78,13 +95,47 @@ pub fn render_terminal_report(
     if !suppressed.is_empty() {
         println!("Suppressed (Ignored) : {}", suppressed.len().to_string().yellow().bold());
     }
+    let unm_vulns: Vec<_> = vulns
+        .iter()
+        .filter(|v| v.advisory_category == AdvisoryCategory::Unmaintained)
+        .collect();
+
+    let crit_count = vulns.iter().filter(|v| v.severity.level == SeverityLevel::Critical).count();
+    let high_count = vulns.iter().filter(|v| v.severity.level == SeverityLevel::High).count();
+    let med_count = vulns.iter().filter(|v| v.severity.level == SeverityLevel::Medium).count();
+    let low_count = vulns.iter().filter(|v| v.severity.level == SeverityLevel::Low).count();
+
+    let mut breakdown = Vec::new();
+    if crit_count > 0 {
+        breakdown.push(format!("CRITICAL: {}", crit_count).red().bold().to_string());
+    }
+    if high_count > 0 {
+        breakdown.push(format!("HIGH: {}", high_count).red().to_string());
+    }
+    if med_count > 0 {
+        breakdown.push(format!("MEDIUM: {}", med_count).yellow().to_string());
+    }
+    if low_count > 0 {
+        breakdown.push(format!("LOW: {}", low_count).blue().to_string());
+    }
+    if !unm_vulns.is_empty() {
+        breakdown.push(format!("UNMAINTAINED: {}", unm_vulns.len()).magenta().to_string());
+    }
+
+    let breakdown_str = if !breakdown.is_empty() {
+        format!(" ({})", breakdown.join(" | "))
+    } else {
+        String::new()
+    };
+
     println!(
-        "Active Vulns Found   : {}",
+        "Active Vulns Found   : {}{}",
         if !vulns.is_empty() {
             vulns.len().to_string().red().bold().to_string()
         } else {
             "0 (Clean)".green().to_string()
-        }
+        },
+        breakdown_str
     );
 
     // 1. License Compliance Summary
@@ -151,13 +202,37 @@ pub fn render_terminal_report(
         println!("{}", "-".repeat(78));
 
         for v in vulns {
-            let sev_badge = format_severity_badge(v.severity.level);
+            let sev_badge = if v.advisory_category == AdvisoryCategory::Unmaintained {
+                "[UNMAINTAINED]".magenta().bold()
+            } else {
+                format_severity_badge(v.severity.level)
+            };
             let reach_badge = format_reachability_badge(v.reachability.as_ref());
             let cve_str = v.cve.as_ref().map(|c| format!("({})", c)).unwrap_or_default().dimmed();
-            let score_str = format!("CVSS {:.1}", v.severity.score);
+            let score_str = if v.advisory_category == AdvisoryCategory::Unmaintained {
+                "Advisory".to_string()
+            } else {
+                format!("CVSS {:.1}", v.severity.score)
+            };
+
+            let id_display = if !v.aliases.is_empty() {
+                let alias_filter: Vec<_> = v.aliases
+                    .iter()
+                    .filter(|a| a.as_str() != v.id.as_str() && Some(a.as_str()) != v.cve.as_deref())
+                    .take(3)
+                    .cloned()
+                    .collect();
+                if !alias_filter.is_empty() {
+                    format!("{} ({})", v.id.cyan(), alias_filter.join(" | ").dimmed())
+                } else {
+                    v.id.cyan().to_string()
+                }
+            } else {
+                v.id.cyan().to_string()
+            };
 
             println!("\n {} {} {} {}", sev_badge, reach_badge, v.title.bold(), cve_str);
-            println!("   ID          : {} [{}]", v.id.cyan(), score_str);
+            println!("   ID          : {} [{}]", id_display, score_str);
             println!(
                 "   Package     : {}@{} ({})",
                 v.package.magenta(),
@@ -166,7 +241,9 @@ pub fn render_terminal_report(
             );
 
             if !v.fixed_in.is_empty() {
-                println!("   Fixed in    : {}", v.fixed_in.join(", ").green());
+                println!("   Fixed in    : {}", v.fixed_in.join(", ").green().bold());
+            } else {
+                println!("   Fixed in    : {}", "No fix available (Vendor backlog / unfixed)".dimmed());
             }
 
             if let Some(reach) = &v.reachability {
@@ -210,9 +287,10 @@ pub fn render_terminal_report(
 
         for (idx, rem) in remediations.iter().enumerate() {
             println!(
-                "\n [{}] {} ({})",
+                "\n [{}] {}@{} ({})",
                 idx + 1,
                 rem.package.bold(),
+                rem.current_version,
                 if rem.is_transitive { "transitive" } else { "direct" }
             );
             println!("     Action : {}", rem.advice.yellow());

@@ -235,6 +235,7 @@ mod tests {
             details: Some("A command injection flaw exists in lodash template.".to_string()),
             references: vec!["https://nvd.nist.gov/vuln/detail/CVE-2021-23337".to_string()],
             reachability: None,
+            ..Default::default()
         });
 
         let sarif_str = format_sarif_report(&scan_result, &[], Some(Path::new("package-lock.json")));

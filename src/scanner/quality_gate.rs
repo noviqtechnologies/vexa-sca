@@ -1,6 +1,6 @@
 use crate::licenses::license_scanner::LicenseAudit;
 use crate::scanner::vuln_scanner::ScanResult;
-use crate::types::{ReachabilityStatus, SeverityLevel};
+use crate::types::{AdvisoryCategory, ReachabilityStatus, SeverityLevel};
 use colored::*;
 
 #[derive(Debug, Clone, Default)]
@@ -8,12 +8,15 @@ pub struct QualityGateOptions {
     pub fail_on_severity: Option<SeverityLevel>,
     pub fail_on_reachable: bool,
     pub fail_on_licenses: Option<String>,
+    pub fail_on_unmaintained: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct QualityGateResult {
     pub passed: bool,
     pub failure_reasons: Vec<String>,
+    pub reachable_violations: usize,
+    pub deferred_unreachable_count: usize,
 }
 
 pub struct QualityGate;
@@ -26,46 +29,86 @@ impl QualityGate {
     ) -> QualityGateResult {
         let mut failure_reasons = Vec::new();
 
-        // 1. Severity Gate
+        let reachable_count = scan_result
+            .vulnerabilities
+            .iter()
+            .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false))
+            .count();
+
+        let unreachable_count = scan_result
+            .vulnerabilities
+            .iter()
+            .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Unreachable).unwrap_or(false))
+            .count();
+
+        let sec_vulns: Vec<_> = scan_result
+            .vulnerabilities
+            .iter()
+            .filter(|v| v.advisory_category == AdvisoryCategory::Vulnerability)
+            .collect();
+
+        let unmaintained_count = scan_result
+            .vulnerabilities
+            .iter()
+            .filter(|v| v.advisory_category == AdvisoryCategory::Unmaintained)
+            .count();
+
+        // 1. Severity Gate (with reachability-awareness)
         if let Some(threshold) = options.fail_on_severity {
-            let violating_count = scan_result
-                .vulnerabilities
+            let violating_count = sec_vulns
                 .iter()
-                .filter(|v| v.severity.level.weight() >= threshold.weight())
+                .filter(|v| {
+                    let meets_sev = v.severity.level.weight() >= threshold.weight();
+                    if options.fail_on_reachable {
+                        meets_sev && v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false)
+                    } else {
+                        meets_sev
+                    }
+                })
                 .count();
 
             if violating_count > 0 {
+                let scope = if options.fail_on_reachable { "reachable " } else { "" };
                 failure_reasons.push(format!(
-                    "Found {} vulnerabilities at or above '{}' threshold",
+                    "Found {} {}vulnerabilities at or above '{}' threshold",
                     violating_count,
+                    scope,
                     threshold.as_str()
                 ));
             }
-        } else if scan_result.vulnerabilities_count > 0 && !options.fail_on_reachable && options.fail_on_licenses.is_none() {
-            // Default behavior if no gates specified: fail on any vulnerability
-            failure_reasons.push(format!(
-                "Found {} active security vulnerabilities",
-                scan_result.vulnerabilities_count
-            ));
-        }
-
-        // 2. Reachable-only Gate
-        if options.fail_on_reachable {
-            let reachable_count = scan_result
-                .vulnerabilities
-                .iter()
-                .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false))
-                .count();
-
+        } else if options.fail_on_reachable {
+            // 2. Reachable-only Gate without explicit severity threshold
             if reachable_count > 0 {
                 failure_reasons.push(format!(
                     "Found {} vulnerabilities with confirmed runtime reachability (🚨 REACHABLE)",
                     reachable_count
                 ));
             }
+        } else if !sec_vulns.is_empty() && options.fail_on_licenses.is_none() {
+            // 3. Default behavior: fail on any active security vulnerability
+            if reachable_count == 0 && unreachable_count > 0 {
+                failure_reasons.push(format!(
+                    "Found {} active security vulnerabilities (0 reachable, {} unreachable). Tip: use '--fail-on reachable' to block only on confirmed runtime call paths.",
+                    sec_vulns.len(),
+                    unreachable_count
+                ));
+            } else {
+                failure_reasons.push(format!(
+                    "Found {} active security vulnerabilities",
+                    sec_vulns.len()
+                ));
+            }
         }
 
-        // 3. License Compliance Gate
+        // 4. Unmaintained Gate (opt-in)
+        if options.fail_on_unmaintained && unmaintained_count > 0 {
+            failure_reasons.push(format!(
+                "Found {} unmaintained package advisories violating policy",
+                unmaintained_count
+            ));
+        }
+
+        // 5. License Compliance Gate
         if let Some(lic_policy) = &options.fail_on_licenses {
             if let Some(audit) = license_audit {
                 let policy_lower = lic_policy.trim().to_lowercase();
@@ -91,6 +134,8 @@ impl QualityGate {
         QualityGateResult {
             passed,
             failure_reasons,
+            reachable_violations: reachable_count,
+            deferred_unreachable_count: unreachable_count,
         }
     }
 
@@ -98,6 +143,12 @@ impl QualityGate {
         println!("\n{}", "─".repeat(70));
         if res.passed {
             println!("{}", "✔ CI/CD QUALITY GATE PASSED: All security & policy checks satisfied.".green().bold());
+            if res.deferred_unreachable_count > 0 {
+                println!(
+                    "  ↳ {} unreachable vulnerabilities deferred to backlog (0 active runtime risks)",
+                    res.deferred_unreachable_count
+                );
+            }
         } else {
             println!("{}", "✖ CI/CD QUALITY GATE FAILED: Policy violation(s) detected:".red().bold());
             for reason in &res.failure_reasons {
@@ -128,14 +179,7 @@ mod tests {
                 score: 3.0,
                 vector: None,
             },
-            cve: None,
-            cwes: vec![],
-            fixed_in: vec![],
-            is_transitive: false,
-            paths: vec![],
-            details: None,
-            references: vec![],
-            reachability: None,
+            ..Default::default()
         });
         scan_result.vulnerabilities_count = 1;
 
@@ -144,15 +188,27 @@ mod tests {
             fail_on_severity: Some(SeverityLevel::High),
             fail_on_reachable: false,
             fail_on_licenses: None,
+            fail_on_unmaintained: false,
         };
         let res = QualityGate::evaluate(&scan_result, None, &opts);
         assert!(res.passed);
+
+        // Fail on reachable: finding has no reachability -> PASS
+        let opts_reach = QualityGateOptions {
+            fail_on_severity: None,
+            fail_on_reachable: true,
+            fail_on_licenses: None,
+            fail_on_unmaintained: false,
+        };
+        let res_reach = QualityGate::evaluate(&scan_result, None, &opts_reach);
+        assert!(res_reach.passed);
 
         // Fail on LOW: should FAIL
         let opts_low = QualityGateOptions {
             fail_on_severity: Some(SeverityLevel::Low),
             fail_on_reachable: false,
             fail_on_licenses: None,
+            fail_on_unmaintained: false,
         };
         let res_low = QualityGate::evaluate(&scan_result, None, &opts_low);
         assert!(!res_low.passed);
