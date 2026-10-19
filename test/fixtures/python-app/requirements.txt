@@ -1,0 +1,3 @@
+# Vulnerable Python dependencies fixture
+flask==0.12.2
+requests==2.25.1

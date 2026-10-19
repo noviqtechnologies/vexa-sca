@@ -1,0 +1,18 @@
+lockfileVersion: '6.0'
+
+dependencies:
+  lodash:
+    specifier: 4.17.15
+    version: 4.17.15
+  minimist:
+    specifier: 0.0.8
+    version: 0.0.8
+
+packages:
+  /lodash@4.17.15:
+    resolution: {integrity: sha512-8xOcRHvCjnocdS5cpwXQXVzcnhFieKJBx0QDzs98JW1P83BE3P5vnWBQB8630OzST8bNU1LNY/G+uy885t86kA==}
+    dev: false
+
+  /minimist@0.0.8:
+    resolution: {integrity: sha512-miQKw5Hv4NS1Psg2517mV4e4dYNaO3++hjAvLOAzKqZ61rH8LqJUghUvmRtxIElGTmQrMFDev82U/0mxK5fb0g==}
+    dev: false

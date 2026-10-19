@@ -1,0 +1,26 @@
+P:musl
+V:1.2.4-r2
+A:x86_64
+S:618496
+I:618496
+T:the musl c library (libc) implementation
+U:https://musl.libc.org/
+L:MIT
+
+P:busybox
+V:1.36.1-r0
+A:x86_64
+S:968720
+I:968720
+T:Size optimized toolbox of many common UNIX utilities
+U:https://busybox.net/
+L:GPL-2.0-only
+
+P:curl
+V:8.5.0-r0
+A:x86_64
+S:412300
+I:412300
+T:command line tool for transferring data with URL syntax
+U:https://curl.se/
+L:curl
