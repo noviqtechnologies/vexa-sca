@@ -6,7 +6,7 @@
 [![Tests](https://img.shields.io/badge/Tests-34%2F34%20Passing-success.svg)](#automated-tests--verification)
 [![Node.js CLI Shim](https://img.shields.io/badge/Node.js%20Wrapper-npx%20vexa--sca%20ready-339933?logo=node.js&logoColor=white)](#option-2-run-via-nodejs--npx-wrapper-all-platforms)
 
-**Vexa** is an enterprise security brand; **Vexa SCA** (`vexa-sca`) is its commercial-grade, blazingly fast Software Composition Analysis & Security Engine. Built with a native **Rust Core Engine** (`vexa-sca`, with backwards-compatible binary aliases `vexa` and `sca`) and an optional cross-platform Node.js launcher (`bin/vexa-sca.js`), Vexa SCA audits vulnerabilities across 6+ package ecosystems, performs AST runtime reachability analysis to eliminate false positives, audits open source licenses, generates CycloneDX v1.5 and SPDX v2.3 SBOMs, inspects container filesystems and tarballs, enforces CI/CD quality gates, and automatically patches lockfiles or opens GitHub pull requests.
+**Vexa SCA** (`vexa-sca`) is its commercial-grade, blazingly fast Software Composition Analysis & Security Engine. Built with a native **Rust Core Engine** (`vexa-sca`, with backwards-compatible binary aliases `vexa` and `sca`) and an optional cross-platform Node.js launcher (`bin/vexa-sca.js`), Vexa SCA audits vulnerabilities across 6+ package ecosystems, performs AST runtime reachability analysis to eliminate false positives, audits open source licenses, generates CycloneDX v1.5 and SPDX v2.3 SBOMs, inspects container filesystems and tarballs, enforces CI/CD quality gates, and automatically patches lockfiles or opens GitHub pull requests.
 
 ---
 
@@ -139,6 +139,34 @@ node bin/sca.js scan
 # If published or linked globally via npm
 npx vexa-sca scan
 npx vexa scan
+```
+
+---
+
+### Option 3: Pre-Built Binary Download (GitHub Releases)
+
+Download pre-compiled standalone binaries with zero installation prerequisites directly from [GitHub Releases](https://github.com/noviqtechnologies/vexa-sca/releases):
+
+```bash
+# Linux / macOS (curl download & run)
+curl -sSL https://github.com/noviqtechnologies/vexa-sca/releases/latest/download/vexa-sca-linux-x86_64.tar.gz | tar -xz
+./vexa-sca scan
+
+# Windows: Download vexa-sca-windows-x86_64.zip, extract, and run vexa-sca.exe
+```
+
+---
+
+### Option 4: Run via Docker Container (GitHub Packages / GHCR)
+
+Run scans in any CI/CD runner or containerized environment without installing Rust or Node.js:
+
+```bash
+# Pull and scan current directory:
+docker run --rm -v "${PWD}:/workspace" ghcr.io/noviqtechnologies/vexa-sca:latest scan .
+
+# Run with reachability analysis and HTML dashboard export:
+docker run --rm -v "${PWD}:/workspace" ghcr.io/noviqtechnologies/vexa-sca:latest scan . --reachable-only --html-file sca-report.html
 ```
 
 ---

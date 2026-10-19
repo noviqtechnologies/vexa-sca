@@ -1,0 +1,6 @@
+target/
+.git/
+.sca-cache/
+node_modules/
+.idea/
+.vscode/
