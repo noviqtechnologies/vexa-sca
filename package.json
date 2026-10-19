@@ -1,22 +1,23 @@
 {
-  "name": "vexa",
+  "name": "vexa-sca",
   "version": "1.0.0",
-  "description": "Vexa - Software Composition Analysis & Security Engine (High-Performance Rust Core)",
+  "description": "Vexa SCA - Software Composition Analysis & Security Engine (High-Performance Rust Core)",
   "bin": {
+    "vexa-sca": "bin/vexa-sca.js",
     "vexa": "bin/vexa.js",
-    "vexa-sca": "bin/vexa.js",
     "sca": "bin/sca.js",
     "dev-sca": "bin/sca.js"
   },
   "scripts": {
     "test": "cargo test",
     "build": "cargo build --release",
-    "scan": "cargo run --bin vexa -- scan"
+    "scan": "cargo run --bin vexa-sca -- scan"
   },
   "keywords": [
     "vexa",
     "sca",
     "vexa-sca",
+    "software-composition-analysis",
     "security",
     "vulnerabilities",
     "dependency-graph",
@@ -24,7 +25,8 @@
     "reachability",
     "sbom",
     "cyclonedx",
-    "spdx"
+    "spdx",
+    "sarif"
   ],
   "author": "Vexa",
   "license": "Apache-2.0"

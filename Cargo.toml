@@ -3,20 +3,21 @@ name = "vexa-sca"
 version = "1.0.0"
 edition = "2021"
 authors = ["Vexa"]
-description = "Vexa SCA - Software Composition Analysis Engine (High-Performance Rust Core)"
+description = "Vexa SCA - Software Composition Analysis & Security Engine (High-Performance Rust Core)"
 license = "Apache-2.0"
+default-run = "vexa-sca"
 
 [lib]
 name = "vexa_sca"
 path = "src/lib.rs"
 
 [[bin]]
-name = "vexa"
-path = "src/main.rs"
-
-[[bin]]
 name = "vexa-sca"
 path = "src/bin/vexa_sca.rs"
+
+[[bin]]
+name = "vexa"
+path = "src/main.rs"
 
 [[bin]]
 name = "sca"

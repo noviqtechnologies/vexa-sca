@@ -20,7 +20,12 @@ use crate::types::{PkgInfo, SeverityLevel};
 use crate::{scan_project, ScanOptions};
 
 #[derive(Parser, Debug)]
-#[command(name = "vexa", about = "Vexa - Commercial-Grade Software Composition Analysis & Security Engine", version = "1.0.0")]
+#[command(
+    name = "vexa-sca",
+    bin_name = "vexa-sca",
+    about = "Vexa SCA - Commercial-Grade Software Composition Analysis & Security Engine",
+    version = "1.0.0"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,

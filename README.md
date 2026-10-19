@@ -1,12 +1,53 @@
-# Vexa: Software Composition Analysis & Security Engine
+# Vexa SCA: Software Composition Analysis & Security Engine
 
 [![Rust Edition](https://img.shields.io/badge/Rust-2021%20Edition-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-brightgreen.svg)](#cross-platform-installation--setup)
 [![Tests](https://img.shields.io/badge/Tests-34%2F34%20Passing-success.svg)](#automated-tests--verification)
-[![Node.js CLI Shim](https://img.shields.io/badge/Node.js%20Wrapper-npx%20ready-339933?logo=node.js&logoColor=white)](#option-2-run-via-nodejs--npx-wrapper-all-platforms)
+[![Node.js CLI Shim](https://img.shields.io/badge/Node.js%20Wrapper-npx%20vexa--sca%20ready-339933?logo=node.js&logoColor=white)](#option-2-run-via-nodejs--npx-wrapper-all-platforms)
 
-A commercial-grade, blazingly fast Software Composition Analysis (SCA) tool built with a native **Rust Core Engine** (`vexa`, with backwards-compatible aliases `vexa-sca` and `sca`) and an optional cross-platform Node.js launcher. Detect vulnerabilities across 6+ package ecosystems, verify runtime function reachability to eliminate false positives, audit copyleft licenses, generate industry-standard SBOMs, inspect container filesystems and tarballs, enforce CI/CD quality gates, and automatically patch lockfiles or open GitHub pull requests.
+**Vexa** is an enterprise security brand; **Vexa SCA** (`vexa-sca`) is its commercial-grade, blazingly fast Software Composition Analysis & Security Engine. Built with a native **Rust Core Engine** (`vexa-sca`, with backwards-compatible binary aliases `vexa` and `sca`) and an optional cross-platform Node.js launcher (`bin/vexa-sca.js`), Vexa SCA audits vulnerabilities across 6+ package ecosystems, performs AST runtime reachability analysis to eliminate false positives, audits open source licenses, generates CycloneDX v1.5 and SPDX v2.3 SBOMs, inspects container filesystems and tarballs, enforces CI/CD quality gates, and automatically patches lockfiles or opens GitHub pull requests.
+
+---
+
+### ⚡ Highlights & Value at a Glance
+
+*Click any feature to jump directly to its in-depth guide and CLI commands:*
+
+| Key Feature | Security & Developer Value | Quick Command |
+| :--- | :--- | :--- |
+| 🎯 [**Deep Reachability (Call-Graph AST)**](#1-reachability-analysis-deep-sca) | Eliminates up to **80% of false positives** by verifying if vulnerable package functions are actually invoked in your application code. | `vexa-sca scan --reachable-only` |
+| ⚡ [**Sub-Second Pure Rust Core**](#cross-platform-installation--setup) | High-throughput multi-threaded dependency graph analysis with **zero external C / OpenSSL dependencies**. Native binaries for Linux, macOS & Windows. | `vexa-sca scan` |
+| 🛠️ [**Automated Lockfile Patcher & PR Opener**](#2-automated-lockfile-patcher--pr-opener-fix) | Automatically bumps direct dependencies, injects transitive `overrides`/`resolutions`, and opens complete remediation GitHub PRs. | `vexa-sca fix --create-pr` |
+| 📊 [**Standalone Interactive HTML Dashboard**](#6-standalone-interactive-html-audit-dashboard) | Offline-ready single-file HTML report with glassmorphism dark UI, live search/filtering, and deep call-site inspector—**zero external CDNs**. | `vexa-sca scan --html-file sca.html` |
+| 📋 [**CycloneDX & SPDX SBOM Generator**](#5-software-bill-of-materials-sbom-cyclonedx--spdx) | Export compliant **CycloneDX v1.5 JSON** and **SPDX v2.3 JSON** with package URLs (PURLs), licenses, and vulnerability metadata. | `vexa-sca scan --sbom cyclonedx` |
+| 📦 [**Container & OS Package Scanner**](#8-container--os-package-scanner-container) | Scans Alpine (`apk`), Debian/Ubuntu (`dpkg`), Dockerfiles, and `.tar`/`.tar.gz` image layers without requiring Docker daemon or root privileges. | `vexa-sca container my-image.tar` |
+| 🛡️ [**Policy-as-Code & Suppression Engine**](#3-policy--suppression-engine-vexa-sca) | Define accepted risks in `.vexa-sca` YAML/JSON with mandatory expiration dates and alias matching (CVE/GHSA/Package). | `vexa-sca scan --policy .vexa-sca` |
+| ⚖️ [**Copyleft License Compliance Auditor**](#4-license-compliance-scanner) | Automatically flags viral GPL, AGPL, and weak-copyleft intellectual property risks across all direct and transitive dependencies. | `vexa-sca licenses` |
+| 🚦 [**CI/CD Quality Gates & SARIF v2.1.0**](#7-cicd-quality-gates--policy-enforcement) | Enforce deterministic pipeline pass/fail gates and upload native SARIF directly to GitHub Security Code Scanning and GitLab SAST. | `vexa-sca scan --sarif-file results.sarif` |
+
+> [!TIP]
+> **Try It in 30 Seconds**:
+> 
+> **1. To scan ANY project on your machine (No manual clone needed):**
+> Install the standalone binary globally via Cargo in 1 command:
+> ```bash
+> cargo install --git https://github.com/noviqtechnologies/vexa-sca.git
+> 
+> # Navigate to any repository on your computer and scan:
+> vexa-sca scan
+> ```
+> *(Or via `npx vexa-sca scan` once published to npm).*
+> 
+> **2. To evaluate from source in this cloned repository:**
+> ```bash
+> # Run against the included sample application fixtures:
+> cargo run -- scan test/fixtures/npm-app
+> 
+> # Or using the Node.js launcher:
+> node bin/vexa-sca.js scan test/fixtures/npm-app
+> ```
+> *(See [Prerequisites by OS](#prerequisites-by-os) below for 1-command toolchain installation).*
 
 ---
 
@@ -15,7 +56,7 @@ A commercial-grade, blazingly fast Software Composition Analysis (SCA) tool buil
 - [Cross-Platform Installation & Setup](#cross-platform-installation--setup)
   - [Prerequisites by OS](#prerequisites-by-os)
   - [Building from Source](#building-from-source)
-  - [Runnincg the CLI](#running-the-cli)
+  - [Running the CLI](#running-the-cli)
 - [Architecture & Core Concepts](#architecture--core-concepts)
 - [Multi-Ecosystem Coverage](#multi-ecosystem-coverage)
 - [Key Features](#key-features)
@@ -28,16 +69,20 @@ A commercial-grade, blazingly fast Software Composition Analysis (SCA) tool buil
   - [7. CI/CD Quality Gates & Policy Enforcement](#7-cicd-quality-gates--policy-enforcement)
   - [8. Container & OS Package Scanner (`container`)](#8-container--os-package-scanner-container)
 - [CLI Reference](#cli-reference)
-  - [`scan`](#1-vexa-scan)
-  - [`fix`](#2-vexa-fix)
-  - [`licenses`](#3-vexa-licenses)
-  - [`graph`](#4-vexa-graph)
-  - [`test`](#5-vexa-test)
-  - [`container`](#6-vexa-container)
-- [CI/CD Integration](#cicd-integration)
-  - [GitHub Actions (with Native SARIF Upload & Quality Gate)](#github-actions-with-native-sarif-upload--quality-gate)
-  - [GitLab CI](#gitlab-ci)
+  - [`vexa-sca scan`](#1-vexa-sca-scan)
+  - [`vexa-sca fix`](#2-vexa-sca-fix)
+  - [`vexa-sca licenses`](#3-vexa-sca-licenses)
+  - [`vexa-sca graph`](#4-vexa-sca-graph)
+  - [`vexa-sca test`](#5-vexa-sca-test)
+  - [`vexa-sca container`](#6-vexa-sca-container)
+- [Usage Across Workflows (CLI, CI/CD, Container, Git Hooks)](#usage-across-workflows-cli-cicd-container-git-hooks)
+  - [1. Local Developer Terminal Workflow](#1-local-developer-terminal-workflow)
+  - [2. GitHub Actions (with SARIF & Code Scanning Alerts)](#2-github-actions-with-sarif--code-scanning-alerts)
+  - [3. GitLab CI/CD Pipeline](#3-gitlab-cicd-pipeline)
+  - [4. Azure DevOps Pipelines](#4-azure-devops-pipelines)
+  - [5. Git Pre-Commit Security Hook](#5-git-pre-commit-security-hook)
 - [Automated Tests & Verification](#automated-tests--verification)
+- [License](#license)
 
 ---
 
@@ -45,45 +90,54 @@ A commercial-grade, blazingly fast Software Composition Analysis (SCA) tool buil
 
 ### Option 1: Native Rust Binary (Recommended for CI & High Performance)
 
+The native Rust engine has zero external C/runtime dependencies and executes scans with sub-second performance.
+
 #### Linux / macOS
 ```bash
-# Build optimized native release binaries (`vexa`, `vexa-sca`, `sca`)
+# Build optimized native release binaries (`vexa-sca`, `vexa`, `sca`)
 cargo build --release
 
-# Run scan against current project using primary binary `vexa`
-./target/release/vexa scan
+# Run scan against current project using primary binary `vexa-sca`
+./target/release/vexa-sca scan
 
-# Or run directly with Cargo
-cargo run --bin vexa -- scan
+# Or run directly via Cargo (default-run is configured to vexa-sca)
+cargo run -- scan
 ```
 
-#### Windows (PowerShell / CMD)
+#### Windows (PowerShell / Command Prompt / Git Bash)
 ```powershell
 # Build optimized native release binaries
 cargo build --release
 
-# Run scan against current project (PowerShell)
-.\target\release\vexa.exe scan
+# Run scan against current project (PowerShell / CMD)
+.\target\release\vexa-sca.exe scan
 
-# Or run directly with Cargo
-cargo run --bin vexa -- scan
+# Or run directly via Cargo
+cargo run -- scan
 ```
 
 > [!TIP]
-> **Backwards-Compatible Aliases**: Both `vexa-sca` and `sca` are compiled as native binary aliases alongside `vexa`. You can invoke `./target/release/vexa-sca scan` or `./target/release/sca scan` identically.
+> **Backwards-Compatible Aliases**: Both `vexa` and `sca` are compiled alongside `vexa-sca`. You can invoke `./target/release/vexa-sca scan`, `./target/release/vexa scan`, or `./target/release/sca scan` identically.
+
+---
 
 ### Option 2: Run via Node.js / NPX Wrapper (All Platforms)
 
-Vexa includes a cross-platform shim (`bin/vexa.js`) registered in `package.json`. It automatically resolves the native executable on **Windows**, **macOS**, and **Linux**, falling back to `cargo run` if uncompiled:
+Vexa SCA provides a cross-platform shim (`bin/vexa-sca.js`, with aliases `bin/vexa.js` and `bin/sca.js`) registered in `package.json`. It automatically resolves the native executable across **Windows**, **macOS**, and **Linux**, falling back to `cargo run` if uncompiled:
 
 ```bash
 # Using Node.js directly
-node bin/vexa.js scan
+node bin/vexa-sca.js scan
 
 # Using npm scripts
 npm run scan
 
-# If published or linked globally
+# Backwards-compatible script invocations
+node bin/vexa.js scan
+node bin/sca.js scan
+
+# If published or linked globally via npm
+npx vexa-sca scan
 npx vexa scan
 ```
 
@@ -91,41 +145,42 @@ npx vexa scan
 
 ## Cross-Platform Installation & Setup
 
-Vexa is fully cross-platform and operates identically on **Linux** (x86_64, aarch64, musl/Alpine, glibc), **macOS** (Apple Silicon M-series & Intel), and **Windows** (PowerShell, Command Prompt, Git Bash, WSL).
+Vexa SCA is fully cross-platform and operates identically on **Linux** (x86_64, aarch64, musl/Alpine, glibc), **macOS** (Apple Silicon M1-M4 & Intel), and **Windows** (PowerShell, Command Prompt, Git Bash, WSL).
 
 > [!NOTE]
-> **Zero External C / OpenSSL Dependencies**: Vexa uses a pure Rust TLS implementation (`rustls-tls`) and pure Rust decompression (`miniz_oxide`). You do not need to install Perl, OpenSSL dev headers, or build tools like MSVC C++ SDK solely for cryptographic handshakes or tarball unpacking.
+> **Zero External C / OpenSSL Dependencies**: Vexa SCA uses a pure Rust TLS implementation (`rustls-tls`) and pure Rust decompression (`miniz_oxide`). You do not need to install Perl, OpenSSL dev headers, or build tools solely for cryptographic handshakes or tarball unpacking.
 
 ### Prerequisites by OS
 
 | Operating System | Recommended Rust Installation | Optional Node.js (for `npx` wrapper) |
 | :--- | :--- | :--- |
-| **Linux** (Ubuntu, Debian, Fedora, Arch, Alpine) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` | `v16.0.0+` (via `nvm` or package manager) |
+| **Linux** (Ubuntu, Debian, Fedora, RHEL, Arch, Alpine) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` | `v16.0.0+` (via `nvm` or package manager) |
 | **macOS** (Apple Silicon M1-M4 & Intel) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` | `brew install node` |
-| **Windows** (10 / 11, Server) | `winget install Rustlang.Rustup` or download [rustup-init.exe](https://rustup.rs) | `winget install OpenJS.NodeJS.LTS` |
+| **Windows** (10 / 11, Windows Server) | `winget install Rustlang.Rustup` or download [rustup-init.exe](https://rustup.rs) | `winget install OpenJS.NodeJS.LTS` |
 
 ### Building from Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/vexa.git
+git clone https://github.com/noviqtechnologies/vexa-sca.git
 cd vexa-sca
 
-# Compile release binaries (creates `vexa`, `vexa-sca`, and `sca`)
+# Compile release binaries (produces `vexa-sca`, `vexa`, and `sca`)
 cargo build --release
 ```
 
 Compiled binaries are located at:
-- **Linux & macOS**: `target/release/vexa`, `target/release/vexa-sca`, and `target/release/sca`
-- **Windows**: `target\release\vexa.exe`, `target\release\vexa-sca.exe`, and `target\release\sca.exe`
+- **Linux & macOS**: `target/release/vexa-sca`, `target/release/vexa`, and `target/release/sca`
+- **Windows**: `target\release\vexa-sca.exe`, `target\release\vexa.exe`, and `target\release\sca.exe`
 
 ### Running the CLI
 
-You can install the native binary to your user PATH using Cargo:
+You can install the native binary to your user `PATH` using Cargo:
 ```bash
 cargo install --path .
-# Now available globally from any terminal:
-vexa --help
+
+# Now available globally from any terminal or OS:
+vexa-sca --help
 ```
 
 ---
@@ -142,7 +197,7 @@ graph TD
     D --> E["Reachability Engine (Deep SCA)\n(AST Source Call-Graph Tracing)"]
     E --> F[".vexa-sca Policy Engine\n(Suppression Rules & Expiry Validation)"]
     F --> G["Terminal, JSON, Markdown, SARIF v2.1.0\n(GitHub Security / GitLab SAST)"]
-    F --> H["Automated Lockfile Patcher\n(vexa fix & GitHub PR Opener)"]
+    F --> H["Automated Lockfile Patcher\n(vexa-sca fix & GitHub PR Opener)"]
     F --> I["SBOM Exporter\n(CycloneDX v1.5 / SPDX v2.3 JSON)"]
     F --> J["Interactive HTML Audit Dashboard\n(Single-File, Offline-Ready UI)"]
     F --> L["CI/CD Quality Gate\n(Threshold Enforcement & Exit Codes)"]
@@ -159,7 +214,7 @@ graph TD
 
 ## Multi-Ecosystem Coverage
 
-Vexa automatically identifies project manifests, lockfiles, and container images without manual configuration:
+Vexa SCA automatically identifies project manifests, lockfiles, and container images without manual configuration:
 
 | Ecosystem | Supported Files | Detection & Features |
 | :--- | :--- | :--- |
@@ -176,7 +231,7 @@ Vexa automatically identifies project manifests, lockfiles, and container images
 
 ### 1. Reachability Analysis (Deep SCA)
 
-Standard SCA tools flag every vulnerable package in your dependency tree, causing alert fatigue. Vexa's reachability engine inspects your source code (`.js`, `.jsx`, `.ts`, `.tsx`, `.py`) to identify if vulnerable functions are executed:
+Standard SCA tools flag every vulnerable package in your dependency tree, causing alert fatigue. Vexa SCA's reachability engine inspects your source code (`.js`, `.jsx`, `.ts`, `.tsx`, `.py`) to identify if vulnerable functions are executed:
 
 - `🚨 REACHABLE`: An active invocation was found in your code.
 - `🛡️ UNREACHABLE`: The package is installed, but the vulnerable function is never called.
@@ -184,7 +239,7 @@ Standard SCA tools flag every vulnerable package in your dependency tree, causin
 Filter directly in CLI:
 ```bash
 # Focus strictly on exploitable vulnerabilities
-vexa scan --reachable-only
+vexa-sca scan --reachable-only
 ```
 
 ---
@@ -198,13 +253,13 @@ Remediate vulnerabilities automatically without breaking application builds:
 
 ```bash
 # Preview proposed fixes without altering files
-vexa fix --dry-run
+vexa-sca fix --dry-run
 
 # Apply fixes locally
-vexa fix
+vexa-sca fix
 
 # Automatically open a GitHub Pull Request
-vexa fix --create-pr --repo owner/my-repo --token $GITHUB_TOKEN
+vexa-sca fix --create-pr --repo owner/my-repo --token $GITHUB_TOKEN
 ```
 
 ---
@@ -253,7 +308,7 @@ Categorize every third-party dependency by open source license and intellectual 
 - **Strong Copyleft (High Risk / Viral GPL)**: GPL-2.0/3.0, AGPL-3.0, SSPL, EUPL. Can obligate the entire proprietary project to be licensed as open source.
 
 ```bash
-vexa licenses ./my-project
+vexa-sca licenses ./my-project
 ```
 
 ---
@@ -267,13 +322,13 @@ Generate industry-standard Software Bill of Materials compliant with executive c
 
 ```bash
 # Output CycloneDX v1.5 JSON to stdout
-vexa scan --sbom cyclonedx
+vexa-sca scan --sbom cyclonedx
 
 # Export CycloneDX SBOM directly to file
-vexa scan --sbom cyclonedx --sbom-file sbom-cyclonedx.json
+vexa-sca scan --sbom cyclonedx --sbom-file sbom-cyclonedx.json
 
 # Export SPDX v2.3 JSON directly to file
-vexa scan --sbom spdx --sbom-file sbom-spdx.json
+vexa-sca scan --sbom spdx --sbom-file sbom-spdx.json
 ```
 
 ---
@@ -288,10 +343,10 @@ Generate a modern, self-contained, offline-ready HTML security report:
 
 ```bash
 # Generate single-file interactive HTML dashboard
-vexa scan --html-file sca-report.html
+vexa-sca scan --html-file sca-report.html
 
 # Stream HTML directly to standard output
-vexa scan --html > report.html
+vexa-sca scan --html > report.html
 ```
 
 ---
@@ -306,19 +361,19 @@ Automate pass/fail gates in build pipelines with customizable failure conditions
 
 ```bash
 # Fail CI build if any critical vulnerability is found
-vexa scan --fail-on critical
+vexa-sca scan --fail-on critical
 
 # Fail CI build only if an exploitable (reachable) vulnerability exists
-vexa scan --fail-on-reachable
+vexa-sca scan --fail-on-reachable
 
 # Enforce open source compliance: block viral copyleft licenses (GPL, AGPL)
-vexa scan --fail-on-licenses copyleft
+vexa-sca scan --fail-on-licenses copyleft
 
 # Combine gates for zero-tolerance security
-vexa scan --fail-on high --fail-on-reachable --fail-on-licenses copyleft
+vexa-sca scan --fail-on high --fail-on-reachable --fail-on-licenses copyleft
 ```
 
-When a gate fails, Vexa prints a detailed colored terminal banner listing every triggering policy violation:
+When a gate fails, Vexa SCA prints a detailed colored terminal banner listing every triggering policy violation:
 ```text
 ======================================================================
  [QUALITY GATE FAILED] Policy Violations Detected (1)
@@ -341,30 +396,31 @@ Inspect containerized environments and operating system packages for Linux CVEs:
 
 ```bash
 # Scan an extracted container rootfs or sysroot
-vexa container /path/to/container/rootfs
+vexa-sca container /path/to/container/rootfs
 
 # Scan an exported Docker image archive
 docker save my-app:latest -o my-app.tar
-vexa container my-app.tar
+vexa-sca container my-app.tar
 
-# Inspect Dockerfile base image
-vexa container ./Dockerfile
+# Output container scan as structured JSON or SARIF
+vexa-sca container my-app.tar --json
+vexa-sca container my-app.tar --sarif-file container-sarif.json
 
 # Enforce quality gates on container scanning
-vexa container /var/chroot/alpine --fail-on high
+vexa-sca container /var/chroot/alpine --fail-on high
 ```
 
 ---
 
 ## CLI Reference
 
-All commands support relative and absolute paths, cross-platform path separators (`/` or `\`), and default to the current working directory (`.`). You can use `vexa`, `vexa-sca`, or `sca` interchangeably.
+All commands support relative and absolute paths, cross-platform path separators (`/` or `\`), and default to the current working directory (`.`). You can use `vexa-sca`, `vexa`, or `sca` interchangeably.
 
-### 1. `vexa scan`
+### 1. `vexa-sca scan`
 Scan project dependencies for known security vulnerabilities.
 
 ```bash
-vexa scan [PATH] [OPTIONS]
+vexa-sca scan [PATH] [OPTIONS]
 ```
 
 | Flag | Type | Description |
@@ -386,31 +442,13 @@ vexa scan [PATH] [OPTIONS]
 | `--fail-on-reachable` | Flag | Fail scan with exit code 1 if any vulnerability is reachable in code |
 | `--fail-on-licenses <CAT>` | Option | Fail scan with exit code 1 on license risk (`copyleft`, `weak-copyleft`) |
 
-**Examples:**
-```bash
-# Scan current directory with terminal output
-vexa scan
-
-# Filter by high or critical severity and export HTML dashboard
-vexa scan --severity-threshold high --html-file report.html
-
-# Generate CycloneDX SBOM
-vexa scan --sbom cyclonedx --sbom-file cyclonedx.json
-
-# Export SARIF for GitHub Code Scanning
-vexa scan --sarif-file results.sarif
-
-# CI quality gate enforcement
-vexa scan --fail-on high --fail-on-reachable
-```
-
 ---
 
-### 2. `vexa fix`
+### 2. `vexa-sca fix`
 Automatically remediate vulnerabilities in manifest dependencies and lockfiles.
 
 ```bash
-vexa fix [PATH] [OPTIONS]
+vexa-sca fix [PATH] [OPTIONS]
 ```
 
 | Flag | Type | Description |
@@ -425,83 +463,116 @@ vexa fix [PATH] [OPTIONS]
 
 ---
 
-### 3. `vexa licenses`
+### 3. `vexa-sca licenses`
 Audit licenses across the entire dependency graph.
 
 ```bash
-vexa licenses [PATH]
+vexa-sca licenses [PATH]
 ```
+
+| Flag | Type | Description |
+| :--- | :--- | :--- |
+| `[PATH]` | Argument | Target directory (defaults to `.`) |
 
 ---
 
-### 4. `vexa graph`
+### 4. `vexa-sca graph`
 Inspect and visualize the dependency graph representation.
 
 ```bash
 # Print visual DAG hierarchy
-vexa graph
+vexa-sca graph
 
 # Export JSON schema v1.2.0 dependency graph
-vexa graph --json
+vexa-sca graph --json
 ```
 
 ---
 
-### 5. `vexa test`
+### 5. `vexa-sca test`
 Perform an ad-hoc query on an individual package version without needing a lockfile.
 
 ```bash
-vexa test <PACKAGE@VERSION> [ECOSYSTEM]
+vexa-sca test <PACKAGE@VERSION> [ECOSYSTEM]
 ```
 
 Supported ecosystems: `npm` (default), `PyPI`, `Go`, `crates.io`, `Maven`.
 
 ```bash
-vexa test lodash@4.17.15 npm
-vexa test flask@0.12.2 PyPI
-vexa test org.apache.logging.log4j:log4j-core@2.14.1 Maven
+vexa-sca test lodash@4.17.15 npm
+vexa-sca test flask@0.12.2 PyPI
+vexa-sca test org.apache.logging.log4j:log4j-core@2.14.1 Maven
 ```
 
 ---
 
-### 6. `vexa container`
+### 6. `vexa-sca container`
 Scan container images, exported root filesystems, and Dockerfiles for OS package vulnerabilities.
 
 ```bash
-vexa container [TARGET] [OPTIONS]
+vexa-sca container [TARGET] [OPTIONS]
 ```
 
 | Flag | Type | Description |
 | :--- | :--- | :--- |
 | `[TARGET]` | Argument | Path to rootfs directory, `.tar` / `.tar.gz` image, or Dockerfile (defaults to `.`) |
-| `--format <FORMAT>` | Option | Output format: `terminal` (default), `json`, `markdown` |
+| `--severity-threshold <LVL>` | Option | Minimum severity to report: `low`, `medium`, `high`, `critical` |
+| `--json` | Flag | Output structured JSON report to standard output |
+| `--markdown` | Flag | Output formatted Markdown report to standard output |
+| `--sarif` | Flag | Output OASIS SARIF v2.1.0 report to standard output |
+| `--sarif-file <PATH>` | Option | Write SARIF v2.1.0 report directly to a file |
+| `--html` | Flag | Output standalone interactive HTML dashboard to standard output |
+| `--html-file <PATH>` | Option | Write standalone interactive HTML dashboard to a file |
+| `--sbom <FORMAT>` | Option | Output SBOM in `cyclonedx` (v1.5) or `spdx` (v2.3) JSON format |
+| `--sbom-file <PATH>` | Option | Write SBOM report directly to a file |
 | `--fail-on <LVL>` | Option | Fail scan with exit code 1 if OS package vulnerabilities meet/exceed severity |
+| `--fail-on-licenses <CAT>` | Option | Fail scan with exit code 1 on license risk category |
 
 **Examples:**
 ```bash
 # Scan an extracted Alpine or Debian container rootfs
-vexa container /path/to/rootfs
+vexa-sca container /path/to/rootfs
 
-# Scan an exported Docker image archive
-vexa container my-image.tar
+# Scan an exported Docker image archive and export SARIF
+vexa-sca container my-image.tar --sarif-file container.sarif
 
 # Output container scan as structured JSON
-vexa container my-image.tar.gz --format json
+vexa-sca container my-image.tar.gz --json
 
 # Enforce CI quality gate on container images
-vexa container /path/to/rootfs --fail-on high
+vexa-sca container /path/to/rootfs --fail-on high
 ```
 
 ---
 
-## CI/CD Integration
+## Usage Across Workflows (CLI, CI/CD, Container, Git Hooks)
 
-### GitHub Actions (with Native SARIF Upload & Quality Gate)
+### 1. Local Developer Terminal Workflow
+
+Quickly audit code, reachability, and licenses locally before committing:
+
+```bash
+# Standard local scan
+vexa-sca scan
+
+# Focus only on exploitable vulnerabilities
+vexa-sca scan --reachable-only
+
+# Generate offline HTML dashboard to review in browser
+vexa-sca scan --html-file audit.html
+
+# Automatically fix direct & transitive lockfile vulnerabilities
+vexa-sca fix
+```
+
+---
+
+### 2. GitHub Actions (with SARIF & Code Scanning Alerts)
 
 Upload scan results directly into the **GitHub Security -> Code Scanning Alerts** tab using SARIF v2.1.0 and enforce automated quality gates:
 
 ```yaml
-name: Vexa Security Scan
+name: Vexa SCA Security Scan
 
 on:
   push:
@@ -523,12 +594,12 @@ jobs:
       - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build Vexa
+      - name: Build Vexa SCA
         run: cargo build --release
 
       - name: Run Vulnerability Scan & Generate Reports
         run: |
-          ./target/release/vexa scan . \
+          ./target/release/vexa-sca scan . \
             --sarif-file results.sarif \
             --html-file sca-report.html \
             --sbom cyclonedx \
@@ -552,27 +623,85 @@ jobs:
             sbom-cyclonedx.json
 ```
 
-### GitLab CI
+---
+
+### 3. GitLab CI/CD Pipeline
+
+Export SARIF and HTML security reports directly as GitLab CI pipeline artifacts:
 
 ```yaml
-vexa_scan:
+vexa_sca_scan:
   stage: test
   image: rust:latest
   script:
     - cargo build --release
-    - ./target/release/vexa scan . --fail-on high --html-file report.html --sbom cyclonedx --sbom-file sbom.json
+    - ./target/release/vexa-sca scan . \
+        --sarif-file gl-sast-report.sarif \
+        --html-file report.html \
+        --sbom cyclonedx \
+        --sbom-file sbom.json \
+        --fail-on high
   artifacts:
     when: always
     paths:
+      - gl-sast-report.sarif
       - report.html
       - sbom.json
+    reports:
+      sast: gl-sast-report.sarif
+```
+
+---
+
+### 4. Azure DevOps Pipelines
+
+Run Vexa SCA in Azure DevOps build pipelines and publish test and security artifacts:
+
+```yaml
+trigger:
+  - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+  - script: |
+      cargo build --release
+      ./target/release/vexa-sca scan . \
+        --sarif-file $(Build.ArtifactStagingDirectory)/results.sarif \
+        --html-file $(Build.ArtifactStagingDirectory)/sca-report.html \
+        --fail-on critical
+    displayName: 'Run Vexa SCA Audit'
+
+  - task: PublishBuildArtifacts@1
+    condition: always()
+    inputs:
+      PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+      ArtifactName: 'SecurityReports'
+      publishLocation: 'Container'
+```
+
+---
+
+### 5. Git Pre-Commit Security Hook
+
+Prevent vulnerabilities from entering your repository by adding a pre-commit hook in `.git/hooks/pre-commit`:
+
+```bash
+#!/bin/sh
+echo "🔍 Running Vexa SCA pre-commit quality gate..."
+cargo run --bin vexa-sca -- scan --fail-on high --fail-on-reachable
+if [ $? -ne 0 ]; then
+    echo "❌ Commit rejected: Reachable High/Critical vulnerabilities detected!"
+    exit 1
+fi
 ```
 
 ---
 
 ## Automated Tests & Verification
 
-Vexa includes a comprehensive automated test suite covering all core engines, parsers, reporters, and gates:
+Vexa SCA includes a comprehensive automated test suite covering all core engines, parsers, reporters, and gates:
 
 ```bash
 # Run all unit, integration, and E2E fixture tests (34 tests)
