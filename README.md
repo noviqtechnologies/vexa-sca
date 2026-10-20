@@ -12,6 +12,7 @@
 <p align="center">
   <a href="#quick-start"><b>Quick Start</b></a> •
   <a href="#-documentation--workflow-guides"><b>Documentation</b></a> •
+  <a href="docs/open-source-sca.md"><b>Open Source SCA Guide</b></a> •
   <a href="docs/cli-usage.md"><b>CLI Guide</b></a> •
   <a href="docs/cicd-integration.md"><b>CI/CD Pipelines</b></a> •
   <a href="docs/container-deployment.md"><b>Containers</b></a> •
@@ -88,6 +89,7 @@
   - [`vexa-sca test`](#5-vexa-sca-test)
   - [`vexa-sca container`](#6-vexa-sca-container)
 - [Documentation & Workflow Guides](#-documentation--workflow-guides)
+  - [🛡️ Open Source SCA Guide (`docs/open-source-sca.md`)](docs/open-source-sca.md)
   - [💻 CLI Usage Guide (`docs/cli-usage.md`)](docs/cli-usage.md)
   - [🚀 CI/CD Integration Guide (`docs/cicd-integration.md`)](docs/cicd-integration.md)
   - [🐳 Container Deployment Guide (`docs/container-deployment.md`)](docs/container-deployment.md)
@@ -629,6 +631,7 @@ Vexa SCA provides dedicated, production-ready operational guides tailored for sp
 
 | Guide | Target Workflow | Key Focus Areas |
 | :--- | :--- | :--- |
+| 🛡️ [**Open Source SCA Guide**](docs/open-source-sca.md) | Software Supply Chain & Dependencies | Multi-ecosystem dependency analysis, AST reachability analysis, transitive DFS chains, license compliance, policy suppressions, pre-requisites & post-steps |
 | 💻 [**CLI Usage Guide**](docs/cli-usage.md) | Local Developer Terminal & Workstations | Global/local installation, reachability analysis, multi-format reporting (HTML, SARIF, SBOM, JSON), automated fixes (`vexa-sca fix`), license auditing |
 | 🚀 [**CI/CD Integration Guide**](docs/cicd-integration.md) | Automated Pipelines & Security Dashboards | GitHub Actions, GitLab CI, Bitbucket Pipelines, Azure DevOps, SARIF upload to Code Scanning, automated PR workflows, secret management |
 | 🐳 [**Container Deployment Guide**](docs/container-deployment.md) | Containers, Registries & OS Packaging | Multi-stage production `Dockerfile`, Docker Compose, rootless runtime, scanning Docker images (`.tar`/`.tar.gz`), Alpine (`apk`) & Debian (`dpkg`) |

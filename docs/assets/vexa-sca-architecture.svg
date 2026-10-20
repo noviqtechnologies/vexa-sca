@@ -1,0 +1,266 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b0f19" />
+      <stop offset="100%" stop-color="#111827" />
+    </linearGradient>
+    <linearGradient id="card-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <linearGradient id="blue-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#818cf8" />
+    </linearGradient>
+    <linearGradient id="emerald-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="100%" stop-color="#10b981" />
+    </linearGradient>
+    <linearGradient id="rose-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#fb7185" />
+      <stop offset="100%" stop-color="#e11d48" />
+    </linearGradient>
+    <linearGradient id="amber-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#f59e0b" />
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.4" />
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#64748b" />
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#38bdf8" />
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1000" height="600" rx="16" fill="url(#bg-grad)" stroke="#1e293b" stroke-width="2"/>
+
+  <!-- Title Badge & Header -->
+  <rect x="40" y="24" width="130" height="26" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="105" y="41" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" font-weight="700" text-anchor="middle" letter-spacing="1">ARCHITECTURE</text>
+  <text x="40" y="78" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="22" font-weight="800">Vexa SCA: Dependency Graph &amp; Analysis Engine</text>
+  <text x="40" y="100" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13">High-throughput sub-second DAG dependency analysis, AST call-graph reachability, and automated remediation</text>
+
+  <!-- Column 1: Ingestion & Parsers -->
+  <g transform="translate(40, 125)" filter="url(#shadow)">
+    <rect width="165" height="435" rx="12" fill="url(#card-grad)" stroke="#334155" stroke-width="1.5"/>
+    <rect x="0" y="0" width="165" height="40" rx="12" fill="#1e293b" />
+    <path d="M 0 28 Q 0 40 12 40 L 153 40 Q 165 40 165 28" fill="#1e293b"/>
+    <text x="16" y="25" fill="#38bdf8" font-family="sans-serif" font-size="12" font-weight="700">1. INGESTION</text>
+
+    <!-- Items -->
+    <g transform="translate(14, 52)">
+      <rect width="137" height="36" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+      <text x="12" y="18" fill="#e2e8f0" font-family="monospace" font-size="10" font-weight="600">package-lock.json</text>
+      <text x="12" y="29" fill="#64748b" font-family="sans-serif" font-size="9">npm v1 / v2 / v3</text>
+    </g>
+    <g transform="translate(14, 96)">
+      <rect width="137" height="36" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+      <text x="12" y="18" fill="#e2e8f0" font-family="monospace" font-size="10" font-weight="600">yarn.lock / pnpm</text>
+      <text x="12" y="29" fill="#64748b" font-family="sans-serif" font-size="9">Classic &amp; Berry / YAML</text>
+    </g>
+    <g transform="translate(14, 140)">
+      <rect width="137" height="36" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+      <text x="12" y="18" fill="#e2e8f0" font-family="monospace" font-size="10" font-weight="600">requirements.txt</text>
+      <text x="12" y="29" fill="#64748b" font-family="sans-serif" font-size="9">Python pip pinned</text>
+    </g>
+    <g transform="translate(14, 184)">
+      <rect width="137" height="36" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+      <text x="12" y="18" fill="#e2e8f0" font-family="monospace" font-size="10" font-weight="600">Cargo.lock</text>
+      <text x="12" y="29" fill="#64748b" font-family="sans-serif" font-size="9">Rust Crates DAG</text>
+    </g>
+    <g transform="translate(14, 228)">
+      <rect width="137" height="36" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+      <text x="12" y="18" fill="#e2e8f0" font-family="monospace" font-size="10" font-weight="600">go.sum / go.mod</text>
+      <text x="12" y="29" fill="#64748b" font-family="sans-serif" font-size="9">Go module hashes</text>
+    </g>
+    <g transform="translate(14, 272)">
+      <rect width="137" height="36" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+      <text x="12" y="18" fill="#e2e8f0" font-family="monospace" font-size="10" font-weight="600">pom.xml</text>
+      <text x="12" y="29" fill="#64748b" font-family="sans-serif" font-size="9">Java Maven dependencies</text>
+    </g>
+    <g transform="translate(14, 316)">
+      <rect width="137" height="46" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+      <text x="12" y="18" fill="#e2e8f0" font-family="monospace" font-size="10" font-weight="600">Container Tarball</text>
+      <text x="12" y="29" fill="#64748b" font-family="sans-serif" font-size="9">Alpine apk / Debian dpkg</text>
+      <text x="12" y="39" fill="#64748b" font-family="sans-serif" font-size="8">Dockerfile &amp; rootfs</text>
+    </g>
+    <rect x="14" y="372" width="137" height="48" rx="6" fill="#1e293b" stroke="#38bdf8" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="82" y="392" fill="#38bdf8" font-family="sans-serif" font-size="10" font-weight="700" text-anchor="middle">Detector Engine</text>
+    <text x="82" y="407" fill="#94a3b8" font-family="sans-serif" font-size="9" text-anchor="middle">Auto-discovers manifest</text>
+  </g>
+
+  <!-- Connect 1 -> 2 -->
+  <line x1="205" y1="340" x2="239" y2="340" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrow-blue)"/>
+
+  <!-- Column 2: DAG Graph Model -->
+  <g transform="translate(245, 125)" filter="url(#shadow)">
+    <rect width="165" height="435" rx="12" fill="url(#card-grad)" stroke="#334155" stroke-width="1.5"/>
+    <rect x="0" y="0" width="165" height="40" rx="12" fill="#1e293b" />
+    <text x="16" y="25" fill="#818cf8" font-family="sans-serif" font-size="12" font-weight="700">2. DAG GRAPH (v1.2.0)</text>
+
+    <!-- Root node -->
+    <g transform="translate(22, 60)">
+      <circle cx="60" cy="22" r="22" fill="#1e293b" stroke="#818cf8" stroke-width="2"/>
+      <text x="60" y="22" fill="#ffffff" font-family="sans-serif" font-size="9" font-weight="700" text-anchor="middle">ROOT</text>
+      <text x="60" y="32" fill="#94a3b8" font-family="sans-serif" font-size="7" text-anchor="middle">my-project</text>
+    </g>
+
+    <!-- Links from Root -->
+    <path d="M 82 104 L 45 140" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <path d="M 82 104 L 120 140" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+    <!-- Direct nodes -->
+    <g transform="translate(14, 142)">
+      <rect width="60" height="34" rx="6" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5"/>
+      <text x="30" y="16" fill="#ffffff" font-family="sans-serif" font-size="9" font-weight="600" text-anchor="middle">Direct A</text>
+      <text x="30" y="26" fill="#38bdf8" font-family="monospace" font-size="7" text-anchor="middle">@1.0.0</text>
+    </g>
+    <g transform="translate(90, 142)">
+      <rect width="60" height="34" rx="6" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5"/>
+      <text x="30" y="16" fill="#ffffff" font-family="sans-serif" font-size="9" font-weight="600" text-anchor="middle">Direct B</text>
+      <text x="30" y="26" fill="#38bdf8" font-family="monospace" font-size="7" text-anchor="middle">@2.1.0</text>
+    </g>
+
+    <!-- Transitive Links -->
+    <path d="M 44 176 L 44 210" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <path d="M 120 176 L 120 210" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+    <!-- Transitive nodes -->
+    <g transform="translate(14, 212)">
+      <rect width="60" height="34" rx="6" fill="#0f172a" stroke="#e11d48" stroke-width="1.5"/>
+      <text x="30" y="16" fill="#ffffff" font-family="sans-serif" font-size="9" font-weight="600" text-anchor="middle">Trans. C</text>
+      <text x="30" y="26" fill="#fb7185" font-family="monospace" font-size="7" text-anchor="middle">@0.9.1 (Vuln)</text>
+    </g>
+    <g transform="translate(90, 212)">
+      <rect width="60" height="34" rx="6" fill="#0f172a" stroke="#64748b" stroke-width="1"/>
+      <text x="30" y="16" fill="#94a3b8" font-family="sans-serif" font-size="9" text-anchor="middle">Trans. D</text>
+      <text x="30" y="26" fill="#64748b" font-family="monospace" font-size="7" text-anchor="middle">@3.0.2</text>
+    </g>
+
+    <!-- Deep DFS Box -->
+    <rect x="14" y="265" width="137" height="155" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="24" y="285" fill="#e2e8f0" font-family="sans-serif" font-size="10" font-weight="700">Deep DFS Path Tracing</text>
+    <text x="24" y="303" fill="#94a3b8" font-family="monospace" font-size="8">pkgPathsToRoot:</text>
+    <rect x="22" y="312" width="121" height="52" rx="4" fill="#0b0f19"/>
+    <text x="27" y="327" fill="#cbd5e1" font-family="monospace" font-size="7">root</text>
+    <text x="27" y="339" fill="#38bdf8" font-family="monospace" font-size="7">↳ Direct A@1.0.0</text>
+    <text x="27" y="351" fill="#fb7185" font-family="monospace" font-size="7">  ↳ Trans C@0.9.1</text>
+    <text x="24" y="380" fill="#a5b4fc" font-family="sans-serif" font-size="8" font-weight="600">Resolves exact origin of</text>
+    <text x="24" y="392" fill="#a5b4fc" font-family="sans-serif" font-size="8" font-weight="600">nested vulnerabilities</text>
+  </g>
+
+  <!-- Connect 2 -> 3 -->
+  <line x1="410" y1="340" x2="444" y2="340" stroke="#818cf8" stroke-width="2" marker-end="url(#arrow-blue)"/>
+
+  <!-- Column 3: Intelligence & Reachability -->
+  <g transform="translate(450, 125)" filter="url(#shadow)">
+    <rect width="180" height="435" rx="12" fill="url(#card-grad)" stroke="#334155" stroke-width="1.5"/>
+    <rect x="0" y="0" width="180" height="40" rx="12" fill="#1e293b" />
+    <text x="16" y="25" fill="#34d399" font-family="sans-serif" font-size="12" font-weight="700">3. SECURITY INTELLIGENCE</text>
+
+    <!-- Advisory DB -->
+    <g transform="translate(14, 52)">
+      <rect width="152" height="66" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+      <text x="12" y="19" fill="#34d399" font-family="sans-serif" font-size="10" font-weight="700">OSV Advisory DB</text>
+      <text x="12" y="32" fill="#94a3b8" font-family="sans-serif" font-size="9">api.osv.dev (CVE / GHSA)</text>
+      <text x="12" y="47" fill="#64748b" font-family="monospace" font-size="8">Offline Cache (.sca-cache)</text>
+      <text x="12" y="58" fill="#38bdf8" font-family="sans-serif" font-size="8">SHA-256 Air-Gapped storage</text>
+    </g>
+
+    <!-- EPSS -->
+    <g transform="translate(14, 126)">
+      <rect width="152" height="52" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+      <text x="12" y="18" fill="#fbbf24" font-family="sans-serif" font-size="10" font-weight="700">FIRST.org EPSS</text>
+      <text x="12" y="31" fill="#94a3b8" font-family="sans-serif" font-size="9">Exploit Prediction Scoring</text>
+      <text x="12" y="44" fill="#64748b" font-family="sans-serif" font-size="8">30-day exploit probability</text>
+    </g>
+
+    <!-- AST Reachability -->
+    <g transform="translate(14, 186)">
+      <rect width="152" height="110" rx="6" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5"/>
+      <text x="12" y="19" fill="#38bdf8" font-family="sans-serif" font-size="10" font-weight="700">Deep Reachability (AST)</text>
+      <text x="12" y="33" fill="#cbd5e1" font-family="sans-serif" font-size="9">Parses .js, .ts, .py code</text>
+      <rect x="8" y="42" width="136" height="42" rx="4" fill="#0b0f19"/>
+      <text x="14" y="56" fill="#34d399" font-family="monospace" font-size="8">REACHABLE (Call-Site)</text>
+      <text x="14" y="70" fill="#64748b" font-family="monospace" font-size="8">UNREACHABLE (Dead)</text>
+      <text x="12" y="100" fill="#38bdf8" font-family="sans-serif" font-size="8" font-weight="600">Cuts up to 80% false alerts</text>
+    </g>
+
+    <!-- Policy Engine -->
+    <g transform="translate(14, 304)">
+      <rect width="152" height="116" rx="6" fill="#0f172a" stroke="#818cf8" stroke-width="1"/>
+      <text x="12" y="19" fill="#818cf8" font-family="sans-serif" font-size="10" font-weight="700">.vexa-sca Policy Engine</text>
+      <text x="12" y="33" fill="#94a3b8" font-family="sans-serif" font-size="9">YAML / JSON policy rules</text>
+      <text x="12" y="48" fill="#64748b" font-family="monospace" font-size="8">ignore: CVE-2021-xxxx</text>
+      <text x="12" y="60" fill="#64748b" font-family="monospace" font-size="8">reason: "Guarded in WAF"</text>
+      <text x="12" y="72" fill="#fb7185" font-family="monospace" font-size="8">expires: 2026-12-31</text>
+      <text x="12" y="88" fill="#cbd5e1" font-family="sans-serif" font-size="8" font-weight="600">Mandatory expiry dates</text>
+      <text x="12" y="102" fill="#34d399" font-family="sans-serif" font-size="8">Audit-logged suppressions</text>
+    </g>
+  </g>
+
+  <!-- Connect 3 -> 4 -->
+  <line x1="630" y1="340" x2="664" y2="340" stroke="#34d399" stroke-width="2" marker-end="url(#arrow-blue)"/>
+
+  <!-- Column 4: CI/CD Quality Gates & Outputs -->
+  <g transform="translate(670, 125)" filter="url(#shadow)">
+    <rect width="290" height="435" rx="12" fill="url(#card-grad)" stroke="#334155" stroke-width="1.5"/>
+    <rect x="0" y="0" width="290" height="40" rx="12" fill="#1e293b" />
+    <text x="16" y="25" fill="#f43f5e" font-family="sans-serif" font-size="12" font-weight="700">4. CI/CD QUALITY GATES &amp; DELIVERABLES</text>
+
+    <!-- Gates Box -->
+    <g transform="translate(14, 52)">
+      <rect width="262" height="110" rx="6" fill="#0f172a" stroke="#f43f5e" stroke-width="1.5"/>
+      <text x="14" y="20" fill="#f43f5e" font-family="sans-serif" font-size="10" font-weight="700">Policy Quality Gates (Exit Codes)</text>
+      <text x="14" y="38" fill="#34d399" font-family="monospace" font-size="9">Exit 0: PASSED (Clean / Compliant)</text>
+      <text x="14" y="54" fill="#fb7185" font-family="monospace" font-size="9">Exit 1: FAILED (Policy / Severity Gate)</text>
+      <text x="14" y="70" fill="#f59e0b" font-family="monospace" font-size="9">Exit 2: ERROR (Invalid Syntax / Network)</text>
+      <line x1="14" y1="80" x2="248" y2="80" stroke="#334155" stroke-width="1"/>
+      <text x="14" y="96" fill="#94a3b8" font-family="sans-serif" font-size="8">Flags: --fail-on high --fail-on-reachable --fail-on-licenses</text>
+    </g>
+
+    <!-- Remediation Fixer -->
+    <g transform="translate(14, 170)">
+      <rect width="262" height="90" rx="6" fill="#0f172a" stroke="#38bdf8" stroke-width="1"/>
+      <text x="14" y="19" fill="#38bdf8" font-family="sans-serif" font-size="10" font-weight="700">vexa-sca fix (Automated Remediation)</text>
+      <text x="14" y="36" fill="#e2e8f0" font-family="sans-serif" font-size="9">Direct Upgrade: updates package.json / Cargo.toml</text>
+      <text x="14" y="52" fill="#e2e8f0" font-family="sans-serif" font-size="9">Transitive Override: injects overrides / resolutions</text>
+      <text x="14" y="72" fill="#34d399" font-family="monospace" font-size="9" font-weight="600">--create-pr (Automated GitHub Pull Request)</text>
+    </g>
+
+    <!-- Deliverables Grid -->
+    <g transform="translate(14, 270)">
+      <rect width="262" height="150" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+      <text x="14" y="19" fill="#cbd5e1" font-family="sans-serif" font-size="10" font-weight="700">Audit Deliverables &amp; Formats</text>
+
+      <g transform="translate(12, 30)">
+        <rect width="112" height="46" rx="4" fill="#1e293b"/>
+        <text x="8" y="17" fill="#38bdf8" font-family="sans-serif" font-size="9" font-weight="600">HTML Dashboard</text>
+        <text x="8" y="30" fill="#94a3b8" font-family="sans-serif" font-size="8">Offline standalone UI</text>
+        <text x="8" y="40" fill="#64748b" font-family="monospace" font-size="7">--html-file sca.html</text>
+      </g>
+      <g transform="translate(138, 30)">
+        <rect width="112" height="46" rx="4" fill="#1e293b"/>
+        <text x="8" y="17" fill="#34d399" font-family="sans-serif" font-size="9" font-weight="600">SARIF v2.1.0</text>
+        <text x="8" y="30" fill="#94a3b8" font-family="sans-serif" font-size="8">GitHub Code Scanning</text>
+        <text x="8" y="40" fill="#64748b" font-family="monospace" font-size="7">--sarif-file report.sarif</text>
+      </g>
+      <g transform="translate(12, 86)">
+        <rect width="112" height="52" rx="4" fill="#1e293b"/>
+        <text x="8" y="17" fill="#a855f7" font-family="sans-serif" font-size="9" font-weight="600">CycloneDX v1.5</text>
+        <text x="8" y="30" fill="#94a3b8" font-family="sans-serif" font-size="8">PURLs, Vulnerabilities</text>
+        <text x="8" y="42" fill="#64748b" font-family="monospace" font-size="7">--sbom cyclonedx</text>
+      </g>
+      <g transform="translate(138, 86)">
+        <rect width="112" height="52" rx="4" fill="#1e293b"/>
+        <text x="8" y="17" fill="#f59e0b" font-family="sans-serif" font-size="9" font-weight="600">SPDX v2.3</text>
+        <text x="8" y="30" fill="#94a3b8" font-family="sans-serif" font-size="8">SPDX 3.20+ License Tag</text>
+        <text x="8" y="42" fill="#64748b" font-family="monospace" font-size="7">--sbom spdx</text>
+      </g>
+    </g>
+  </g>
+</svg>
