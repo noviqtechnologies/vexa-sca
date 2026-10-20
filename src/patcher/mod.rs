@@ -1,12 +1,14 @@
 pub mod cargo_patcher;
 pub mod lockfile_patcher;
 pub mod pr_creator;
+pub mod python_patcher;
 
 pub use cargo_patcher::CargoPatcher;
 pub use lockfile_patcher::{
     DirectUpgrade, LockfilePatcher, PatchChanges, PatchResult, TransitiveOverride, UnfixableItem,
 };
 pub use pr_creator::{PrCreator, PrResult};
+pub use python_patcher::PythonPatcher;
 
 use crate::parsers::detector::ManifestType;
 use crate::types::RemediationAction;
@@ -26,9 +28,9 @@ pub fn apply_fixes(
         ManifestType::NpmPackageLock | ManifestType::YarnLock | ManifestType::PnpmLock => {
             LockfilePatcher::apply_fixes(project_dir, remediations, dry_run)
         }
-        ManifestType::PythonRequirements => Err(
-            "Automated in-place patching for Python requirements.txt is not yet supported. Please review recommended package versions from the scan output.".to_string(),
-        ),
+        ManifestType::PythonRequirements => {
+            PythonPatcher::apply_fixes(project_dir, remediations, dry_run)
+        }
         ManifestType::GoModSum => Err(
             "Automated in-place patching for go.mod/go.sum is not yet supported. Run 'go get <pkg>@<version>' for recommended upgrades.".to_string(),
         ),

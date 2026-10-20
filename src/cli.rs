@@ -501,6 +501,7 @@ pub async fn run() {
                 Ok(patch_res) => {
                     let target_desc = match manifest_type {
                         crate::parsers::detector::ManifestType::RustCargoLock => "Cargo.toml / Cargo.lock",
+                        crate::parsers::detector::ManifestType::PythonRequirements => "requirements.txt",
                         _ => "package.json",
                     };
 
@@ -521,6 +522,7 @@ pub async fn run() {
                         if !patch_res.changes.direct_upgrades.is_empty() {
                             let dir_header = match manifest_type {
                                 crate::parsers::detector::ManifestType::RustCargoLock => "Direct Manifest Upgrades (Cargo.toml):",
+                                crate::parsers::detector::ManifestType::PythonRequirements => "Direct Manifest Upgrades (requirements.txt):",
                                 _ => "Direct Manifest Upgrades (package.json):",
                             };
                             println!("\n  {}", dir_header.bold());
@@ -562,6 +564,7 @@ pub async fn run() {
                         if !patch_res.changes.transitive_overrides.is_empty() {
                             let trans_header = match manifest_type {
                                 crate::parsers::detector::ManifestType::RustCargoLock => "Transitive Dependency Updates (Cargo.lock):",
+                                crate::parsers::detector::ManifestType::PythonRequirements => "Transitive Dependency Pins (requirements.txt):",
                                 _ => "Transitive Overrides:",
                             };
                             println!("\n  {}", trans_header.bold());
@@ -576,7 +579,7 @@ pub async fn run() {
 
                                 let from_str = o.current_version.as_deref().map(|v| format!("{} ➔ ", v)).unwrap_or_default();
                                 let mut line = match manifest_type {
-                                    crate::parsers::detector::ManifestType::RustCargoLock => {
+                                    crate::parsers::detector::ManifestType::RustCargoLock | crate::parsers::detector::ManifestType::PythonRequirements => {
                                         format!("   ↳ {}: {}{}", o.package.bold(), from_str, o.pinned_to.cyan().bold())
                                     }
                                     _ => {
@@ -676,6 +679,9 @@ pub async fn run() {
                             match manifest_type {
                                 crate::parsers::detector::ManifestType::RustCargoLock => {
                                     println!("\nRun \"cargo check\" or \"cargo test\" to verify the updated dependencies.");
+                                }
+                                crate::parsers::detector::ManifestType::PythonRequirements => {
+                                    println!("\nRun \"pip install -r requirements.txt\" to install the updated dependencies.");
                                 }
                                 _ => {
                                     println!("\nRun \"npm install\", \"yarn\", or \"pnpm install\" to update your lockfile.");

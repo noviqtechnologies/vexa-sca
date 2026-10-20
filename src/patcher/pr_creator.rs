@@ -161,7 +161,7 @@ impl PrCreator {
         body.push_str("### 🔍 Verification Instructions\n");
         body.push_str("1. Review the modified manifest file(s).\n");
         body.push_str("2. Run package manager commands to regenerate lockfiles & run tests:\n");
-        body.push_str("   ```bash\n   # Cargo (Rust):\n   cargo check && cargo test\n\n   # Node.js (npm / yarn / pnpm):\n   npm install && npm test\n   ```\n\n");
+        body.push_str("   ```bash\n   # Cargo (Rust):\n   cargo check && cargo test\n\n   # Node.js (npm / yarn / pnpm):\n   npm install && npm test\n\n   # Python (pip):\n   pip install -r requirements.txt && pytest\n   ```\n\n");
         body.push_str("*(Created automatically by Vexa SCA engine)*\n");
 
         body
