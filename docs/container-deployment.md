@@ -190,6 +190,7 @@ services:
       --sarif-file /workspace/sca-results.sarif
       --fail-on high
       --fail-on-reachable
+      --epss-threshold 0.50
 
 volumes:
   vexa-cache:
@@ -200,6 +201,12 @@ Execute the scan using Compose:
 ```bash
 docker compose run --rm sca-audit
 ```
+
+To inspect your scan quota status from a container:
+```bash
+docker run --rm ghcr.io/noviqtechnologies/vexa-sca:latest usage
+```
+
 
 ---
 

@@ -34,6 +34,8 @@
 | 📦 [**Container & OS Package Scanner**](#8-container--os-package-scanner-container) | Scans Alpine (`apk`), Debian/Ubuntu (`dpkg`), Dockerfiles, and `.tar`/`.tar.gz` image layers without requiring Docker daemon or root privileges. | `vexa-sca container my-image.tar` |
 | 🛡️ [**Policy-as-Code & Suppression Engine**](#3-policy--suppression-engine-vexa-sca) | Define accepted risks in `.vexa-sca` YAML/JSON with mandatory expiration dates and alias matching (CVE/GHSA/Package). | `vexa-sca scan --policy .vexa-sca` |
 | ⚖️ [**Copyleft License Compliance Auditor**](#4-license-compliance-scanner) | Automatically flags viral GPL, AGPL, and weak-copyleft intellectual property risks across all direct and transitive dependencies. | `vexa-sca licenses` |
+| 📈 [**EPSS Exploit Prediction**](#epss-exploit-prediction-likelihood) | Prioritizes CVEs by real-world 30-day exploit likelihood (FIRST.org EPSS), cutting false-positive triage by up to 85%. | `vexa-sca scan --epss-threshold 0.50` |
+| ♾️ [**Unlimited Developer Quota**](#scan-volume--usage-quota) | Free Developer Edition provides 100% unlimited local CLI and open-source repo scans with zero seat-tax or rate limits. | `vexa-sca usage` |
 | 🚦 [**CI/CD Quality Gates & SARIF v2.1.0**](#7-cicd-quality-gates--policy-enforcement) | Enforce deterministic pipeline pass/fail gates and upload native SARIF directly to GitHub Security Code Scanning and GitLab SAST. | `vexa-sca scan --sarif-file results.sarif` |
 
 > [!TIP]
@@ -479,6 +481,8 @@ vexa-sca scan [PATH] [OPTIONS]
 | `--fail-on <LVL>` | Option | Fail scan with exit code 1 if vulnerabilities meet/exceed severity |
 | `--fail-on-reachable` | Flag | Fail scan with exit code 1 if any vulnerability is reachable in code |
 | `--fail-on-licenses <CAT>` | Option | Fail scan with exit code 1 on license risk (`copyleft`, `weak-copyleft`) |
+| `--epss-threshold <FLOAT>` | Option | Filter vulnerabilities by minimum EPSS probability (0.0 to 1.0, e.g. `0.20` for 20%) |
+| `--usage` | Flag | Display scan volume quota and plan usage details directly in scan output |
 
 ---
 
@@ -580,6 +584,44 @@ vexa-sca container my-image.tar.gz --json
 # Enforce CI quality gate on container images
 vexa-sca container /path/to/rootfs --fail-on high
 ```
+
+---
+
+### 7. `vexa-sca usage`
+Display active plan tier and scan quota volume. In the **Free Developer Edition**, local CLI tests and open-source repository scans are **100% unlimited**:
+
+```bash
+# Display human-readable quota and usage box
+vexa-sca usage
+
+# Output structured JSON for automation or dashboards
+vexa-sca usage --json
+```
+
+---
+
+## 📈 EPSS Exploit Prediction Likelihood
+
+Standard CVSS scores reflect theoretical severity, not whether attackers are actively weaponizing a vulnerability in the wild. Vexa SCA integrates **FIRST.org EPSS (Exploit Prediction Scoring System)** probabilities directly into scan results:
+
+```bash
+# Prioritize vulnerabilities with a 20%+ probability of real-world exploitation
+vexa-sca scan --epss-threshold 0.20
+
+# Combine with reachability to eliminate both unreachable and non-exploited CVEs
+vexa-sca scan --reachable-only --epss-threshold 0.50
+```
+
+---
+
+## ♾️ Scan Volume & Usage Quota
+
+Unlike legacy commercial tools that restrict private repository scans to 200 tests/month, Vexa SCA Free Developer Edition is built with a **developer-first, open-core philosophy**:
+* **Local CLI Scans**: Completely **Unlimited**. Run as many tests, pre-commit hooks, and dry-run fixes as needed without rate-limiting.
+* **Public Open-Source Repos**: Completely **Unlimited**.
+* **Audit Tracking**: Local usage statistics are maintained locally in `.sca-cache/usage.json` for full visibility.
+
+---
 
 ## 📖 Documentation & Workflow Guides
 

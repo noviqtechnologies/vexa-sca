@@ -137,7 +137,18 @@ Avoid backlog churn by focusing solely on vulnerabilities that have a known patc
 vexa-sca scan --ignore-unfixed
 ```
 
-### 4. Exporting Reports in Multi-Format Standards
+### 4. Prioritizing by EPSS Exploit Likelihood
+Filter vulnerabilities using FIRST.org Exploit Prediction Scoring System (EPSS) probabilities (0.0 to 1.0) to focus strictly on CVEs being actively weaponized in the wild:
+
+```bash
+# Isolate vulnerabilities with >= 20% probability of exploitation
+vexa-sca scan --epss-threshold 0.20
+
+# Strict prioritization: Must be reachable in AST call-graph AND have >= 50% exploit likelihood
+vexa-sca scan --reachable-only --epss-threshold 0.50
+```
+
+### 5. Exporting Reports in Multi-Format Standards
 Vexa SCA supports standard export formats without requiring external conversion tools.
 
 #### Structured Machine Formats (JSON & Markdown)
@@ -179,7 +190,7 @@ vexa-sca scan --sbom spdx --sbom-file spdx-sbom.json
 
 ---
 
-### 5. Automated Lockfile Remediation (`vexa-sca fix`)
+### 6. Automated Lockfile Remediation (`vexa-sca fix`)
 Vexa SCA does not merely detect vulnerabilities; it resolves them directly in your package manifests and lockfiles.
 
 ```bash
@@ -200,7 +211,7 @@ vexa-sca fix \
 
 ---
 
-### 6. License Compliance Auditing (`vexa-sca licenses`)
+### 7. License Compliance Auditing (`vexa-sca licenses`)
 Scan your direct and transitive dependency graph to identify intellectual property legal risks, viral copyleft licenses (GPL/AGPL), and weak copyleft (LGPL/MPL):
 
 ```bash
@@ -219,7 +230,7 @@ vexa-sca licenses --fail-on copyleft
 
 ---
 
-### 7. Dependency Graph Visualizer (`vexa-sca graph`)
+### 8. Dependency Graph Visualizer (`vexa-sca graph`)
 Display the directed acyclic graph (DAG) representing all package nodes, depths, and propagation paths:
 
 ```bash
@@ -235,7 +246,7 @@ vexa-sca graph --json > dep-graph.json
 
 ---
 
-### 8. Ad-Hoc Package Testing (`vexa-sca test`)
+### 9. Ad-Hoc Package Testing (`vexa-sca test`)
 Query security databases for a specific package version without requiring a local project or lockfile:
 
 ```bash
@@ -250,6 +261,22 @@ vexa-sca test org.apache.logging.log4j:log4j-core@2.14.1 Maven
 
 # Crates.io (Rust) package query
 vexa-sca test smallvec@0.6.13 crates.io
+```
+
+---
+
+### 10. Scan Quota & Usage Status (`vexa-sca usage`)
+Check your active plan tier and monthly scan volume. In the **Free Developer Edition**, local CLI scans and open-source repository tests are **100% unlimited**:
+
+```bash
+# Display formatted quota status box
+vexa-sca usage
+
+# Output structured JSON for automation or monitoring
+vexa-sca usage --json
+
+# Include quota details directly inside scan output
+vexa-sca scan --usage
 ```
 
 ---

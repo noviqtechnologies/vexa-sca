@@ -100,7 +100,8 @@ jobs:
             --sbom-file cyclonedx-sbom.json \
             --fail-on high \
             --fail-on-reachable \
-            --fail-on-licenses copyleft
+            --fail-on-licenses copyleft \
+            --epss-threshold 0.50
 
       - name: Upload SARIF to GitHub Code Scanning Alerts
         uses: github/codeql-action/upload-sarif@v3

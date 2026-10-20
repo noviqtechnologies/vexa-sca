@@ -144,19 +144,26 @@ export PATH="$HOME/.cargo/bin:/usr/local/bin:$PATH"
 
 echo "🚀 [Vexa SCA] Running pre-push comprehensive audit..."
 
+# Execute pre-push audit with EPSS and reachability gating
 vexa-sca scan . \
     --fail-on critical \
     --fail-on-reachable \
     --fail-on-licenses copyleft \
+    --epss-threshold 0.50 \
     --html-file .git/sca-push-report.html
 
 if [ $? -ne 0 ]; then
-    echo "❌ Push blocked! Review offline report at .git/sca-push-report.html"
+    echo "❌ Push blocked! High-risk exploit or critical reachable vulnerability detected."
+    echo "   Review offline report at .git/sca-push-report.html"
     exit 1
 fi
 
 exit 0
 ```
+
+> [!TIP]
+> **Zero Local Scan Limits**: In the **Free Developer Edition**, local CLI scans and Git hook executions are **100% unlimited**. You can trigger pre-commit and pre-push hooks on every Git action without consuming cloud scan quotas.
+
 
 Make it executable:
 ```bash
