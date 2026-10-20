@@ -180,6 +180,14 @@ pub struct VulnerabilityFinding {
     pub aliases: Vec<String>,
     #[serde(default)]
     pub advisory_category: AdvisoryCategory,
+    #[serde(default)]
+    pub epss: Option<EpssInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EpssInfo {
+    pub score: f64,
+    pub percentile: f64,
 }
 
 impl Default for VulnerabilityFinding {
@@ -206,6 +214,7 @@ impl Default for VulnerabilityFinding {
             reachability: None,
             aliases: vec![],
             advisory_category: AdvisoryCategory::Vulnerability,
+            epss: None,
         }
     }
 }

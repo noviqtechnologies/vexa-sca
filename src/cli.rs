@@ -106,6 +106,14 @@ pub enum Commands {
         /// CI/CD Quality Gate: fail on unmaintained or deprecated dependencies
         #[arg(long)]
         fail_on_unmaintained: bool,
+
+        /// Filter by minimum EPSS exploit prediction probability (0.0 to 1.0, e.g. 0.2 for 20%)
+        #[arg(long)]
+        epss_threshold: Option<f64>,
+
+        /// Display scan volume quota and plan usage details
+        #[arg(long)]
+        usage: bool,
     },
 
     /// Automatically patch dependencies and overrides
@@ -244,6 +252,13 @@ pub enum Commands {
         /// CI/CD Quality Gate: fail on license risk category (e.g. strong-copyleft)
         #[arg(long)]
         fail_on_licenses: Option<String>,
+    },
+
+    /// Display scan volume quota and plan usage details
+    Usage {
+        /// Output report in JSON format
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -796,6 +811,8 @@ pub async fn run() {
             fail_on_reachable,
             fail_on_licenses,
             fail_on_unmaintained,
+            epss_threshold,
+            usage,
         } => {
             let options = ScanOptions {
                 dev: !prod_only,
@@ -808,7 +825,24 @@ pub async fn run() {
             };
 
             match scan_project(&path, options).await {
-                Ok(output) => {
+                Ok(mut output) => {
+                    if let Some(thresh) = epss_threshold {
+                        output.scan_result.vulnerabilities.retain(|v| {
+                            v.epss.as_ref().map(|e| e.score >= thresh).unwrap_or(false)
+                        });
+                        output.scan_result.vulnerabilities_count = output.scan_result.vulnerabilities.len();
+                    }
+
+                    if usage && !json && !sarif && !html && sbom.is_none() {
+                        let limiter = crate::scanner::usage_limiter::CloudUsageLimiter::default();
+                        let report = limiter.get_usage_report();
+                        println!("\n{}", "Vexa SCA Scan Volume & Quota Status:".bold());
+                        println!("  Plan:         {}", report.plan_tier.cyan());
+                        println!("  Scan Quota:   {}", "Unlimited (Local CLI & Public Repos)".green().bold());
+                        println!("  Status:       {}", report.status.green());
+                        println!("  Period:       {}", report.billing_period);
+                        println!("  Scans Used:   {} tests run this month\n", report.scans_this_month);
+                    }
                     let project_name = output
                         .manifest_file
                         .parent()
@@ -1131,6 +1165,24 @@ pub async fn run() {
                     eprintln!("Container scan error: {}", e);
                     exit(2);
                 }
+            }
+        }
+
+        Commands::Usage { json } => {
+            let limiter = crate::scanner::usage_limiter::CloudUsageLimiter::default();
+            let report = limiter.get_usage_report();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            } else {
+                println!("\n{}", "Vexa SCA Usage & Quota Status".bold().underline());
+                println!("──────────────────────────────────────────────────");
+                println!("  {}   {}", "Plan Tier:   ".bold(), report.plan_tier.cyan().bold());
+                println!("  {}   {}", "Scan Quota:  ".bold(), "Unlimited (Local CLI & Public Repos)".green().bold());
+                println!("  {}   {}", "Status:      ".bold(), report.status.green());
+                println!("  {}   {}", "Period:      ".bold(), report.billing_period);
+                println!("  {}   {} tests run this month", "Usage:       ".bold(), report.scans_this_month);
+                println!("  {}   {}", "Policy:      ".dimmed(), report.message.dimmed());
+                println!("──────────────────────────────────────────────────\n");
             }
         }
     }

@@ -40,6 +40,7 @@ pub fn render_terminal_report(
     println!("{}", "=".repeat(78));
 
     println!("Scanned Dependencies : {}", scan_result.scanned_packages_count.to_string().bold());
+    println!("Scan Quota           : {}", "Unlimited (Free Developer Edition)".green());
     println!(
         "Dependency Cycles    : {}",
         if scan_result.has_cycles {
@@ -211,6 +212,9 @@ pub fn render_terminal_report(
             let cve_str = v.cve.as_ref().map(|c| format!("({})", c)).unwrap_or_default().dimmed();
             let score_str = if v.advisory_category == AdvisoryCategory::Unmaintained {
                 "Advisory".to_string()
+            } else if let Some(ref epss) = v.epss {
+                let epss_pct = epss.score * 100.0;
+                format!("CVSS {:.1} | EPSS {:.1}%", v.severity.score, epss_pct)
             } else {
                 format!("CVSS {:.1}", v.severity.score)
             };

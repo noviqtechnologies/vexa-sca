@@ -1,6 +1,8 @@
 use crate::core::dep_graph::DepGraph;
 use crate::core::semver_utils::extract_fixed_versions;
 use crate::scanner::cache::VulnCache;
+use crate::scanner::epss::EpssResolver;
+use crate::scanner::usage_limiter::CloudUsageLimiter;
 use crate::types::{AdvisoryCategory, PkgInfo, SeverityInfo, SeverityLevel, VulnerabilityFinding};
 use reqwest::Client;
 use serde_json::Value;
@@ -21,6 +23,8 @@ pub struct VulnScanner {
     pub batch_api_url: String,
     pub vuln_api_url: String,
     pub client: Client,
+    pub epss_resolver: EpssResolver,
+    pub usage_limiter: CloudUsageLimiter,
 }
 
 impl Default for VulnScanner {
@@ -41,6 +45,8 @@ impl VulnScanner {
             batch_api_url: "https://api.osv.dev/v1/querybatch".to_string(),
             vuln_api_url: "https://api.osv.dev/v1/vulns".to_string(),
             client,
+            epss_resolver: EpssResolver::default(),
+            usage_limiter: CloudUsageLimiter::default(),
         }
     }
 
@@ -118,6 +124,12 @@ impl VulnScanner {
                 }
             }
         }
+
+        // Enrich findings with EPSS exploit prediction likelihood
+        self.epss_resolver.enrich_findings(&mut vulnerabilities).await;
+
+        // Record scan volume under unlimited developer quota
+        self.usage_limiter.record_scan();
 
         // Sort by severity (Critical -> High -> Medium -> Low)
         vulnerabilities.sort_by_key(|b| std::cmp::Reverse(b.severity.level.weight()));
@@ -654,6 +666,7 @@ impl VulnScanner {
             reachability: None,
             aliases,
             advisory_category,
+            epss: None,
         })
     }
 }

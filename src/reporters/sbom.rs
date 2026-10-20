@@ -578,6 +578,7 @@ mod tests {
                 reachability: None,
                 aliases: vec![],
                 advisory_category: Default::default(),
+                epss: None,
             }],
             ..Default::default()
         };
@@ -667,6 +668,7 @@ mod tests {
                 reachability: None,
                 aliases: vec![],
                 advisory_category: Default::default(),
+                epss: None,
             }],
             ..Default::default()
         };

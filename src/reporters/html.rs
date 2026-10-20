@@ -119,12 +119,20 @@ pub fn format_html_report(
             .collect::<Vec<_>>()
             .join("");
 
+        let epss_badge = if let Some(ref epss) = vuln.epss {
+            let pct = epss.score * 100.0;
+            format!(r#"<span class="badge" style="background: rgba(14, 165, 233, 0.2); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.4);" title="EPSS Exploit Prediction: {:.1}% likelihood within 30 days">EPSS {:.1}%</span>"#, pct, pct)
+        } else {
+            String::new()
+        };
+
         vuln_cards_html.push_str(&format!(
             r#"<div class="card vuln-card sev-{sev_level} {reach_class}" data-sev="{sev_level}" data-reach="{reach_class}">
                 <div class="card-header" onclick="toggleCard({idx})">
                     <div class="header-left">
                         <span class="badge badge-{sev_level}">{sev_text} ({score:.1})</span>
                         {reach_badge}
+                        {epss_badge}
                         <span class="pkg-name"><code>{pkg_id}</code></span>
                         <span class="vuln-id">[{id_text}]</span>
                     </div>
@@ -146,6 +154,7 @@ pub fn format_html_report(
             sev_text = vuln.severity.level.as_str(),
             score = vuln.severity.score,
             reach_badge = reach_badge,
+            epss_badge = epss_badge,
             reach_class = reach_class,
             pkg_id = html_escape(&vuln.pkg_id),
             id_text = html_escape(cve_str),
