@@ -120,7 +120,7 @@ fn sanitize_vendor_content(mut text: String) -> String {
     let p1 = String::from_utf8_lossy(b"snyk").to_string();
     let p2 = String::from_utf8_lossy(b"synk").to_string();
     let p1_upper = p1.to_uppercase();
-    let p1_cap = format!("{}{}", &p1[..1].to_uppercase(), &p1[1..]);
+    let p1_cap = format!("{}{}", p1[..1].to_uppercase(), &p1[1..]);
 
     let re_pattern = format!(r#"(?i)https?://[^\s"']*(?:{}|{})[^\s"']*"#, p1, p2);
     if let Ok(r) = regex::Regex::new(&re_pattern) {
