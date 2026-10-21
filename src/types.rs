@@ -183,10 +183,36 @@ pub struct VulnerabilityFinding {
     pub epss: Option<EpssInfo>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum EpssSource {
+    #[serde(rename = "first.org")]
+    FirstOrg,
+    #[serde(rename = "cache")]
+    Cache,
+    #[serde(rename = "heuristic")]
+    Heuristic,
+    #[serde(rename = "unavailable")]
+    #[default]
+    Unavailable,
+}
+
+impl EpssSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::FirstOrg => "first.org",
+            Self::Cache => "cache",
+            Self::Heuristic => "heuristic",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EpssInfo {
     pub score: f64,
     pub percentile: f64,
+    #[serde(default)]
+    pub source: EpssSource,
 }
 
 impl Default for VulnerabilityFinding {

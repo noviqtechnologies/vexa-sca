@@ -6,9 +6,14 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
+)]
+#[value(rename_all = "lower")]
 pub enum SbomFormat {
+    #[value(name = "cyclonedx", alias = "cdx")]
     CycloneDx,
+    #[value(name = "spdx")]
     Spdx,
 }
 

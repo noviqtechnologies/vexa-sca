@@ -679,9 +679,7 @@ impl VulnScanner {
             if let Some(arr) = adv.get("references").and_then(|v| v.as_array()) {
                 for r in arr {
                     if let Some(u) = r.get("url").and_then(|u| u.as_str()) {
-                        if !crate::scanner::cache::has_blocked_vendor(u) {
-                            ref_set.insert(u.to_string());
-                        }
+                        ref_set.insert(u.to_string());
                     }
                 }
             }
@@ -802,5 +800,35 @@ mod tests {
         // CVSS 7.5 must harmonize MODERATE (Medium) to High
         assert_eq!(sev.level, SeverityLevel::High);
         assert_eq!(sev.score, 7.5);
+    }
+
+    #[test]
+    fn test_merge_cluster_preserves_vendor_references_and_id() {
+        let scanner = VulnScanner::default();
+        let adv = serde_json::json!({
+            "id": "SNYK-JS-LODASH-567746",
+            "aliases": ["CVE-2020-8203"],
+            "summary": "Prototype Pollution in snyk report",
+            "details": "Vendor details with snyk advisories and https://snyk.io/vuln/SNYK-JS-LODASH-567746",
+            "references": [
+                {"url": "https://snyk.io/vuln/SNYK-JS-LODASH-567746"},
+                {"url": "https://github.com/lodash/lodash/commit/e2a663"}
+            ]
+        });
+
+        let pkg = PkgInfo::new("lodash", "4.17.15", "npm");
+        let finding = scanner
+            .merge_cluster_into_finding(&pkg, false, &[], &[&adv])
+            .expect("should merge finding");
+
+        // Assert references are preserved exactly
+        assert!(finding
+            .references
+            .contains(&"https://snyk.io/vuln/SNYK-JS-LODASH-567746".to_string()));
+        assert!(finding
+            .references
+            .contains(&"https://github.com/lodash/lodash/commit/e2a663".to_string()));
+        assert!(finding.details.as_ref().unwrap().contains("snyk"));
+        assert_eq!(finding.cve.as_deref(), Some("CVE-2020-8203"));
     }
 }

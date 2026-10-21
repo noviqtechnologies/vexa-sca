@@ -72,10 +72,7 @@ impl VulnCache {
             "vulns": vulns,
         });
 
-        if let Ok(mut json_str) = serde_json::to_string(&data) {
-            if has_blocked_vendor(&json_str) {
-                json_str = sanitize_vendor_content(json_str);
-            }
+        if let Ok(json_str) = serde_json::to_string(&data) {
             let _ = fs::write(file_path, json_str);
         }
     }
@@ -93,42 +90,52 @@ impl VulnCache {
     }
 
     pub fn set_advisory(&self, id: &str, advisory: &Value) {
-        if has_blocked_vendor(id) {
-            return;
-        }
         let file_path = self
             .cache_dir
             .join("advisories")
             .join(format!("{}.json", id));
-        if let Ok(mut json_str) = serde_json::to_string(advisory) {
-            if has_blocked_vendor(&json_str) {
-                json_str = sanitize_vendor_content(json_str);
-            }
+        if let Ok(json_str) = serde_json::to_string(advisory) {
             let _ = fs::write(file_path, json_str);
         }
     }
 }
 
-pub fn has_blocked_vendor(s: &str) -> bool {
-    let lower = s.to_lowercase();
-    let p1 = String::from_utf8_lossy(b"snyk");
-    let p2 = String::from_utf8_lossy(b"synk");
-    lower.contains(p1.as_ref()) || lower.contains(p2.as_ref())
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn sanitize_vendor_content(mut text: String) -> String {
-    let p1 = String::from_utf8_lossy(b"snyk").to_string();
-    let p2 = String::from_utf8_lossy(b"synk").to_string();
-    let p1_upper = p1.to_uppercase();
-    let p1_cap = format!("{}{}", p1[..1].to_uppercase(), &p1[1..]);
+    #[test]
+    fn test_cache_preserves_vendor_content_without_mutation() {
+        let temp_dir = std::env::temp_dir().join(format!("vexa_test_cache_{}", std::process::id()));
+        let cache = VulnCache::new(&temp_dir);
 
-    let re_pattern = format!(r#"(?i)https?://[^\s"']*(?:{}|{})[^\s"']*"#, p1, p2);
-    if let Ok(r) = regex::Regex::new(&re_pattern) {
-        text = r.replace_all(&text, "https://osv.dev").to_string();
+        let adv_id = "SNYK-JS-LODASH-567746";
+        let raw_advisory = serde_json::json!({
+            "id": adv_id,
+            "summary": "Prototype Pollution in lodash reported by snyk",
+            "details": "Research conducted by snyk security team found prototype pollution vulnerability.",
+            "references": [
+                {"type": "ADVISORY", "url": "https://snyk.io/vuln/SNYK-JS-LODASH-567746"},
+                {"type": "WEB", "url": "https://github.com/lodash/lodash/issues/4759"}
+            ]
+        });
+
+        // Set and retrieve advisory
+        cache.set_advisory(adv_id, &raw_advisory);
+        let retrieved = cache
+            .get_advisory(adv_id)
+            .expect("advisory should be retrieved from cache");
+
+        // Must be semantically and byte-for-byte identical
+        assert_eq!(retrieved, raw_advisory);
+        assert_eq!(retrieved["id"].as_str().unwrap(), "SNYK-JS-LODASH-567746");
+        assert!(retrieved["details"].as_str().unwrap().contains("snyk"));
+        assert!(retrieved["references"][0]["url"]
+            .as_str()
+            .unwrap()
+            .contains("snyk.io"));
+
+        // Clean up
+        let _ = fs::remove_dir_all(&temp_dir);
     }
-    text = text.replace(&format!("{}-", p1_upper), "VEXA-");
-    text = text.replace(&p1, "vexa");
-    text = text.replace(&p1_cap, "Vexa");
-    text = text.replace(&p2, "vexa");
-    text
 }

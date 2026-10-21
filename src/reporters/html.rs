@@ -151,11 +151,25 @@ pub fn format_html_report(
             .join("");
 
         let epss_badge = if let Some(ref epss) = vuln.epss {
-            let pct = epss.score * 100.0;
-            format!(
-                r#"<span class="badge" style="background: rgba(14, 165, 233, 0.2); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.4);" title="EPSS Exploit Prediction: {:.1}% likelihood within 30 days">EPSS {:.1}%</span>"#,
-                pct, pct
-            )
+            match epss.source {
+                crate::types::EpssSource::FirstOrg | crate::types::EpssSource::Cache => {
+                    let pct = epss.score * 100.0;
+                    format!(
+                        r#"<span class="badge" style="background: rgba(14, 165, 233, 0.2); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.4);" title="EPSS Exploit Prediction ({}): {:.1}% likelihood within 30 days">EPSS {:.1}%</span>"#,
+                        epss.source.as_str(), pct, pct
+                    )
+                }
+                crate::types::EpssSource::Heuristic => {
+                    let pct = epss.score * 100.0;
+                    format!(
+                        r#"<span class="badge" style="background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.4);" title="Local Heuristic Estimate (EPSS unavailable from FIRST.org): {:.1}%">Heuristic {:.1}%</span>"#,
+                        pct, pct
+                    )
+                }
+                crate::types::EpssSource::Unavailable => {
+                    r#"<span class="badge" style="background: rgba(148, 163, 184, 0.2); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.4);" title="EPSS data unavailable">EPSS N/A</span>"#.to_string()
+                }
+            }
         } else {
             String::new()
         };

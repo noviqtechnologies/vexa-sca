@@ -25,7 +25,7 @@ use crate::types::{ReachabilityStatus, RemediationAction, SeverityLevel};
 pub struct ScanOptions {
     pub dev: bool,
     pub reachable_only: bool,
-    pub severity_threshold: Option<String>,
+    pub severity_threshold: Option<SeverityLevel>,
     pub ignore_unfixed: bool,
     pub policy_file: Option<PathBuf>,
     pub timeout_secs: u64,
@@ -102,8 +102,7 @@ pub async fn scan_project(
     }
 
     // 5. Filter by severity threshold
-    if let Some(thresh) = &options.severity_threshold {
-        let min_level = SeverityLevel::from_str_loose(thresh);
+    if let Some(min_level) = options.severity_threshold {
         active.retain(|v| v.severity.level.weight() >= min_level.weight());
     }
 

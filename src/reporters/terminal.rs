@@ -298,8 +298,22 @@ pub fn render_terminal_report(
             let score_str = if v.advisory_category == AdvisoryCategory::Unmaintained {
                 "Advisory".to_string()
             } else if let Some(ref epss) = v.epss {
-                let epss_pct = epss.score * 100.0;
-                format!("CVSS {:.1} | EPSS {:.1}%", v.severity.score, epss_pct)
+                match epss.source {
+                    crate::types::EpssSource::FirstOrg | crate::types::EpssSource::Cache => {
+                        let epss_pct = epss.score * 100.0;
+                        format!("CVSS {:.1} | EPSS {:.1}%", v.severity.score, epss_pct)
+                    }
+                    crate::types::EpssSource::Heuristic => {
+                        let epss_pct = epss.score * 100.0;
+                        format!(
+                            "CVSS {:.1} | Est. Exploit {:.1}% (heuristic)",
+                            v.severity.score, epss_pct
+                        )
+                    }
+                    crate::types::EpssSource::Unavailable => {
+                        format!("CVSS {:.1} | EPSS unavailable", v.severity.score)
+                    }
+                }
             } else {
                 format!("CVSS {:.1}", v.severity.score)
             };

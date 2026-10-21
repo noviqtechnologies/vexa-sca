@@ -19,6 +19,86 @@ use crate::scanner::vuln_scanner::VulnScanner;
 use crate::types::{PkgInfo, SeverityLevel};
 use crate::{scan_project, ScanOptions};
 
+fn parse_epss_threshold(s: &str) -> Result<f64, String> {
+    let val: f64 = s
+        .parse::<f64>()
+        .map_err(|_| format!("invalid float value '{}' for EPSS threshold", s))?;
+    if val.is_nan() || !(0.0..=1.0).contains(&val) {
+        return Err(format!(
+            "EPSS threshold must be a number between 0.0 and 1.0, got '{}'",
+            s
+        ));
+    }
+    Ok(val)
+}
+
+fn parse_severity_threshold(s: &str) -> Result<SeverityLevel, String> {
+    match s.trim().to_lowercase().as_str() {
+        "critical" | "crit" => Ok(SeverityLevel::Critical),
+        "high" => Ok(SeverityLevel::High),
+        "medium" | "med" | "moderate" => Ok(SeverityLevel::Medium),
+        "low" => Ok(SeverityLevel::Low),
+        _ => Err(format!(
+            "invalid severity threshold '{}'. Expected one of: low, medium, high, critical",
+            s
+        )),
+    }
+}
+
+fn parse_fail_on_scan(s: &str) -> Result<String, String> {
+    let lower = s.trim().to_lowercase();
+    if lower == "reachable" {
+        return Ok(lower);
+    }
+    if let Some(rest) = lower
+        .strip_prefix("reachable-")
+        .or_else(|| lower.strip_prefix("reachable_"))
+    {
+        match rest {
+            "critical" | "crit" | "high" | "medium" | "med" | "moderate" | "low" => Ok(lower),
+            _ => Err(format!(
+                "invalid fail-on severity in '{}'. Expected one of: critical, high, medium, low",
+                s
+            )),
+        }
+    } else {
+        match lower.as_str() {
+            "critical" | "crit" | "high" | "medium" | "med" | "moderate" | "low" => Ok(lower),
+            _ => Err(format!(
+                "invalid fail-on value '{}'. Expected one of: low, medium, high, critical, reachable, reachable-critical, reachable-high, reachable-medium, reachable-low",
+                s
+            )),
+        }
+    }
+}
+
+fn parse_fail_on_severity(s: &str) -> Result<String, String> {
+    let lower = s.trim().to_lowercase();
+    match lower.as_str() {
+        "critical" | "crit" | "high" | "medium" | "med" | "moderate" | "low" => Ok(lower),
+        _ => Err(format!(
+            "invalid fail-on severity '{}'. Expected one of: low, medium, high, critical",
+            s
+        )),
+    }
+}
+
+fn parse_fail_on_licenses(s: &str) -> Result<String, String> {
+    let lower = s.trim().to_lowercase();
+    if lower.contains("strong")
+        || lower.contains("weak")
+        || lower == "copyleft"
+        || lower.contains("unknown")
+    {
+        Ok(lower)
+    } else {
+        Err(format!(
+            "invalid license risk category '{}'. Expected one of: strong-copyleft, weak-copyleft, copyleft, unknown",
+            s
+        ))
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "vexa-sca",
@@ -52,8 +132,8 @@ pub enum Commands {
         policy: Option<PathBuf>,
 
         /// Filter by minimum severity (low, medium, high, critical)
-        #[arg(long)]
-        severity_threshold: Option<String>,
+        #[arg(long, value_parser = parse_severity_threshold)]
+        severity_threshold: Option<SeverityLevel>,
 
         /// Ignore vulnerabilities without a known fixed version (only show actionable fixes)
         #[arg(long, visible_alias = "only-fixed")]
@@ -84,15 +164,20 @@ pub enum Commands {
         html_file: Option<PathBuf>,
 
         /// Output Software Bill of Materials (cyclonedx or spdx)
-        #[arg(long)]
-        sbom: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            default_missing_value = "cyclonedx",
+            num_args = 0..=1
+        )]
+        sbom: Option<SbomFormat>,
 
         /// Save SBOM report to a file path
         #[arg(long)]
         sbom_file: Option<PathBuf>,
 
         /// CI/CD Quality Gate: fail on or above severity threshold (low, medium, high, critical)
-        #[arg(long)]
+        #[arg(long, value_parser = parse_fail_on_scan)]
         fail_on: Option<String>,
 
         /// CI/CD Quality Gate: fail only if at least one vulnerability has confirmed AST reachability
@@ -100,7 +185,7 @@ pub enum Commands {
         fail_on_reachable: bool,
 
         /// CI/CD Quality Gate: fail on license risk category (e.g. strong-copyleft, weak-copyleft)
-        #[arg(long)]
+        #[arg(long, value_parser = parse_fail_on_licenses)]
         fail_on_licenses: Option<String>,
 
         /// CI/CD Quality Gate: fail on unmaintained or deprecated dependencies
@@ -108,8 +193,16 @@ pub enum Commands {
         fail_on_unmaintained: bool,
 
         /// Filter by minimum EPSS exploit prediction probability (0.0 to 1.0, e.g. 0.2 for 20%)
-        #[arg(long)]
+        #[arg(long, value_parser = parse_epss_threshold)]
         epss_threshold: Option<f64>,
+
+        /// Allow local heuristic estimates to satisfy --epss-threshold when FIRST.org is unreachable
+        #[arg(long)]
+        epss_allow_heuristic: bool,
+
+        /// Strict EPSS enforcement: require authoritative FIRST.org EPSS data for all evaluated vulnerabilities
+        #[arg(long)]
+        strict_epss: bool,
 
         /// Display scan volume quota and plan usage details
         #[arg(long)]
@@ -166,7 +259,7 @@ pub enum Commands {
         json: bool,
 
         /// CI/CD Quality Gate: fail on license risk category (e.g. strong-copyleft, weak-copyleft)
-        #[arg(long)]
+        #[arg(long, value_parser = parse_fail_on_licenses)]
         fail_on: Option<String>,
     },
 
@@ -199,8 +292,8 @@ pub enum Commands {
         json: bool,
 
         /// Minimum severity threshold (low, medium, high, critical)
-        #[arg(long)]
-        severity_threshold: Option<String>,
+        #[arg(long, value_parser = parse_severity_threshold)]
+        severity_threshold: Option<SeverityLevel>,
     },
 
     /// Scan container image archive (.tar/.tar.gz), rootfs directory, or Dockerfile for OS package vulnerabilities
@@ -210,8 +303,8 @@ pub enum Commands {
         target: PathBuf,
 
         /// Minimum severity threshold (low, medium, high, critical)
-        #[arg(long)]
-        severity_threshold: Option<String>,
+        #[arg(long, value_parser = parse_severity_threshold)]
+        severity_threshold: Option<SeverityLevel>,
 
         /// Ignore vulnerabilities without a known fixed version (only show actionable fixes)
         #[arg(long, visible_alias = "only-fixed")]
@@ -242,19 +335,24 @@ pub enum Commands {
         html_file: Option<PathBuf>,
 
         /// Output Software Bill of Materials (cyclonedx or spdx)
-        #[arg(long)]
-        sbom: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            default_missing_value = "cyclonedx",
+            num_args = 0..=1
+        )]
+        sbom: Option<SbomFormat>,
 
         /// Save SBOM report to a file path
         #[arg(long)]
         sbom_file: Option<PathBuf>,
 
         /// CI/CD Quality Gate: fail on or above severity (low, medium, high, critical)
-        #[arg(long)]
+        #[arg(long, value_parser = parse_fail_on_severity)]
         fail_on: Option<String>,
 
         /// CI/CD Quality Gate: fail on license risk category (e.g. strong-copyleft)
-        #[arg(long)]
+        #[arg(long, value_parser = parse_fail_on_licenses)]
         fail_on_licenses: Option<String>,
 
         /// Do not fail scan with exit code 1 when vulnerabilities are found (report-only mode)
@@ -954,8 +1052,7 @@ pub async fn run() {
             let scanner = VulnScanner::default();
             match scanner.scan_graph(&graph).await {
                 Ok(mut res) => {
-                    if let Some(thresh) = &severity_threshold {
-                        let min_level = SeverityLevel::from_str_loose(thresh);
+                    if let Some(min_level) = severity_threshold {
                         res.vulnerabilities
                             .retain(|v| v.severity.level.weight() >= min_level.weight());
                         res.vulnerabilities_count = res.vulnerabilities.len();
@@ -1011,6 +1108,8 @@ pub async fn run() {
             fail_on_licenses,
             fail_on_unmaintained,
             epss_threshold,
+            epss_allow_heuristic,
+            strict_epss,
             usage,
             no_fail,
         } => {
@@ -1027,9 +1126,69 @@ pub async fn run() {
             match scan_project(&path, options).await {
                 Ok(mut output) => {
                     if let Some(thresh) = epss_threshold {
-                        output.scan_result.vulnerabilities.retain(|v| {
-                            v.epss.as_ref().map(|e| e.score >= thresh).unwrap_or(false)
-                        });
+                        let mut retained = Vec::new();
+                        let mut heuristic_or_unavailable_count = 0;
+                        let mut strict_failure = false;
+
+                        for v in output.scan_result.vulnerabilities {
+                            let (matches, is_heuristic_or_unavail) = match &v.epss {
+                                Some(epss) => match epss.source {
+                                    crate::types::EpssSource::FirstOrg
+                                    | crate::types::EpssSource::Cache => {
+                                        (epss.score >= thresh, false)
+                                    }
+                                    crate::types::EpssSource::Heuristic => {
+                                        if epss_allow_heuristic {
+                                            (epss.score >= thresh, false)
+                                        } else {
+                                            (true, true) // fail-closed: retain findings without authoritative EPSS
+                                        }
+                                    }
+                                    crate::types::EpssSource::Unavailable => (true, true), // fail-closed: retain
+                                },
+                                None => (true, true),
+                            };
+
+                            if is_heuristic_or_unavail {
+                                heuristic_or_unavailable_count += 1;
+                                if strict_epss {
+                                    eprintln!(
+                                        "{} EPSS data is unavailable or heuristic for vulnerability {} affecting {} (authoritative EPSS required by --strict-epss).",
+                                        "Error:".red().bold(),
+                                        v.id,
+                                        v.package
+                                    );
+                                    strict_failure = true;
+                                }
+                            }
+
+                            if matches {
+                                retained.push(v);
+                            }
+                        }
+
+                        if strict_failure {
+                            exit(2);
+                        }
+
+                        if heuristic_or_unavailable_count > 0
+                            && !json
+                            && !sarif
+                            && !html
+                            && sbom.is_none()
+                        {
+                            println!(
+                                "{}",
+                                format!(
+                                    "ℹ Notice: {} vulnerabilit{} retained under fail-closed EPSS policy (EPSS unavailable/heuristic from FIRST.org).",
+                                    heuristic_or_unavailable_count,
+                                    if heuristic_or_unavailable_count == 1 { "y" } else { "ies" }
+                                )
+                                .yellow()
+                            );
+                        }
+
+                        output.scan_result.vulnerabilities = retained;
                         output.scan_result.vulnerabilities_count =
                             output.scan_result.vulnerabilities.len();
                     }
@@ -1113,17 +1272,15 @@ pub async fn run() {
 
                     // 3. SBOM Report
                     let sbom_output = if sbom.is_some() || sbom_file.is_some() {
-                        let fmt_str = sbom
-                            .as_deref()
+                        let fmt = sbom
                             .or_else(|| {
                                 sbom_file
                                     .as_ref()
                                     .and_then(|p| p.extension())
                                     .and_then(|e| e.to_str())
+                                    .and_then(SbomFormat::from_str_loose)
                             })
-                            .unwrap_or("cyclonedx");
-                        let fmt =
-                            SbomFormat::from_str_loose(fmt_str).unwrap_or(SbomFormat::CycloneDx);
+                            .unwrap_or(SbomFormat::CycloneDx);
                         Some(match fmt {
                             SbomFormat::CycloneDx => format_cyclonedx_sbom(
                                 &output.dep_graph,
@@ -1263,8 +1420,7 @@ pub async fn run() {
             println!("Scanning container target at {}...", target.display());
             match ContainerScanner::scan_target(&target).await {
                 Ok(mut output) => {
-                    if let Some(thresh) = &severity_threshold {
-                        let min_level = SeverityLevel::from_str_loose(thresh);
+                    if let Some(min_level) = severity_threshold {
                         output
                             .scan_result
                             .vulnerabilities
@@ -1312,9 +1468,15 @@ pub async fn run() {
                     }
 
                     let sbom_output = if sbom.is_some() || sbom_file.is_some() {
-                        let fmt_str = sbom.as_deref().unwrap_or("cyclonedx");
-                        let fmt =
-                            SbomFormat::from_str_loose(fmt_str).unwrap_or(SbomFormat::CycloneDx);
+                        let fmt = sbom
+                            .or_else(|| {
+                                sbom_file
+                                    .as_ref()
+                                    .and_then(|p| p.extension())
+                                    .and_then(|e| e.to_str())
+                                    .and_then(SbomFormat::from_str_loose)
+                            })
+                            .unwrap_or(SbomFormat::CycloneDx);
                         Some(match fmt {
                             SbomFormat::CycloneDx => format_cyclonedx_sbom(
                                 &output.dep_graph,
