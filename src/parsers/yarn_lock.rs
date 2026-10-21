@@ -19,7 +19,10 @@ impl YarnLockParser {
         let lockfile_path = project_dir.join("yarn.lock");
 
         if !manifest_path.exists() {
-            return Err(format!("package.json not found in {}", project_dir.display()));
+            return Err(format!(
+                "package.json not found in {}",
+                project_dir.display()
+            ));
         }
         if !lockfile_path.exists() {
             return Err(format!("yarn.lock not found in {}", project_dir.display()));
@@ -174,7 +177,9 @@ impl YarnLockParser {
                     if parts.len() >= 2 {
                         let name = parts[0].trim_matches('"');
                         let req = parts[1].trim_matches('"');
-                        current_data.dependencies.insert(name.to_string(), req.to_string());
+                        current_data
+                            .dependencies
+                            .insert(name.to_string(), req.to_string());
                     }
                     j += 1;
                 }

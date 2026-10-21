@@ -22,7 +22,10 @@ impl PythonPatcher {
         };
 
         if !req_path.exists() {
-            return Err(format!("requirements.txt not found in {}", project_dir.display()));
+            return Err(format!(
+                "requirements.txt not found in {}",
+                project_dir.display()
+            ));
         }
 
         let original_content = fs::read_to_string(&req_path)
@@ -39,10 +42,7 @@ impl PythonPatcher {
             "\n"
         };
 
-        let mut lines: Vec<String> = original_content
-            .lines()
-            .map(|s| s.to_string())
-            .collect();
+        let mut lines: Vec<String> = original_content.lines().map(|s| s.to_string()).collect();
 
         for rem in remediations {
             if !processed_packages.insert(rem.package.to_lowercase()) {
@@ -66,7 +66,8 @@ impl PythonPatcher {
 
             for (idx, line) in lines.iter().enumerate() {
                 if let Some((pkg_name, old_ver, _)) = Self::parse_req_line(line) {
-                    if Self::normalize_pkg_name(&pkg_name) == Self::normalize_pkg_name(&rem.package) {
+                    if Self::normalize_pkg_name(&pkg_name) == Self::normalize_pkg_name(&rem.package)
+                    {
                         found_index = Some(idx);
                         old_version_found = Some(old_ver);
                         break;
@@ -95,8 +96,10 @@ impl PythonPatcher {
                 modified = true;
             } else if rem.is_transitive {
                 // If transitive dependency, pin it at the end of requirements.txt
-                let (change, is_breaking) = classify_semver_change(&rem.current_version, target_version);
-                let pin_comment = format!("# Pinned by Vexa SCA to remediate transitive vulnerability");
+                let (change, is_breaking) =
+                    classify_semver_change(&rem.current_version, target_version);
+                let pin_comment =
+                    "# Pinned by Vexa SCA to remediate transitive vulnerability".to_string();
                 let pin_line = format!("{}=={}", rem.package, target_version);
 
                 lines.push(pin_comment);

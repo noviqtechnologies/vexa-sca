@@ -93,7 +93,11 @@ pub struct PkgInfo {
 }
 
 impl PkgInfo {
-    pub fn new(name: impl Into<String>, version: impl Into<String>, ecosystem: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        version: impl Into<String>,
+        ecosystem: impl Into<String>,
+    ) -> Self {
         let name = name.into();
         let version = version.into();
         let ecosystem = ecosystem.into();
@@ -143,20 +147,15 @@ pub struct ReachabilityResult {
     pub target_functions: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AdvisoryCategory {
     #[serde(rename = "vulnerability")]
+    #[default]
     Vulnerability,
     #[serde(rename = "unmaintained")]
     Unmaintained,
     #[serde(rename = "informational")]
     Informational,
-}
-
-impl Default for AdvisoryCategory {
-    fn default() -> Self {
-        AdvisoryCategory::Vulnerability
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

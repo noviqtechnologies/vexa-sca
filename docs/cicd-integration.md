@@ -118,6 +118,9 @@ jobs:
           path: |
             vexa-dashboard.html
             cyclonedx-sbom.json
+
+> [!NOTE]
+> **Exit Code Contract & Artifact Preservation**: When vulnerabilities or gate thresholds are violated, `vexa-sca scan` writes all requested report files (`--sarif-file`, `--html-file`, `--sbom-file`) before exiting with status code `1`. Use `if: always()` on downstream upload steps (as shown above) to ensure reports are preserved, or supply `--no-fail` (alias `--report-only`) for non-blocking report generation jobs.
 ```
 
 #### Automated Pull Request Remediation Workflow

@@ -349,6 +349,9 @@ Categorize every third-party dependency by open source license and intellectual 
 - **Weak Copyleft (Medium Risk)**: LGPL-2.1/3.0, MPL-2.0, EPL-1.0/2.0, CDDL. Modifications to the library itself must typically remain open source.
 - **Strong Copyleft (High Risk / Viral GPL)**: GPL-2.0/3.0, AGPL-3.0, SSPL, EUPL. Can obligate the entire proprietary project to be licensed as open source.
 
+> [!NOTE]
+> **Metadata Resolution**: License discovery extracts declared licenses from lockfile fields and local package descriptors (`package.json`, Cargo lockfiles, etc.). For lockfiles without embedded license fields (such as standard npm/pnpm lockfiles when `node_modules` is not yet installed locally), packages are conservatively classified as `UNKNOWN` rather than making unverified guesses.
+
 ```bash
 vexa-sca licenses ./my-project
 ```
@@ -395,13 +398,25 @@ vexa-sca scan --html > report.html
 
 ### 7. CI/CD Quality Gates & Policy Enforcement
 
-Automate pass/fail gates in build pipelines with customizable failure conditions and deterministic non-zero exit codes (`exit 1` on failure, `exit 0` on pass):
+Automate pass/fail gates in build pipelines with customizable failure conditions and deterministic exit codes.
+
+#### Exit Code Contract:
+- **`0` (Success)**: Clean scan with no policy violations, OR `--no-fail` / `--report-only` is passed.
+- **`1` (Quality Gate Failure)**: Policy violations or active security vulnerabilities detected. **By default in CI and local runs**, discovering active vulnerabilities returns exit code `1` so CI pipelines fail securely without silent pass-throughs. If you only want to generate report files (JSON, HTML, SARIF, SBOM) or inspect vulnerabilities without breaking build scripts, pass `--no-fail` (or `--report-only`).
+- **`2` (Scan Error)**: Unrecoverable execution error (e.g. malformed lockfile, invalid file path, unreadable container archive).
 
 - `--fail-on <low|medium|high|critical>`: Block builds when vulnerabilities equal or exceed the given severity.
 - `--fail-on-reachable`: Break builds only if a vulnerability has verified AST call-graph reachability.
 - `--fail-on-licenses <copyleft|weak-copyleft|unapproved>`: Fail if non-compliant copyleft or unapproved licenses are present in the dependency tree.
+- `--no-fail` / `--report-only`: Always exit 0 even if security vulnerabilities are found (useful for report-generating cron jobs).
 
 ```bash
+# Default Secure CI Behavior: generates results.json, exits 1 if findings exist
+vexa-sca scan --json > results.json
+
+# Report-Only Generation: generates results.json and always exits 0
+vexa-sca scan --json --no-fail > results.json
+
 # Fail CI build if any critical vulnerability is found
 vexa-sca scan --fail-on critical
 
@@ -483,6 +498,7 @@ vexa-sca scan [PATH] [OPTIONS]
 | `--fail-on <LVL>` | Option | Fail scan with exit code 1 if vulnerabilities meet/exceed severity |
 | `--fail-on-reachable` | Flag | Fail scan with exit code 1 if any vulnerability is reachable in code |
 | `--fail-on-licenses <CAT>` | Option | Fail scan with exit code 1 on license risk (`copyleft`, `weak-copyleft`) |
+| `--no-fail`, `--report-only` | Flag | Exit with code 0 even when security vulnerabilities are detected (ideal for report generation) |
 | `--epss-threshold <FLOAT>` | Option | Filter vulnerabilities by minimum EPSS probability (0.0 to 1.0, e.g. `0.20` for 20%) |
 | `--usage` | Flag | Display scan volume quota and plan usage details directly in scan output |
 

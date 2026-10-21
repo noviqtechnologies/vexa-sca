@@ -49,7 +49,9 @@ impl PrCreator {
             .output()
             .map_err(|e| format!("Failed to read git branch: {}", e))?;
 
-        let current_branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+        let current_branch = String::from_utf8_lossy(&branch_output.stdout)
+            .trim()
+            .to_string();
         let current_branch = if current_branch.is_empty() || current_branch == "HEAD" {
             "main".to_string()
         } else {
@@ -63,7 +65,9 @@ impl PrCreator {
             .output()
             .map_err(|e| format!("Failed to read git remote origin URL: {}", e))?;
 
-        let remote_url = String::from_utf8_lossy(&remote_output.stdout).trim().to_string();
+        let remote_url = String::from_utf8_lossy(&remote_output.stdout)
+            .trim()
+            .to_string();
         if remote_url.is_empty() {
             return Err("No remote origin URL found in git repository".to_string());
         }
@@ -104,7 +108,10 @@ impl PrCreator {
             }
         }
 
-        Err(format!("Could not extract GitHub owner/repo from URL: {}", url))
+        Err(format!(
+            "Could not extract GitHub owner/repo from URL: {}",
+            url
+        ))
     }
 
     /// Generates structured PR Markdown content from applied patches.
@@ -152,7 +159,10 @@ impl PrCreator {
                 } else {
                     o.vulnerability_ids.join(", ")
                 };
-                body.push_str(&format!("| `{}` | `^{}` | {} |\n", o.package, o.pinned_to, vulns));
+                body.push_str(&format!(
+                    "| `{}` | `^{}` | {} |\n",
+                    o.package, o.pinned_to, vulns
+                ));
             }
             body.push('\n');
         }
@@ -189,7 +199,10 @@ impl PrCreator {
         } else if let Some(info) = &repo_info {
             (info.owner.clone(), info.repo.clone())
         } else {
-            return Err("Could not auto-detect GitHub repository. Specify with --repo <owner/repo>".to_string());
+            return Err(
+                "Could not auto-detect GitHub repository. Specify with --repo <owner/repo>"
+                    .to_string(),
+            );
         };
 
         let base = base_branch
@@ -197,7 +210,10 @@ impl PrCreator {
             .unwrap_or_else(|| "main".to_string());
 
         let branch = branch_name.unwrap_or_else(|| {
-            format!("vexa-sca/fix-vulnerabilities-{}", Utc::now().format("%Y%m%d%H%M%S"))
+            format!(
+                "vexa-sca/fix-vulnerabilities-{}",
+                Utc::now().format("%Y%m%d%H%M%S")
+            )
         });
 
         let title = "fix(deps): security vulnerability fixes by Vexa SCA".to_string();
@@ -278,7 +294,10 @@ impl PrCreator {
                 let client = reqwest::Client::new();
                 let mut headers = HeaderMap::new();
                 headers.insert(USER_AGENT, HeaderValue::from_static("vexa-sca"));
-                headers.insert(ACCEPT, HeaderValue::from_static("application/vnd.github+json"));
+                headers.insert(
+                    ACCEPT,
+                    HeaderValue::from_static("application/vnd.github+json"),
+                );
 
                 if let Ok(val) = HeaderValue::from_str(&format!("Bearer {}", tok.trim())) {
                     headers.insert(AUTHORIZATION, val);
@@ -302,7 +321,10 @@ impl PrCreator {
                 match resp {
                     Ok(r) if r.status().is_success() => {
                         let json_val: serde_json::Value = r.json().await.unwrap_or_default();
-                        let html_url = json_val.get("html_url").and_then(|u| u.as_str()).map(|s| s.to_string());
+                        let html_url = json_val
+                            .get("html_url")
+                            .and_then(|u| u.as_str())
+                            .map(|s| s.to_string());
                         let number = json_val.get("number").and_then(|n| n.as_u64());
 
                         return Ok(PrResult {
@@ -371,7 +393,8 @@ mod tests {
         assert_eq!(o1, "my-org");
         assert_eq!(r1, "my-project");
 
-        let (o2, r2) = PrCreator::parse_github_url("https://github.com/vexa-sca/core-scanner.git").unwrap();
+        let (o2, r2) =
+            PrCreator::parse_github_url("https://github.com/vexa-sca/core-scanner.git").unwrap();
         assert_eq!(o2, "vexa-sca");
         assert_eq!(r2, "core-scanner");
 

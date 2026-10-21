@@ -3,10 +3,10 @@ use colored::*;
 use std::path::PathBuf;
 use std::process::exit;
 
+use crate::container::container_scanner::ContainerScanner;
 use crate::core::dep_graph::DepGraph;
 use crate::licenses::license_scanner::LicenseScanner;
 use crate::parsers::detector::detect_and_parse;
-use crate::container::container_scanner::ContainerScanner;
 use crate::patcher;
 use crate::patcher::pr_creator::PrCreator;
 use crate::reporters::export::{
@@ -114,6 +114,10 @@ pub enum Commands {
         /// Display scan volume quota and plan usage details
         #[arg(long)]
         usage: bool,
+
+        /// Do not fail scan with exit code 1 when vulnerabilities are found (report-only mode)
+        #[arg(long, visible_alias = "report-only")]
+        no_fail: bool,
     },
 
     /// Automatically patch dependencies and overrides
@@ -252,6 +256,10 @@ pub enum Commands {
         /// CI/CD Quality Gate: fail on license risk category (e.g. strong-copyleft)
         #[arg(long)]
         fail_on_licenses: Option<String>,
+
+        /// Do not fail scan with exit code 1 when vulnerabilities are found (report-only mode)
+        #[arg(long, visible_alias = "report-only")]
+        no_fail: bool,
     },
 
     /// Display scan volume quota and plan usage details
@@ -266,8 +274,12 @@ pub async fn run() {
     let cli = Cli::parse();
 
     match cli.command {
-
-        Commands::Licenses { path, all, json, fail_on } => {
+        Commands::Licenses {
+            path,
+            all,
+            json,
+            fail_on,
+        } => {
             let detection = match detect_and_parse(&path, true) {
                 Ok(d) => d,
                 Err(e) => {
@@ -279,17 +291,25 @@ pub async fn run() {
             let audit = LicenseScanner::scan_graph_licenses(&detection.graph, &path);
 
             // Group by license name to show distribution table
-            let mut lic_counts: std::collections::HashMap<String, (usize, crate::licenses::license_scanner::LicenseCategory)> =
-                std::collections::HashMap::new();
+            let mut lic_counts: std::collections::HashMap<
+                String,
+                (usize, crate::licenses::license_scanner::LicenseCategory),
+            > = std::collections::HashMap::new();
             for r in &audit.results {
-                let entry = lic_counts.entry(r.license.clone()).or_insert((0, r.category));
+                let entry = lic_counts
+                    .entry(r.license.clone())
+                    .or_insert((0, r.category));
                 entry.0 += 1;
             }
-            let mut sorted_lics: Vec<(String, usize, crate::licenses::license_scanner::LicenseCategory)> = lic_counts
+            let mut sorted_lics: Vec<(
+                String,
+                usize,
+                crate::licenses::license_scanner::LicenseCategory,
+            )> = lic_counts
                 .into_iter()
                 .map(|(lic, (cnt, cat))| (lic, cnt, cat))
                 .collect();
-            sorted_lics.sort_by(|a, b| b.1.cmp(&a.1));
+            sorted_lics.sort_by_key(|b| std::cmp::Reverse(b.1));
 
             // Actionable Flagged Items (Copyleft & Unknown)
             let flagged: Vec<_> = audit
@@ -297,7 +317,8 @@ pub async fn run() {
                 .iter()
                 .filter(|r| {
                     r.category == crate::licenses::license_scanner::LicenseCategory::StrongCopyleft
-                        || r.category == crate::licenses::license_scanner::LicenseCategory::WeakCopyleft
+                        || r.category
+                            == crate::licenses::license_scanner::LicenseCategory::WeakCopyleft
                         || r.category == crate::licenses::license_scanner::LicenseCategory::Unknown
                 })
                 .collect();
@@ -399,20 +420,43 @@ pub async fn run() {
                 let table_width = lic_col_width + 18 + 8 + 4;
 
                 println!("\n{}", "License Distribution:".bold());
-                println!("  {:<width$} {:<18} {:>6}", "License", "Category", "Count", width = lic_col_width);
+                println!(
+                    "  {:<width$} {:<18} {:>6}",
+                    "License",
+                    "Category",
+                    "Count",
+                    width = lic_col_width
+                );
                 println!("  {}", "-".repeat(table_width));
                 for (lic, count, cat) in &sorted_lics {
                     let cat_colored = match cat {
-                        crate::licenses::license_scanner::LicenseCategory::Permissive => cat.as_str().green(),
-                        crate::licenses::license_scanner::LicenseCategory::WeakCopyleft => cat.as_str().yellow(),
-                        crate::licenses::license_scanner::LicenseCategory::StrongCopyleft => cat.as_str().red().bold(),
-                        crate::licenses::license_scanner::LicenseCategory::Unknown => cat.as_str().dimmed(),
+                        crate::licenses::license_scanner::LicenseCategory::Permissive => {
+                            cat.as_str().green()
+                        }
+                        crate::licenses::license_scanner::LicenseCategory::WeakCopyleft => {
+                            cat.as_str().yellow()
+                        }
+                        crate::licenses::license_scanner::LicenseCategory::StrongCopyleft => {
+                            cat.as_str().red().bold()
+                        }
+                        crate::licenses::license_scanner::LicenseCategory::Unknown => {
+                            cat.as_str().dimmed()
+                        }
                     };
-                    println!("  {:<width$} {:<18} {:>6}", lic, cat_colored, count, width = lic_col_width);
+                    println!(
+                        "  {:<width$} {:<18} {:>6}",
+                        lic,
+                        cat_colored,
+                        count,
+                        width = lic_col_width
+                    );
                 }
 
                 if !flagged.is_empty() {
-                    println!("\n{}", "Flagged Dependencies (Action Recommended):".yellow().bold());
+                    println!(
+                        "\n{}",
+                        "Flagged Dependencies (Action Recommended):".yellow().bold()
+                    );
                     println!("  {}", "-".repeat(table_width.min(78)));
                     for r in &flagged {
                         let risk_colored = match r.category {
@@ -424,7 +468,13 @@ pub async fn run() {
                             }
                             _ => format!("[{}]", r.category.as_str()).dimmed(),
                         };
-                        println!("  • {}@{}: {} {}", r.package.bold(), r.version, r.license.cyan(), risk_colored);
+                        println!(
+                            "  • {}@{}: {} {}",
+                            r.package.bold(),
+                            r.version,
+                            r.license.cyan(),
+                            risk_colored
+                        );
                         if let Some(path) = &r.dep_path {
                             println!("    {} {}", "Path:".dimmed(), path);
                         }
@@ -433,14 +483,25 @@ pub async fn run() {
                         }
                     }
                 } else {
-                    println!("\n{}", "✔ All evaluated dependencies comply with permissive license policies.".green().bold());
+                    println!(
+                        "\n{}",
+                        "✔ All evaluated dependencies comply with permissive license policies."
+                            .green()
+                            .bold()
+                    );
                 }
 
                 if all {
                     println!("\n{}", "All Dependencies:".bold());
                     println!("  {}", "-".repeat(table_width.min(78)));
                     for r in &audit.results {
-                        println!("  - {}@{}: {} [{}]", r.package, r.version, r.license, r.category.as_str());
+                        println!(
+                            "  - {}@{}: {} [{}]",
+                            r.package,
+                            r.version,
+                            r.license,
+                            r.category.as_str()
+                        );
                         if let Some(path) = &r.dep_path {
                             println!("    {} {}", "Path:".dimmed(), path.dimmed());
                         }
@@ -464,11 +525,24 @@ pub async fn run() {
 
                 if has_violation {
                     if !json {
-                        eprintln!("\n{}", format!("✖ CI/CD QUALITY GATE FAILED: License risk policy violated ({})", target_risk).red().bold());
+                        eprintln!(
+                            "\n{}",
+                            format!(
+                                "✖ CI/CD QUALITY GATE FAILED: License risk policy violated ({})",
+                                target_risk
+                            )
+                            .red()
+                            .bold()
+                        );
                     }
                     exit(1);
                 } else if !json {
-                    println!("\n{}", "✔ CI/CD QUALITY GATE PASSED: License policies satisfied.".green().bold());
+                    println!(
+                        "\n{}",
+                        "✔ CI/CD QUALITY GATE PASSED: License policies satisfied."
+                            .green()
+                            .bold()
+                    );
                 }
             }
         }
@@ -482,7 +556,10 @@ pub async fn run() {
             base,
             dry_run,
         } => {
-            println!("Analyzing project at {} for fixable vulnerabilities...", path.display());
+            println!(
+                "Analyzing project at {} for fixable vulnerabilities...",
+                path.display()
+            );
             let output = match scan_project(&path, ScanOptions::default()).await {
                 Ok(o) => o,
                 Err(e) => {
@@ -500,16 +577,30 @@ pub async fn run() {
             match patcher::apply_fixes(&path, manifest_type, &output.remediations, dry_run) {
                 Ok(patch_res) => {
                     let target_desc = match manifest_type {
-                        crate::parsers::detector::ManifestType::RustCargoLock => "Cargo.toml / Cargo.lock",
-                        crate::parsers::detector::ManifestType::PythonRequirements => "requirements.txt",
+                        crate::parsers::detector::ManifestType::RustCargoLock => {
+                            "Cargo.toml / Cargo.lock"
+                        }
+                        crate::parsers::detector::ManifestType::PythonRequirements => {
+                            "requirements.txt"
+                        }
                         _ => "package.json",
                     };
 
                     if patch_res.modified || dry_run {
                         if dry_run {
-                            println!("\n{}", format!("🔍 [Dry Run] Proposed patches for {}:", target_desc).cyan().bold());
+                            println!(
+                                "\n{}",
+                                format!("🔍 [Dry Run] Proposed patches for {}:", target_desc)
+                                    .cyan()
+                                    .bold()
+                            );
                         } else {
-                            println!("\n{}", format!("✔ Successfully applied patches to {}!", target_desc).green().bold());
+                            println!(
+                                "\n{}",
+                                format!("✔ Successfully applied patches to {}!", target_desc)
+                                    .green()
+                                    .bold()
+                            );
                             if let Some(bak) = &patch_res.backup_file {
                                 println!("  Backup created: {}", bak.display());
                             }
@@ -517,12 +608,17 @@ pub async fn run() {
 
                         let mut total_vulns = 0;
                         let mut breaking_count = 0;
-                        let mut sev_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                        let mut sev_counts: std::collections::HashMap<String, usize> =
+                            std::collections::HashMap::new();
 
                         if !patch_res.changes.direct_upgrades.is_empty() {
                             let dir_header = match manifest_type {
-                                crate::parsers::detector::ManifestType::RustCargoLock => "Direct Manifest Upgrades (Cargo.toml):",
-                                crate::parsers::detector::ManifestType::PythonRequirements => "Direct Manifest Upgrades (requirements.txt):",
+                                crate::parsers::detector::ManifestType::RustCargoLock => {
+                                    "Direct Manifest Upgrades (Cargo.toml):"
+                                }
+                                crate::parsers::detector::ManifestType::PythonRequirements => {
+                                    "Direct Manifest Upgrades (requirements.txt):"
+                                }
                                 _ => "Direct Manifest Upgrades (package.json):",
                             };
                             println!("\n  {}", dir_header.bold());
@@ -532,7 +628,8 @@ pub async fn run() {
                                 }
                                 total_vulns += u.vulnerability_ids.len();
                                 if let Some(s) = u.highest_severity {
-                                    *sev_counts.entry(s.as_str().to_string()).or_default() += u.vulnerability_ids.len();
+                                    *sev_counts.entry(s.as_str().to_string()).or_default() +=
+                                        u.vulnerability_ids.len();
                                 }
 
                                 let badge = if u.is_breaking {
@@ -543,14 +640,29 @@ pub async fn run() {
                                     "✔  [SAFE]".green().bold()
                                 };
 
-                                println!("   {} {}: {} ➔ {} ({})", badge, u.package.bold(), u.from, u.to.cyan().bold(), u.section);
+                                println!(
+                                    "   {} {}: {} ➔ {} ({})",
+                                    badge,
+                                    u.package.bold(),
+                                    u.from,
+                                    u.to.cyan().bold(),
+                                    u.section
+                                );
                                 if !u.vulnerability_ids.is_empty() {
                                     let ids_formatted = u.vulnerability_ids.join(", ");
                                     let sev_badge = match u.highest_severity {
-                                        Some(crate::types::SeverityLevel::Critical) => " [CRITICAL]".red().bold().to_string(),
-                                        Some(crate::types::SeverityLevel::High) => " [HIGH]".bright_red().bold().to_string(),
-                                        Some(crate::types::SeverityLevel::Medium) => " [MEDIUM]".yellow().bold().to_string(),
-                                        Some(crate::types::SeverityLevel::Low) => " [LOW]".blue().to_string(),
+                                        Some(crate::types::SeverityLevel::Critical) => {
+                                            " [CRITICAL]".red().bold().to_string()
+                                        }
+                                        Some(crate::types::SeverityLevel::High) => {
+                                            " [HIGH]".bright_red().bold().to_string()
+                                        }
+                                        Some(crate::types::SeverityLevel::Medium) => {
+                                            " [MEDIUM]".yellow().bold().to_string()
+                                        }
+                                        Some(crate::types::SeverityLevel::Low) => {
+                                            " [LOW]".blue().to_string()
+                                        }
                                         _ => String::new(),
                                     };
                                     println!("      ↳ Resolves: {}{}", ids_formatted, sev_badge);
@@ -563,8 +675,12 @@ pub async fn run() {
 
                         if !patch_res.changes.transitive_overrides.is_empty() {
                             let trans_header = match manifest_type {
-                                crate::parsers::detector::ManifestType::RustCargoLock => "Transitive Dependency Updates (Cargo.lock):",
-                                crate::parsers::detector::ManifestType::PythonRequirements => "Transitive Dependency Pins (requirements.txt):",
+                                crate::parsers::detector::ManifestType::RustCargoLock => {
+                                    "Transitive Dependency Updates (Cargo.lock):"
+                                }
+                                crate::parsers::detector::ManifestType::PythonRequirements => {
+                                    "Transitive Dependency Pins (requirements.txt):"
+                                }
                                 _ => "Transitive Overrides:",
                             };
                             println!("\n  {}", trans_header.bold());
@@ -574,29 +690,55 @@ pub async fn run() {
                                 }
                                 total_vulns += o.vulnerability_ids.len();
                                 if let Some(s) = o.highest_severity {
-                                    *sev_counts.entry(s.as_str().to_string()).or_default() += o.vulnerability_ids.len();
+                                    *sev_counts.entry(s.as_str().to_string()).or_default() +=
+                                        o.vulnerability_ids.len();
                                 }
 
-                                let from_str = o.current_version.as_deref().map(|v| format!("{} ➔ ", v)).unwrap_or_default();
+                                let from_str = o
+                                    .current_version
+                                    .as_deref()
+                                    .map(|v| format!("{} ➔ ", v))
+                                    .unwrap_or_default();
                                 let mut line = match manifest_type {
-                                    crate::parsers::detector::ManifestType::RustCargoLock | crate::parsers::detector::ManifestType::PythonRequirements => {
-                                        format!("   ↳ {}: {}{}", o.package.bold(), from_str, o.pinned_to.cyan().bold())
+                                    crate::parsers::detector::ManifestType::RustCargoLock
+                                    | crate::parsers::detector::ManifestType::PythonRequirements => {
+                                        format!(
+                                            "   ↳ {}: {}{}",
+                                            o.package.bold(),
+                                            from_str,
+                                            o.pinned_to.cyan().bold()
+                                        )
                                     }
                                     _ => {
-                                        format!("   ↳ {} pinned to {}", o.package.bold(), o.pinned_to.cyan().bold())
+                                        format!(
+                                            "   ↳ {} pinned to {}",
+                                            o.package.bold(),
+                                            o.pinned_to.cyan().bold()
+                                        )
                                     }
                                 };
 
                                 if !o.vulnerability_ids.is_empty() {
                                     let ids_formatted = o.vulnerability_ids.join(", ");
                                     let sev_badge = match o.highest_severity {
-                                        Some(crate::types::SeverityLevel::Critical) => " [CRITICAL]".red().bold().to_string(),
-                                        Some(crate::types::SeverityLevel::High) => " [HIGH]".bright_red().bold().to_string(),
-                                        Some(crate::types::SeverityLevel::Medium) => " [MEDIUM]".yellow().bold().to_string(),
-                                        Some(crate::types::SeverityLevel::Low) => " [LOW]".blue().to_string(),
+                                        Some(crate::types::SeverityLevel::Critical) => {
+                                            " [CRITICAL]".red().bold().to_string()
+                                        }
+                                        Some(crate::types::SeverityLevel::High) => {
+                                            " [HIGH]".bright_red().bold().to_string()
+                                        }
+                                        Some(crate::types::SeverityLevel::Medium) => {
+                                            " [MEDIUM]".yellow().bold().to_string()
+                                        }
+                                        Some(crate::types::SeverityLevel::Low) => {
+                                            " [LOW]".blue().to_string()
+                                        }
                                         _ => String::new(),
                                     };
-                                    line.push_str(&format!(" (fixes: {}{})", ids_formatted, sev_badge));
+                                    line.push_str(&format!(
+                                        " (fixes: {}{})",
+                                        ids_formatted, sev_badge
+                                    ));
                                 }
                                 println!("{}", line);
                                 if o.is_breaking {
@@ -618,7 +760,8 @@ pub async fn run() {
                         let total_pkgs = direct_count + trans_count;
 
                         println!("\n{}", "Summary:".bold());
-                        println!("  • {} package{} to update ({} manifest, {} lockfile)",
+                        println!(
+                            "  • {} package{} to update ({} manifest, {} lockfile)",
                             total_pkgs,
                             if total_pkgs == 1 { "" } else { "s" },
                             direct_count,
@@ -636,37 +779,52 @@ pub async fn run() {
                             } else {
                                 format!(" ({})", sev_parts.join(", "))
                             };
-                            println!("  • {} vulnerabilit{} remediated{}",
+                            println!(
+                                "  • {} vulnerabilit{} remediated{}",
                                 total_vulns,
                                 if total_vulns == 1 { "y" } else { "ies" },
                                 sev_detail
                             );
                         }
                         if breaking_count > 0 {
-                            println!("  • {}", format!("{} potentially breaking upgrade{} detected", breaking_count, if breaking_count == 1 { "" } else { "s" }).yellow().bold());
+                            println!(
+                                "  • {}",
+                                format!(
+                                    "{} potentially breaking upgrade{} detected",
+                                    breaking_count,
+                                    if breaking_count == 1 { "" } else { "s" }
+                                )
+                                .yellow()
+                                .bold()
+                            );
                         }
 
                         if dry_run {
                             println!("\n{}", "Next Steps:".bold());
                             println!("  • Run without --dry-run to apply changes:");
-                            println!("      {}", format!("vexa-sca fix \"{}\"", path.display()).cyan());
+                            println!(
+                                "      {}",
+                                format!("vexa-sca fix \"{}\"", path.display()).cyan()
+                            );
                             println!("  • Or open an automated GitHub Pull Request:");
-                            println!("      {}", format!("vexa-sca fix \"{}\" --create-pr", path.display()).cyan());
+                            println!(
+                                "      {}",
+                                format!("vexa-sca fix \"{}\" --create-pr", path.display()).cyan()
+                            );
                         }
 
                         if create_pr {
                             println!("\nPreparing automated GitHub Pull Request...");
                             match PrCreator::create_and_open_pr(
-                                &path,
-                                &patch_res,
-                                repo,
-                                branch,
-                                base,
-                                token,
-                                dry_run,
-                            ).await {
+                                &path, &patch_res, repo, branch, base, token, dry_run,
+                            )
+                            .await
+                            {
                                 Ok(pr_res) => {
-                                    println!("\n{}", format!("✔ {}", pr_res.message).green().bold());
+                                    println!(
+                                        "\n{}",
+                                        format!("✔ {}", pr_res.message).green().bold()
+                                    );
                                     if let Some(url) = pr_res.pr_url {
                                         println!("  🔗 Pull Request: {}", url.cyan().bold());
                                     }
@@ -699,7 +857,11 @@ pub async fn run() {
             }
         }
 
-        Commands::Graph { path, json, max_depth } => {
+        Commands::Graph {
+            path,
+            json,
+            max_depth,
+        } => {
             let detection = match detect_and_parse(&path, true) {
                 Ok(d) => d,
                 Err(e) => {
@@ -709,15 +871,38 @@ pub async fn run() {
             };
 
             if json {
-                println!("{}", serde_json::to_string_pretty(&detection.graph.to_json()).unwrap());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&detection.graph.to_json()).unwrap()
+                );
             } else {
                 let manifest_display = detection.manifest_file.display().to_string();
-                let clean_manifest = manifest_display.strip_prefix(r"\\?\").unwrap_or(&manifest_display);
+                let clean_manifest = manifest_display
+                    .strip_prefix(r"\\?\")
+                    .unwrap_or(&manifest_display);
                 println!("Dependency Graph for {}:", clean_manifest.bold());
-                println!("  Root Package : {}@{} ({})", detection.graph.root_pkg.name.bold(), detection.graph.root_pkg.version, detection.graph.root_pkg.ecosystem);
-                println!("  Total Unique : {} packages", detection.graph.get_all_pkgs().len());
-                println!("  Total Nodes  : {} dependency nodes", detection.graph.get_all_nodes().len());
-                println!("  Cycles       : {}", if detection.graph.has_cycles() { "Yes".yellow().bold() } else { "No".green() });
+                println!(
+                    "  Root Package : {}@{} ({})",
+                    detection.graph.root_pkg.name.bold(),
+                    detection.graph.root_pkg.version,
+                    detection.graph.root_pkg.ecosystem
+                );
+                println!(
+                    "  Total Unique : {} packages",
+                    detection.graph.get_all_pkgs().len()
+                );
+                println!(
+                    "  Total Nodes  : {} dependency nodes",
+                    detection.graph.get_all_nodes().len()
+                );
+                println!(
+                    "  Cycles       : {}",
+                    if detection.graph.has_cycles() {
+                        "Yes".yellow().bold()
+                    } else {
+                        "No".green()
+                    }
+                );
                 println!("\nDependency Tree:");
                 print!("{}", detection.graph.render_ascii_tree(max_depth));
             }
@@ -731,7 +916,9 @@ pub async fn run() {
         } => {
             let parts: Vec<&str> = target.split('@').collect();
             if parts.len() < 2 {
-                eprintln!("Error: specify package and version, e.g. \"vexa-sca test lodash@4.17.15\"");
+                eprintln!(
+                    "Error: specify package and version, e.g. \"vexa-sca test lodash@4.17.15\""
+                );
                 exit(1);
             }
             let name = parts[0];
@@ -769,15 +956,13 @@ pub async fn run() {
                 Ok(mut res) => {
                     if let Some(thresh) = &severity_threshold {
                         let min_level = SeverityLevel::from_str_loose(thresh);
-                        res.vulnerabilities.retain(|v| v.severity.level.weight() >= min_level.weight());
+                        res.vulnerabilities
+                            .retain(|v| v.severity.level.weight() >= min_level.weight());
                         res.vulnerabilities_count = res.vulnerabilities.len();
                     }
 
                     if json {
-                        println!(
-                            "{}",
-                            format_json_report(&res, &[], &[], None, None)
-                        );
+                        println!("{}", format_json_report(&res, &[], &[], None, None));
                     } else {
                         render_terminal_report(&res, &[], &[], None, None);
                     }
@@ -788,7 +973,15 @@ pub async fn run() {
                         }
                         exit(1);
                     } else if !json {
-                        println!("\n{}", format!("✔ Security Test Passed: No vulnerabilities found in {}@{}", name, version).green().bold());
+                        println!(
+                            "\n{}",
+                            format!(
+                                "✔ Security Test Passed: No vulnerabilities found in {}@{}",
+                                name, version
+                            )
+                            .green()
+                            .bold()
+                        );
                     }
                 }
                 Err(e) => {
@@ -819,6 +1012,7 @@ pub async fn run() {
             fail_on_unmaintained,
             epss_threshold,
             usage,
+            no_fail,
         } => {
             let options = ScanOptions {
                 dev: !prod_only,
@@ -836,7 +1030,8 @@ pub async fn run() {
                         output.scan_result.vulnerabilities.retain(|v| {
                             v.epss.as_ref().map(|e| e.score >= thresh).unwrap_or(false)
                         });
-                        output.scan_result.vulnerabilities_count = output.scan_result.vulnerabilities.len();
+                        output.scan_result.vulnerabilities_count =
+                            output.scan_result.vulnerabilities.len();
                     }
 
                     if usage && !json && !sarif && !html && sbom.is_none() {
@@ -844,10 +1039,16 @@ pub async fn run() {
                         let report = limiter.get_usage_report();
                         println!("\n{}", "Vexa SCA Scan Volume & Quota Status:".bold());
                         println!("  Plan:         {}", report.plan_tier.cyan());
-                        println!("  Scan Quota:   {}", "Unlimited (Local CLI & Public Repos)".green().bold());
+                        println!(
+                            "  Scan Quota:   {}",
+                            "Unlimited (Local CLI & Public Repos)".green().bold()
+                        );
                         println!("  Status:       {}", report.status.green());
                         println!("  Period:       {}", report.billing_period);
-                        println!("  Scans Used:   {} tests run this month\n", report.scans_this_month);
+                        println!(
+                            "  Scans Used:   {} tests run this month\n",
+                            report.scans_this_month
+                        );
                     }
                     let project_name = output
                         .manifest_file
@@ -869,7 +1070,12 @@ pub async fn run() {
 
                     if let (Some(file_path), Some(content)) = (&sarif_file, &sarif_output) {
                         if let Err(e) = std::fs::write(file_path, content) {
-                            eprintln!("{} Failed to write SARIF report to {}: {}", "Error:".red(), file_path.display(), e);
+                            eprintln!(
+                                "{} Failed to write SARIF report to {}: {}",
+                                "Error:".red(),
+                                file_path.display(),
+                                e
+                            );
                         } else {
                             println!("✔ SARIF v2.1.0 report saved to {}", file_path.display());
                         }
@@ -891,9 +1097,17 @@ pub async fn run() {
 
                     if let (Some(file_path), Some(content)) = (&html_file, &html_output) {
                         if let Err(e) = std::fs::write(file_path, content) {
-                            eprintln!("{} Failed to write HTML report to {}: {}", "Error:".red(), file_path.display(), e);
+                            eprintln!(
+                                "{} Failed to write HTML report to {}: {}",
+                                "Error:".red(),
+                                file_path.display(),
+                                e
+                            );
                         } else {
-                            println!("✔ Interactive HTML dashboard saved to {}", file_path.display());
+                            println!(
+                                "✔ Interactive HTML dashboard saved to {}",
+                                file_path.display()
+                            );
                         }
                     }
 
@@ -901,9 +1115,15 @@ pub async fn run() {
                     let sbom_output = if sbom.is_some() || sbom_file.is_some() {
                         let fmt_str = sbom
                             .as_deref()
-                            .or_else(|| sbom_file.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()))
+                            .or_else(|| {
+                                sbom_file
+                                    .as_ref()
+                                    .and_then(|p| p.extension())
+                                    .and_then(|e| e.to_str())
+                            })
                             .unwrap_or("cyclonedx");
-                        let fmt = SbomFormat::from_str_loose(fmt_str).unwrap_or(SbomFormat::CycloneDx);
+                        let fmt =
+                            SbomFormat::from_str_loose(fmt_str).unwrap_or(SbomFormat::CycloneDx);
                         Some(match fmt {
                             SbomFormat::CycloneDx => format_cyclonedx_sbom(
                                 &output.dep_graph,
@@ -922,7 +1142,12 @@ pub async fn run() {
 
                     if let (Some(file_path), Some(content)) = (&sbom_file, &sbom_output) {
                         if let Err(e) = std::fs::write(file_path, content) {
-                            eprintln!("{} Failed to write SBOM report to {}: {}", "Error:".red(), file_path.display(), e);
+                            eprintln!(
+                                "{} Failed to write SBOM report to {}: {}",
+                                "Error:".red(),
+                                file_path.display(),
+                                e
+                            );
                         } else {
                             println!("✔ SBOM report saved to {}", file_path.display());
                         }
@@ -981,7 +1206,8 @@ pub async fn run() {
                         let lower = fo.trim().to_lowercase();
                         if lower == "reachable" {
                             effective_fail_on_reachable = true;
-                        } else if lower.starts_with("reachable-") || lower.starts_with("reachable_") {
+                        } else if lower.starts_with("reachable-") || lower.starts_with("reachable_")
+                        {
                             effective_fail_on_reachable = true;
                             let sev_str = &lower[10..];
                             effective_severity = Some(SeverityLevel::from_str_loose(sev_str));
@@ -995,6 +1221,7 @@ pub async fn run() {
                         fail_on_reachable: effective_fail_on_reachable,
                         fail_on_licenses,
                         fail_on_unmaintained,
+                        no_fail,
                     };
                     let gate_res = QualityGate::evaluate(
                         &output.scan_result,
@@ -1031,27 +1258,32 @@ pub async fn run() {
             sbom_file,
             fail_on,
             fail_on_licenses,
+            no_fail,
         } => {
             println!("Scanning container target at {}...", target.display());
             match ContainerScanner::scan_target(&target).await {
                 Ok(mut output) => {
                     if let Some(thresh) = &severity_threshold {
                         let min_level = SeverityLevel::from_str_loose(thresh);
-                        output.scan_result.vulnerabilities.retain(|v| v.severity.level.weight() >= min_level.weight());
-                        output.scan_result.vulnerabilities_count = output.scan_result.vulnerabilities.len();
+                        output
+                            .scan_result
+                            .vulnerabilities
+                            .retain(|v| v.severity.level.weight() >= min_level.weight());
+                        output.scan_result.vulnerabilities_count =
+                            output.scan_result.vulnerabilities.len();
                     }
 
                     if ignore_unfixed {
-                        output.scan_result.vulnerabilities.retain(|v| !v.fixed_in.is_empty());
-                        output.scan_result.vulnerabilities_count = output.scan_result.vulnerabilities.len();
+                        output
+                            .scan_result
+                            .vulnerabilities
+                            .retain(|v| !v.fixed_in.is_empty());
+                        output.scan_result.vulnerabilities_count =
+                            output.scan_result.vulnerabilities.len();
                     }
 
                     let sarif_output = if sarif || sarif_file.is_some() {
-                        Some(format_sarif_report(
-                            &output.scan_result,
-                            &[],
-                            Some(&target),
-                        ))
+                        Some(format_sarif_report(&output.scan_result, &[], Some(&target)))
                     } else {
                         None
                     };
@@ -1081,7 +1313,8 @@ pub async fn run() {
 
                     let sbom_output = if sbom.is_some() || sbom_file.is_some() {
                         let fmt_str = sbom.as_deref().unwrap_or("cyclonedx");
-                        let fmt = SbomFormat::from_str_loose(fmt_str).unwrap_or(SbomFormat::CycloneDx);
+                        let fmt =
+                            SbomFormat::from_str_loose(fmt_str).unwrap_or(SbomFormat::CycloneDx);
                         Some(match fmt {
                             SbomFormat::CycloneDx => format_cyclonedx_sbom(
                                 &output.dep_graph,
@@ -1152,6 +1385,7 @@ pub async fn run() {
                         fail_on_reachable: false,
                         fail_on_licenses,
                         fail_on_unmaintained: false,
+                        no_fail,
                     };
                     let gate_res = QualityGate::evaluate(
                         &output.scan_result,
@@ -1182,12 +1416,28 @@ pub async fn run() {
             } else {
                 println!("\n{}", "Vexa SCA Usage & Quota Status".bold().underline());
                 println!("──────────────────────────────────────────────────");
-                println!("  {}   {}", "Plan Tier:   ".bold(), report.plan_tier.cyan().bold());
-                println!("  {}   {}", "Scan Quota:  ".bold(), "Unlimited (Local CLI & Public Repos)".green().bold());
+                println!(
+                    "  {}   {}",
+                    "Plan Tier:   ".bold(),
+                    report.plan_tier.cyan().bold()
+                );
+                println!(
+                    "  {}   {}",
+                    "Scan Quota:  ".bold(),
+                    "Unlimited (Local CLI & Public Repos)".green().bold()
+                );
                 println!("  {}   {}", "Status:      ".bold(), report.status.green());
                 println!("  {}   {}", "Period:      ".bold(), report.billing_period);
-                println!("  {}   {} tests run this month", "Usage:       ".bold(), report.scans_this_month);
-                println!("  {}   {}", "Policy:      ".dimmed(), report.message.dimmed());
+                println!(
+                    "  {}   {} tests run this month",
+                    "Usage:       ".bold(),
+                    report.scans_this_month
+                );
+                println!(
+                    "  {}   {}",
+                    "Policy:      ".dimmed(),
+                    report.message.dimmed()
+                );
                 println!("──────────────────────────────────────────────────\n");
             }
         }

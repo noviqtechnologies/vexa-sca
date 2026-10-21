@@ -86,7 +86,8 @@ impl CargoPatcher {
 
             // 2. If not a direct dependency in Cargo.toml, treat as transitive dependency
             if !direct_updated {
-                let (change, is_breaking) = classify_semver_change(&rem.current_version, target_version);
+                let (change, is_breaking) =
+                    classify_semver_change(&rem.current_version, target_version);
                 changes.transitive_overrides.push(TransitiveOverride {
                     package: rem.package.clone(),
                     current_version: Some(rem.current_version.clone()),
@@ -107,7 +108,8 @@ impl CargoPatcher {
                     if let Ok(out) = output {
                         if !out.status.success() {
                             let stderr_str = String::from_utf8_lossy(&out.stderr);
-                            let first_line = stderr_str.lines().next().unwrap_or("cargo update failed");
+                            let first_line =
+                                stderr_str.lines().next().unwrap_or("cargo update failed");
                             warnings.push(format!("{}: {}", rem.package, first_line.trim()));
                         }
                     }
@@ -160,15 +162,21 @@ impl CargoPatcher {
         .ok()?;
 
         // Pattern 3: pkg.version = "1.0.0"
-        let dotted_dep_re =
-            Regex::new(&format!(r#"^(\s*{}\.version\s*=\s*")([^"]+)(".*)$"#, pkg_escaped)).ok()?;
+        let dotted_dep_re = Regex::new(&format!(
+            r#"^(\s*{}\.version\s*=\s*")([^"]+)(".*)$"#,
+            pkg_escaped
+        ))
+        .ok()?;
 
         // Pattern 4: inside [dependencies.pkg], version = "1.0.0"
         let table_version_re = Regex::new(r#"^(\s*version\s*=\s*")([^"]+)(".*)$"#).ok()?;
 
         for line in lines {
             if let Some(caps) = section_re.captures(line) {
-                current_section = caps.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                current_section = caps
+                    .get(1)
+                    .map(|m| m.as_str().trim().to_string())
+                    .unwrap_or_default();
                 new_lines.push(line.to_string());
                 continue;
             }
@@ -237,7 +245,11 @@ impl CargoPatcher {
         }
 
         let (old_ver, section) = replaced_info?;
-        let line_ending = if toml_content.contains("\r\n") { "\r\n" } else { "\n" };
+        let line_ending = if toml_content.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
         let mut final_content = new_lines.join(line_ending);
         if toml_content.ends_with("\r\n") {
             final_content.push_str("\r\n");

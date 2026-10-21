@@ -39,18 +39,30 @@ pub fn format_html_report(
     let low_count = scan_result
         .vulnerabilities
         .iter()
-        .filter(|v| v.severity.level == SeverityLevel::Low || v.severity.level == SeverityLevel::Unknown)
+        .filter(|v| {
+            v.severity.level == SeverityLevel::Low || v.severity.level == SeverityLevel::Unknown
+        })
         .count();
 
     let reachable_count = scan_result
         .vulnerabilities
         .iter()
-        .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false))
+        .filter(|v| {
+            v.reachability
+                .as_ref()
+                .map(|r| r.status == ReachabilityStatus::Reachable)
+                .unwrap_or(false)
+        })
         .count();
     let unreachable_count = scan_result
         .vulnerabilities
         .iter()
-        .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Unreachable).unwrap_or(false))
+        .filter(|v| {
+            v.reachability
+                .as_ref()
+                .map(|r| r.status == ReachabilityStatus::Unreachable)
+                .unwrap_or(false)
+        })
         .count();
 
     let rem_map: HashMap<(&str, &str), &RemediationAction> = remediations
@@ -76,12 +88,22 @@ pub fn format_html_report(
                 } else {
                     String::new()
                 };
-                ("<span class=\"badge badge-reachable\">🚨 REACHABLE</span>", "reachable", snippet_html)
+                (
+                    "<span class=\"badge badge-reachable\">🚨 REACHABLE</span>",
+                    "reachable",
+                    snippet_html,
+                )
             }
-            Some(r) if r.status == ReachabilityStatus::Unreachable => {
-                ("<span class=\"badge badge-unreachable\">🛡️ UNREACHABLE</span>", "unreachable", String::new())
-            }
-            _ => ("<span class=\"badge badge-muted\">NOT EVALUATED</span>", "not-evaluated", String::new()),
+            Some(r) if r.status == ReachabilityStatus::Unreachable => (
+                "<span class=\"badge badge-unreachable\">🛡️ UNREACHABLE</span>",
+                "unreachable",
+                String::new(),
+            ),
+            _ => (
+                "<span class=\"badge badge-muted\">NOT EVALUATED</span>",
+                "not-evaluated",
+                String::new(),
+            ),
         };
 
         let sev_level = vuln.severity.level.as_str().to_lowercase();
@@ -91,7 +113,10 @@ pub fn format_html_report(
             .get(&(vuln.package.as_str(), vuln.version.as_str()))
             .or_else(|| rem_by_pkg.get(vuln.package.as_str()))
         {
-            let target_str = rem.target_version.as_deref().unwrap_or("latest non-vulnerable");
+            let target_str = rem
+                .target_version
+                .as_deref()
+                .unwrap_or("latest non-vulnerable");
             format!(
                 "<div class=\"rem-box\"><span class=\"rem-icon\">💡</span> <div><strong>Remediation:</strong> {} (target: <code>{}</code>)</div></div>",
                 html_escape(&rem.advice),
@@ -115,13 +140,22 @@ pub fn format_html_report(
         let references_html = vuln
             .references
             .iter()
-            .map(|r| format!("<a href=\"{}\" target=\"_blank\" rel=\"noopener\" class=\"ref-link\">{}</a>", html_escape(r), html_escape(r)))
+            .map(|r| {
+                format!(
+                    "<a href=\"{}\" target=\"_blank\" rel=\"noopener\" class=\"ref-link\">{}</a>",
+                    html_escape(r),
+                    html_escape(r)
+                )
+            })
             .collect::<Vec<_>>()
             .join("");
 
         let epss_badge = if let Some(ref epss) = vuln.epss {
             let pct = epss.score * 100.0;
-            format!(r#"<span class="badge" style="background: rgba(14, 165, 233, 0.2); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.4);" title="EPSS Exploit Prediction: {:.1}% likelihood within 30 days">EPSS {:.1}%</span>"#, pct, pct)
+            format!(
+                r#"<span class="badge" style="background: rgba(14, 165, 233, 0.2); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.4);" title="EPSS Exploit Prediction: {:.1}% likelihood within 30 days">EPSS {:.1}%</span>"#,
+                pct, pct
+            )
         } else {
             String::new()
         };
@@ -562,8 +596,10 @@ mod tests {
 
     #[test]
     fn test_format_html_report_rendering() {
-        let mut scan_result = ScanResult::default();
-        scan_result.scanned_packages_count = 10;
+        let mut scan_result = ScanResult {
+            scanned_packages_count: 10,
+            ..Default::default()
+        };
         scan_result.vulnerabilities.push(VulnerabilityFinding {
             id: "GHSA-35jh-r3h4-6jhm".to_string(),
             title: "Command Injection in lodash".to_string(),
@@ -580,7 +616,10 @@ mod tests {
             cwes: vec!["CWE-78".to_string()],
             fixed_in: vec!["4.17.21".to_string()],
             is_transitive: false,
-            paths: vec![vec!["my-app@1.0.0".to_string(), "lodash@4.17.15".to_string()]],
+            paths: vec![vec![
+                "my-app@1.0.0".to_string(),
+                "lodash@4.17.15".to_string(),
+            ]],
             details: Some("Command injection in template function".to_string()),
             references: vec!["https://nvd.nist.gov".to_string()],
             reachability: None,
@@ -606,7 +645,9 @@ mod tests {
 
     #[test]
     fn test_html_multi_version_and_license_badges() {
-        use crate::licenses::license_scanner::{LicenseAudit, LicenseRisk, LicenseSummary, PackageLicenseResult};
+        use crate::licenses::license_scanner::{
+            LicenseAudit, LicenseRisk, LicenseSummary, PackageLicenseResult,
+        };
 
         let mut scan_result = ScanResult::default();
         scan_result.vulnerabilities.push(VulnerabilityFinding {
@@ -670,7 +711,10 @@ mod tests {
                     ecosystem: "crates.io".to_string(),
                     license: "MPL-2.0".to_string(),
                     category: LicenseCategory::WeakCopyleft,
-                    risk: LicenseRisk { level: "MEDIUM".to_string(), score: 2 },
+                    risk: LicenseRisk {
+                        level: "MEDIUM".to_string(),
+                        score: 2,
+                    },
                     ..Default::default()
                 },
                 PackageLicenseResult {
@@ -679,7 +723,10 @@ mod tests {
                     ecosystem: "crates.io".to_string(),
                     license: "MIT".to_string(),
                     category: LicenseCategory::Permissive,
-                    risk: LicenseRisk { level: "LOW".to_string(), score: 0 },
+                    risk: LicenseRisk {
+                        level: "LOW".to_string(),
+                        score: 0,
+                    },
                     ..Default::default()
                 },
             ],

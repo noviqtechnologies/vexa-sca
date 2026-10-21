@@ -20,7 +20,10 @@ impl PnpmLockParser {
         } else if lock_path_yml.exists() {
             lock_path_yml
         } else {
-            return Err(format!("pnpm-lock.yaml not found in {}", project_dir.display()));
+            return Err(format!(
+                "pnpm-lock.yaml not found in {}",
+                project_dir.display()
+            ));
         };
 
         let (project_name, project_version, direct_deps) = if manifest_path.exists() {
@@ -129,7 +132,11 @@ impl PnpmLockParser {
                     node_id.clone(),
                     pkg_info.id.clone(),
                     NodeInfo {
-                        scope: if is_dev { "dev".to_string() } else { "prod".to_string() },
+                        scope: if is_dev {
+                            "dev".to_string()
+                        } else {
+                            "prod".to_string()
+                        },
                         path: None,
                         integrity: entry_val
                             .get("resolution")
@@ -152,7 +159,11 @@ impl PnpmLockParser {
                                 YamlValue::String(s) => s.as_str(),
                                 _ => "",
                             };
-                            pending_edges.push((node_id.clone(), dep_name.to_string(), dep_spec.to_string()));
+                            pending_edges.push((
+                                node_id.clone(),
+                                dep_name.to_string(),
+                                dep_spec.to_string(),
+                            ));
                         }
                     }
                 }
@@ -165,7 +176,9 @@ impl PnpmLockParser {
                 // Find best matching version
                 let matched_node = candidates
                     .iter()
-                    .find(|(v, _)| child_spec.is_empty() || child_spec.contains(v) || v == &child_spec)
+                    .find(|(v, _)| {
+                        child_spec.is_empty() || child_spec.contains(v) || v == &child_spec
+                    })
                     .map(|(_, id)| id)
                     .or_else(|| candidates.first().map(|(_, id)| id));
 
@@ -202,7 +215,9 @@ impl PnpmLockParser {
                     if let Some(name) = k.as_str() {
                         let spec = match v {
                             YamlValue::String(s) => s.as_str(),
-                            YamlValue::Mapping(m) => m.get("version").and_then(|v| v.as_str()).unwrap_or(""),
+                            YamlValue::Mapping(m) => {
+                                m.get("version").and_then(|v| v.as_str()).unwrap_or("")
+                            }
                             _ => "",
                         };
                         top_deps.push((name.to_string(), spec.to_string()));
@@ -211,12 +226,17 @@ impl PnpmLockParser {
             }
 
             if include_dev {
-                if let Some(dev) = lock_yaml.get("devDependencies").and_then(|d| d.as_mapping()) {
+                if let Some(dev) = lock_yaml
+                    .get("devDependencies")
+                    .and_then(|d| d.as_mapping())
+                {
                     for (k, v) in dev {
                         if let Some(name) = k.as_str() {
                             let spec = match v {
                                 YamlValue::String(s) => s.as_str(),
-                                YamlValue::Mapping(m) => m.get("version").and_then(|v| v.as_str()).unwrap_or(""),
+                                YamlValue::Mapping(m) => {
+                                    m.get("version").and_then(|v| v.as_str()).unwrap_or("")
+                                }
                                 _ => "",
                             };
                             top_deps.push((name.to_string(), spec.to_string()));
@@ -227,13 +247,18 @@ impl PnpmLockParser {
 
             // Also check importers['.'] (pnpm v6 multi / v9)
             if let Some(importers) = lock_yaml.get("importers").and_then(|i| i.as_mapping()) {
-                if let Some(dot) = importers.get(&YamlValue::String(".".to_string())).and_then(|d| d.as_mapping()) {
+                if let Some(dot) = importers
+                    .get(YamlValue::String(".".to_string()))
+                    .and_then(|d| d.as_mapping())
+                {
                     if let Some(deps) = dot.get("dependencies").and_then(|d| d.as_mapping()) {
                         for (k, v) in deps {
                             if let Some(name) = k.as_str() {
                                 let spec = match v {
                                     YamlValue::String(s) => s.as_str(),
-                                    YamlValue::Mapping(m) => m.get("version").and_then(|v| v.as_str()).unwrap_or(""),
+                                    YamlValue::Mapping(m) => {
+                                        m.get("version").and_then(|v| v.as_str()).unwrap_or("")
+                                    }
                                     _ => "",
                                 };
                                 top_deps.push((name.to_string(), spec.to_string()));
@@ -247,7 +272,9 @@ impl PnpmLockParser {
                 if let Some(candidates) = pkg_version_map.get(&dep_name) {
                     let matched = candidates
                         .iter()
-                        .find(|(v, _)| dep_spec.is_empty() || dep_spec.contains(v) || v == &dep_spec)
+                        .find(|(v, _)| {
+                            dep_spec.is_empty() || dep_spec.contains(v) || v == &dep_spec
+                        })
                         .map(|(_, id)| id)
                         .or_else(|| candidates.first().map(|(_, id)| id));
 

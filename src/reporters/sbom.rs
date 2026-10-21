@@ -229,9 +229,13 @@ pub fn format_cyclonedx_sbom(
                 });
                 if reach.status == ReachabilityStatus::Unreachable {
                     analysis["justification"] = json!("code_not_reachable");
-                    analysis["detail"] = json!("AST call graph analysis confirmed vulnerability code is not executed.");
+                    analysis["detail"] = json!(
+                        "AST call graph analysis confirmed vulnerability code is not executed."
+                    );
                 } else if reach.status == ReachabilityStatus::Reachable {
-                    analysis["detail"] = json!("AST call graph analysis detected active call path to vulnerable function.");
+                    analysis["detail"] = json!(
+                        "AST call graph analysis detected active call path to vulnerable function."
+                    );
                 }
                 vuln_obj["analysis"] = analysis;
             }
@@ -292,7 +296,7 @@ pub fn format_spdx_sbom(
 
     let doc_namespace = format!(
         "https://spdx.org/spdxdocs/{}-{}-{}",
-        root_pkg.name.replace('/', "-").replace('\\', "-"),
+        root_pkg.name.replace(['/', '\\'], "-"),
         root_pkg.version,
         Utc::now().format("%Y%m%d%H%M%S")
     );
@@ -529,8 +533,10 @@ mod tests {
 
     #[test]
     fn test_spdx_sbom_compliance_and_security_advisories() {
+        use crate::licenses::license_scanner::{
+            LicenseAudit, LicenseCategory, LicenseRisk, PackageLicenseResult,
+        };
         use crate::types::{SeverityInfo, SeverityLevel, VulnerabilityFinding};
-        use crate::licenses::license_scanner::{LicenseAudit, PackageLicenseResult, LicenseCategory, LicenseRisk};
 
         let root = PkgInfo::new("agentcontrol", "1.0.95", "cargo");
         let mut graph = DepGraph::new(
@@ -550,7 +556,9 @@ mod tests {
             NodeInfo {
                 scope: "prod".to_string(),
                 path: None,
-                integrity: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+                integrity: Some(
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+                ),
             },
         );
         let _ = graph.add_edge(&graph.root_node_id.clone(), &node_id);
@@ -591,7 +599,10 @@ mod tests {
                 ecosystem: "cargo".to_string(),
                 license: "MIT/Apache-2.0".to_string(), // Slashes should be sanitized to "MIT OR Apache-2.0"
                 category: LicenseCategory::Permissive,
-                risk: LicenseRisk { level: "LOW".to_string(), score: 0 },
+                risk: LicenseRisk {
+                    level: "LOW".to_string(),
+                    score: 0,
+                },
                 ..Default::default()
             }],
         };
@@ -600,7 +611,10 @@ mod tests {
         let parsed: Value = serde_json::from_str(&spdx_json).expect("valid SPDX JSON");
 
         let pkgs = parsed["packages"].as_array().unwrap();
-        let target_pkg = pkgs.iter().find(|p| p["name"] == "jsonwebtoken").expect("jsonwebtoken package");
+        let target_pkg = pkgs
+            .iter()
+            .find(|p| p["name"] == "jsonwebtoken")
+            .expect("jsonwebtoken package");
 
         // Verify license was sanitized from "MIT/Apache-2.0" to "MIT OR Apache-2.0"
         assert_eq!(target_pkg["licenseConcluded"], "MIT OR Apache-2.0");
@@ -608,19 +622,30 @@ mod tests {
 
         // Verify checksums
         assert_eq!(target_pkg["checksums"][0]["algorithm"], "SHA256");
-        assert_eq!(target_pkg["checksums"][0]["checksumValue"], "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            target_pkg["checksums"][0]["checksumValue"],
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
 
         // Verify security advisory externalRefs
         let refs = target_pkg["externalRefs"].as_array().unwrap();
-        let sec_ref = refs.iter().find(|r| r["referenceCategory"] == "SECURITY").expect("security externalRef");
+        let sec_ref = refs
+            .iter()
+            .find(|r| r["referenceCategory"] == "SECURITY")
+            .expect("security externalRef");
         assert_eq!(sec_ref["referenceType"], "advisory");
-        assert_eq!(sec_ref["referenceLocator"], "https://github.com/Keats/jsonwebtoken");
+        assert_eq!(
+            sec_ref["referenceLocator"],
+            "https://github.com/Keats/jsonwebtoken"
+        );
     }
 
     #[test]
     fn test_cyclonedx_sbom_affects_ref_and_spdx_expression() {
+        use crate::licenses::license_scanner::{
+            LicenseAudit, LicenseCategory, LicenseRisk, PackageLicenseResult,
+        };
         use crate::types::{SeverityInfo, SeverityLevel, VulnerabilityFinding};
-        use crate::licenses::license_scanner::{LicenseAudit, PackageLicenseResult, LicenseCategory, LicenseRisk};
 
         let root = PkgInfo::new("agentcontrol", "1.0.95", "cargo");
         let mut graph = DepGraph::new(
@@ -640,7 +665,9 @@ mod tests {
             NodeInfo {
                 scope: "prod".to_string(),
                 path: None,
-                integrity: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+                integrity: Some(
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+                ),
             },
         );
         let _ = graph.add_edge(&graph.root_node_id.clone(), &node_id);
@@ -681,7 +708,10 @@ mod tests {
                 ecosystem: "cargo".to_string(),
                 license: "(MIT OR Apache-2.0) AND Unicode-3.0".to_string(),
                 category: LicenseCategory::Permissive,
-                risk: LicenseRisk { level: "LOW".to_string(), score: 0 },
+                risk: LicenseRisk {
+                    level: "LOW".to_string(),
+                    score: 0,
+                },
                 ..Default::default()
             }],
         };
@@ -692,14 +722,20 @@ mod tests {
         // Verify component bom-ref and hash
         let comp = &parsed["components"][0];
         assert_eq!(comp["bom-ref"], "cargo:jsonwebtoken@9.3.1");
-        assert_eq!(comp["licenses"][0]["expression"], "(MIT OR Apache-2.0) AND Unicode-3.0");
+        assert_eq!(
+            comp["licenses"][0]["expression"],
+            "(MIT OR Apache-2.0) AND Unicode-3.0"
+        );
         assert_eq!(comp["hashes"][0]["alg"], "SHA-256");
 
         // Verify vulnerability affects matches bom-ref exactly!
         let vuln = &parsed["vulnerabilities"][0];
         assert_eq!(vuln["id"], "CVE-2026-25537");
         assert_eq!(vuln["affects"][0]["ref"], "cargo:jsonwebtoken@9.3.1");
-        assert_eq!(vuln["ratings"][0]["vector"], "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H");
+        assert_eq!(
+            vuln["ratings"][0]["vector"],
+            "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        );
         assert_eq!(vuln["cwes"][0], 843);
     }
 }

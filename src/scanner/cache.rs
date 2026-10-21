@@ -24,7 +24,10 @@ impl VulnCache {
     }
 
     fn get_key(&self, pkg_info: &PkgInfo) -> String {
-        let raw = format!("{}:{}@{}", pkg_info.ecosystem, pkg_info.name, pkg_info.version);
+        let raw = format!(
+            "{}:{}@{}",
+            pkg_info.ecosystem, pkg_info.name, pkg_info.version
+        );
         let mut hasher = Sha256::new();
         hasher.update(raw.as_bytes());
         let hash = hex::encode(hasher.finalize());
@@ -42,7 +45,10 @@ impl VulnCache {
         let item: Value = serde_json::from_str(&content).ok()?;
 
         let timestamp = item.get("timestamp")?.as_u64()?;
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_millis() as u64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_millis() as u64;
 
         // 24 hours TTL: 24 * 60 * 60 * 1000 = 86_400_000 ms
         if now.saturating_sub(timestamp) < 86_400_000 {
@@ -75,7 +81,10 @@ impl VulnCache {
     }
 
     pub fn get_advisory(&self, id: &str) -> Option<Value> {
-        let file_path = self.cache_dir.join("advisories").join(format!("{}.json", id));
+        let file_path = self
+            .cache_dir
+            .join("advisories")
+            .join(format!("{}.json", id));
         if !file_path.exists() {
             return None;
         }
@@ -87,7 +96,10 @@ impl VulnCache {
         if has_blocked_vendor(id) {
             return;
         }
-        let file_path = self.cache_dir.join("advisories").join(format!("{}.json", id));
+        let file_path = self
+            .cache_dir
+            .join("advisories")
+            .join(format!("{}.json", id));
         if let Ok(mut json_str) = serde_json::to_string(advisory) {
             if has_blocked_vendor(&json_str) {
                 json_str = sanitize_vendor_content(json_str);
@@ -99,14 +111,14 @@ impl VulnCache {
 
 pub fn has_blocked_vendor(s: &str) -> bool {
     let lower = s.to_lowercase();
-    let p1 = String::from_utf8_lossy(&[b's', b'n', b'y', b'k']);
-    let p2 = String::from_utf8_lossy(&[b's', b'y', b'n', b'k']);
+    let p1 = String::from_utf8_lossy(b"snyk");
+    let p2 = String::from_utf8_lossy(b"synk");
     lower.contains(p1.as_ref()) || lower.contains(p2.as_ref())
 }
 
 fn sanitize_vendor_content(mut text: String) -> String {
-    let p1 = String::from_utf8_lossy(&[b's', b'n', b'y', b'k']).to_string();
-    let p2 = String::from_utf8_lossy(&[b's', b'y', b'n', b'k']).to_string();
+    let p1 = String::from_utf8_lossy(b"snyk").to_string();
+    let p2 = String::from_utf8_lossy(b"synk").to_string();
     let p1_upper = p1.to_uppercase();
     let p1_cap = format!("{}{}", &p1[..1].to_uppercase(), &p1[1..]);
 

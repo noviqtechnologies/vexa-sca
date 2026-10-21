@@ -22,14 +22,23 @@ impl ContainerScanner {
     /// Scans a container target: directory, tar archive, or Dockerfile
     pub async fn scan_target(target_path: &Path) -> Result<ContainerScanOutput, String> {
         if !target_path.exists() {
-            return Err(format!("Target path '{}' does not exist", target_path.display()));
+            return Err(format!(
+                "Target path '{}' does not exist",
+                target_path.display()
+            ));
         }
 
         let target_str = target_path.display().to_string();
 
         let (os_info, packages) = if target_path.is_file() {
-            let file_name = target_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if file_name.ends_with(".tar") || file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
+            let file_name = target_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if file_name.ends_with(".tar")
+                || file_name.ends_with(".tar.gz")
+                || file_name.ends_with(".tgz")
+            {
                 OsPackageDetector::scan_tar_archive(target_path)?
             } else if file_name == "Dockerfile" || file_name.ends_with(".dockerfile") {
                 Self::inspect_dockerfile(target_path)?
@@ -59,7 +68,12 @@ impl ContainerScanner {
             let pkg_info = PkgInfo::new(&pkg.name, &pkg.version, &pkg.ecosystem);
             graph.add_pkg(pkg_info.clone());
 
-            let node_id = format!("{}:{}@{}", pkg.ecosystem.to_lowercase(), pkg.name, pkg.version);
+            let node_id = format!(
+                "{}:{}@{}",
+                pkg.ecosystem.to_lowercase(),
+                pkg.name,
+                pkg.version
+            );
             graph.add_node(
                 node_id.clone(),
                 pkg_info.id.clone(),
@@ -122,10 +136,18 @@ impl ContainerScanner {
 
                 let (name, ver, ecosystem) = if lower.contains("alpine") {
                     let ver = base_img.split(':').nth(1).unwrap_or("3.18");
-                    ("alpine-base".to_string(), ver.to_string(), "Alpine".to_string())
+                    (
+                        "alpine-base".to_string(),
+                        ver.to_string(),
+                        "Alpine".to_string(),
+                    )
                 } else if lower.contains("debian") || lower.contains("ubuntu") {
                     let ver = base_img.split(':').nth(1).unwrap_or("11");
-                    ("debian-base".to_string(), ver.to_string(), "Debian".to_string())
+                    (
+                        "debian-base".to_string(),
+                        ver.to_string(),
+                        "Debian".to_string(),
+                    )
                 } else {
                     let parts: Vec<&str> = base_img.split(':').collect();
                     let n = parts[0].to_string();

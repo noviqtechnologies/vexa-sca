@@ -2,8 +2,8 @@ use crate::core::dep_graph::DepGraph;
 use crate::parsers::cargo_lock::CargoLockParser;
 use crate::parsers::go_sum::GoLockParser;
 use crate::parsers::package_lock::PackageLockParser;
-use crate::parsers::pom_xml::PomXmlParser;
 use crate::parsers::pnpm_lock::PnpmLockParser;
+use crate::parsers::pom_xml::PomXmlParser;
 use crate::parsers::python_reqs::PythonRequirementsParser;
 use crate::parsers::yarn_lock::YarnLockParser;
 use serde::Serialize;
@@ -75,7 +75,11 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
     let pnpm_lock_yaml = abs_dir.join("pnpm-lock.yaml");
     let pnpm_lock_yml = abs_dir.join("pnpm-lock.yml");
     if pnpm_lock_yaml.exists() || pnpm_lock_yml.exists() {
-        let main_file = if pnpm_lock_yaml.exists() { pnpm_lock_yaml } else { pnpm_lock_yml };
+        let main_file = if pnpm_lock_yaml.exists() {
+            pnpm_lock_yaml
+        } else {
+            pnpm_lock_yml
+        };
         let graph = PnpmLockParser::parse(&abs_dir, include_dev)?;
         return Ok(DetectionResult {
             manifest_type: ManifestType::PnpmLock,
@@ -133,10 +137,21 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             let path = entry.path();
             if path.is_dir() {
                 let dirname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if dirname.starts_with('.') || dirname == "node_modules" || dirname == "target" || dirname == "vendor" {
+                if dirname.starts_with('.')
+                    || dirname == "node_modules"
+                    || dirname == "target"
+                    || dirname == "vendor"
+                {
                     continue;
                 }
-                for manifest in &["package.json", "package-lock.json", "Cargo.toml", "requirements.txt", "go.mod", "pom.xml"] {
+                for manifest in &[
+                    "package.json",
+                    "package-lock.json",
+                    "Cargo.toml",
+                    "requirements.txt",
+                    "go.mod",
+                    "pom.xml",
+                ] {
                     if path.join(manifest).exists() {
                         let rel = path.strip_prefix(&abs_dir).unwrap_or(&path);
                         sub_hints.push(format!("{}/{}", rel.display(), manifest));

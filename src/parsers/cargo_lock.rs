@@ -48,17 +48,22 @@ impl CargoLockParser {
         }
 
         // Determine real root package
-        let cargo_toml_path = lock_path.parent().unwrap_or(Path::new(".")).join("Cargo.toml");
+        let cargo_toml_path = lock_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("Cargo.toml");
         let toml_pkg_name = if cargo_toml_path.exists() {
-            fs::read_to_string(&cargo_toml_path).ok().and_then(|toml_str| {
-                let toml_val: Option<toml::Value> = toml::from_str(&toml_str).ok();
-                toml_val.and_then(|v| {
-                    v.get("package")
-                        .and_then(|p| p.get("name"))
-                        .and_then(|n| n.as_str())
-                        .map(|s| s.to_string())
+            fs::read_to_string(&cargo_toml_path)
+                .ok()
+                .and_then(|toml_str| {
+                    let toml_val: Option<toml::Value> = toml::from_str(&toml_str).ok();
+                    toml_val.and_then(|v| {
+                        v.get("package")
+                            .and_then(|p| p.get("name"))
+                            .and_then(|n| n.as_str())
+                            .map(|s| s.to_string())
+                    })
                 })
-            })
         } else {
             None
         };
@@ -75,14 +80,15 @@ impl CargoLockParser {
         }
         .or_else(|| {
             if let Some(dname) = dir_name {
-                parsed.package.iter().find(|p| p.source.is_none() && p.name == dname)
+                parsed
+                    .package
+                    .iter()
+                    .find(|p| p.source.is_none() && p.name == dname)
             } else {
                 None
             }
         })
-        .or_else(|| {
-            parsed.package.iter().find(|p| p.source.is_none())
-        })
+        .or_else(|| parsed.package.iter().find(|p| p.source.is_none()))
         .unwrap_or(&parsed.package[0]);
 
         let root_pkg = PkgInfo::new(&root_pkg_data.name, &root_pkg_data.version, "crates.io");
@@ -108,7 +114,8 @@ impl CargoLockParser {
 
             let node_id = format!("cargo:{}@{}", pkg.name, pkg.version);
             name_to_node_id.insert(pkg.name.clone(), node_id.clone());
-            name_and_ver_to_node_id.insert((pkg.name.clone(), pkg.version.clone()), node_id.clone());
+            name_and_ver_to_node_id
+                .insert((pkg.name.clone(), pkg.version.clone()), node_id.clone());
 
             graph.add_node(
                 node_id,
@@ -158,8 +165,12 @@ impl CargoLockParser {
         // 3. Connect other workspace root packages (source.is_none()) to root if not already reachable
         let root_id = graph.root_node_id.clone();
         for pkg in &parsed.package {
-            if pkg.source.is_none() && (pkg.name != root_pkg.name || pkg.version != root_pkg.version) {
-                if let Some(nid) = name_and_ver_to_node_id.get(&(pkg.name.clone(), pkg.version.clone())) {
+            if pkg.source.is_none()
+                && (pkg.name != root_pkg.name || pkg.version != root_pkg.version)
+            {
+                if let Some(nid) =
+                    name_and_ver_to_node_id.get(&(pkg.name.clone(), pkg.version.clone()))
+                {
                     let _ = graph.add_edge(&root_id, nid);
                 }
             }

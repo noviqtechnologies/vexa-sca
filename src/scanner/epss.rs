@@ -185,7 +185,10 @@ mod tests {
     #[test]
     fn test_epss_fallback_estimation() {
         let critical_epss = EpssResolver::estimate_fallback_epss("CVE-2021-44906", 9.8);
-        assert!(critical_epss.score >= 0.70, "Critical CVSS should have high EPSS");
+        assert!(
+            critical_epss.score >= 0.70,
+            "Critical CVSS should have high EPSS"
+        );
         assert!(critical_epss.percentile >= 0.95);
 
         let high_epss = EpssResolver::estimate_fallback_epss("CVE-2020-8203", 7.4);

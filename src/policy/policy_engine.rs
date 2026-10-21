@@ -66,12 +66,7 @@ impl PolicyEngine {
     }
 
     pub fn find_policy_file(project_dir: &Path) -> Option<PathBuf> {
-        let candidates = [
-            ".vexa-sca.json",
-            ".vexa-sca",
-            ".vexa.json",
-            ".vexa",
-        ];
+        let candidates = [".vexa-sca.json", ".vexa-sca", ".vexa.json", ".vexa"];
 
         for c in candidates {
             let full = project_dir.join(c);
@@ -84,8 +79,8 @@ impl PolicyEngine {
 
     pub fn load_policy_file(&mut self, path: &Path) -> Result<(), String> {
         self.policy_file_path = Some(path.to_path_buf());
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read policy file: {}", e))?;
+        let content =
+            fs::read_to_string(path).map_err(|e| format!("Failed to read policy file: {}", e))?;
         let trimmed = content.trim();
         if trimmed.is_empty() {
             return Ok(());
@@ -127,7 +122,11 @@ impl PolicyEngine {
         (active, suppressed)
     }
 
-    pub fn check_suppression(&self, vuln: &VulnerabilityFinding, current_date: NaiveDate) -> Option<SuppressionMatch> {
+    pub fn check_suppression(
+        &self,
+        vuln: &VulnerabilityFinding,
+        current_date: NaiveDate,
+    ) -> Option<SuppressionMatch> {
         let mut ids_to_check = vec![vuln.id.as_str()];
         if let Some(cve) = &vuln.cve {
             ids_to_check.push(cve.as_str());
@@ -153,7 +152,9 @@ impl PolicyEngine {
                     if !is_expired {
                         return Some(SuppressionMatch {
                             rule_id: id.to_string(),
-                            reason: rule.reason.unwrap_or_else(|| "Suppressed via Vexa SCA policy".to_string()),
+                            reason: rule
+                                .reason
+                                .unwrap_or_else(|| "Suppressed via Vexa SCA policy".to_string()),
                             expires: rule.expires,
                             created: rule.created,
                         });
@@ -185,7 +186,11 @@ impl PolicyEngine {
                         .get("created")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
-                    result.push(PolicyRule { reason, expires, created });
+                    result.push(PolicyRule {
+                        reason,
+                        expires,
+                        created,
+                    });
                 }
             }
         } else if let Ok(rule) = serde_yaml::from_value::<PolicyRule>(val.clone()) {
@@ -245,8 +250,14 @@ mod tests {
         let (active, suppressed) = engine.filter_vulnerabilities(&[vuln1, vuln2], Some(date_2026));
 
         assert_eq!(suppressed.len(), 1);
-        assert_eq!(suppressed[0].vulnerability.cve.as_deref(), Some("CVE-2021-23337"));
-        assert_eq!(suppressed[0].suppression.reason, "Not exposed to external untrusted inputs");
+        assert_eq!(
+            suppressed[0].vulnerability.cve.as_deref(),
+            Some("CVE-2021-23337")
+        );
+        assert_eq!(
+            suppressed[0].suppression.reason,
+            "Not exposed to external untrusted inputs"
+        );
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, "GHSA-unignored-xxxx");
     }

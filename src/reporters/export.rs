@@ -1,10 +1,10 @@
 use crate::licenses::license_scanner::LicenseAudit;
 use crate::policy::policy_engine::SuppressedFinding;
-use crate::scanner::vuln_scanner::ScanResult;
-use crate::types::{ReachabilityStatus, RemediationAction};
 pub use crate::reporters::html::format_html_report;
 pub use crate::reporters::sarif::format_sarif_report;
 pub use crate::reporters::sbom::{format_cyclonedx_sbom, format_spdx_sbom, SbomFormat};
+use crate::scanner::vuln_scanner::ScanResult;
+use crate::types::{ReachabilityStatus, RemediationAction};
 use chrono::Utc;
 use std::path::Path;
 
@@ -18,12 +18,22 @@ pub fn format_json_report(
     let reachable_count = scan_result
         .vulnerabilities
         .iter()
-        .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false))
+        .filter(|v| {
+            v.reachability
+                .as_ref()
+                .map(|r| r.status == ReachabilityStatus::Reachable)
+                .unwrap_or(false)
+        })
         .count();
     let unreachable_count = scan_result
         .vulnerabilities
         .iter()
-        .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Unreachable).unwrap_or(false))
+        .filter(|v| {
+            v.reachability
+                .as_ref()
+                .map(|r| r.status == ReachabilityStatus::Unreachable)
+                .unwrap_or(false)
+        })
         .count();
 
     let data = serde_json::json!({
@@ -62,18 +72,34 @@ pub fn format_markdown_report(
 ) -> String {
     let mut md = String::from("# Vexa SCA - Software Composition Analysis Report (Rust Core)\n\n");
     md.push_str(&format!("- **Date**: {}\n", Utc::now().to_rfc2822()));
-    md.push_str(&format!("- **Scanned Dependencies**: {}\n", scan_result.scanned_packages_count));
-    md.push_str(&format!("- **Active Vulnerabilities**: {}\n", scan_result.vulnerabilities.len()));
+    md.push_str(&format!(
+        "- **Scanned Dependencies**: {}\n",
+        scan_result.scanned_packages_count
+    ));
+    md.push_str(&format!(
+        "- **Active Vulnerabilities**: {}\n",
+        scan_result.vulnerabilities.len()
+    ));
 
     let reachable_count = scan_result
         .vulnerabilities
         .iter()
-        .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false))
+        .filter(|v| {
+            v.reachability
+                .as_ref()
+                .map(|r| r.status == ReachabilityStatus::Reachable)
+                .unwrap_or(false)
+        })
         .count();
     let unreachable_count = scan_result
         .vulnerabilities
         .iter()
-        .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Unreachable).unwrap_or(false))
+        .filter(|v| {
+            v.reachability
+                .as_ref()
+                .map(|r| r.status == ReachabilityStatus::Unreachable)
+                .unwrap_or(false)
+        })
         .count();
 
     md.push_str(&format!(
@@ -82,7 +108,10 @@ pub fn format_markdown_report(
     ));
 
     if !suppressed.is_empty() {
-        md.push_str(&format!("- **Suppressed Vulnerabilities (Policy)**: {}\n", suppressed.len()));
+        md.push_str(&format!(
+            "- **Suppressed Vulnerabilities (Policy)**: {}\n",
+            suppressed.len()
+        ));
     }
     if let Some(pf) = policy_file {
         md.push_str(&format!("- **Policy File**: `{}`\n", pf.display()));
@@ -91,10 +120,22 @@ pub fn format_markdown_report(
 
     if let Some(audit) = license_audit {
         md.push_str("## License Compliance Summary\n\n");
-        md.push_str(&format!("- **Permissive (Low Risk)**: {}\n", audit.summary.permissive));
-        md.push_str(&format!("- **Weak Copyleft (Medium Risk)**: {}\n", audit.summary.weak_copyleft));
-        md.push_str(&format!("- **Strong Copyleft (High Risk)**: {}\n", audit.summary.strong_copyleft));
-        md.push_str(&format!("- **Unknown / Unset**: {}\n\n", audit.summary.unknown));
+        md.push_str(&format!(
+            "- **Permissive (Low Risk)**: {}\n",
+            audit.summary.permissive
+        ));
+        md.push_str(&format!(
+            "- **Weak Copyleft (Medium Risk)**: {}\n",
+            audit.summary.weak_copyleft
+        ));
+        md.push_str(&format!(
+            "- **Strong Copyleft (High Risk)**: {}\n",
+            audit.summary.strong_copyleft
+        ));
+        md.push_str(&format!(
+            "- **Unknown / Unset**: {}\n\n",
+            audit.summary.unknown
+        ));
     }
 
     if scan_result.vulnerabilities.is_empty() {
@@ -121,7 +162,11 @@ pub fn format_markdown_report(
                 "-".to_string()
             };
 
-            let ref_link = v.references.first().cloned().unwrap_or_else(|| "#".to_string());
+            let ref_link = v
+                .references
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "#".to_string());
             md.push_str(&format!(
                 "| **{}** ({:.1}) | {} | `{}` | [{}]({}) | {} | {} |\n",
                 v.severity.level.as_str(),
@@ -160,14 +205,21 @@ pub fn format_markdown_report(
             md.push_str(&format!(
                 "### `{}` ({})\n- **Advice**: {}\n- **Current Version**: `{}`\n",
                 rem.package,
-                if rem.is_transitive { "Transitive" } else { "Direct" },
+                if rem.is_transitive {
+                    "Transitive"
+                } else {
+                    "Direct"
+                },
                 rem.advice,
                 rem.current_version
             ));
             if let Some(target) = &rem.target_version {
                 md.push_str(&format!("- **Recommended Version**: `{}`\n", target));
             }
-            md.push_str(&format!("- **Resolves**: {} vulnerabilities\n\n", rem.resolved_vulnerability_count));
+            md.push_str(&format!(
+                "- **Resolves**: {} vulnerabilities\n\n",
+                rem.resolved_vulnerability_count
+            ));
         }
     }
 

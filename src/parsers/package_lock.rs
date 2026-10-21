@@ -13,10 +13,16 @@ impl PackageLockParser {
         let lockfile_path = project_dir.join("package-lock.json");
 
         if !manifest_path.exists() {
-            return Err(format!("package.json not found in {}", project_dir.display()));
+            return Err(format!(
+                "package.json not found in {}",
+                project_dir.display()
+            ));
         }
         if !lockfile_path.exists() {
-            return Err(format!("package-lock.json not found in {}", project_dir.display()));
+            return Err(format!(
+                "package-lock.json not found in {}",
+                project_dir.display()
+            ));
         }
 
         let manifest_str = fs::read_to_string(&manifest_path)
@@ -85,7 +91,10 @@ impl PackageLockParser {
                 continue; // root
             }
 
-            let is_dev = pkg_val.get("dev").and_then(|d| d.as_bool()).unwrap_or(false);
+            let is_dev = pkg_val
+                .get("dev")
+                .and_then(|d| d.as_bool())
+                .unwrap_or(false);
             if !include_dev && is_dev {
                 continue;
             }
@@ -115,7 +124,10 @@ impl PackageLockParser {
                 NodeInfo {
                     scope: if is_dev { "dev".into() } else { "prod".into() },
                     path: Some(pkg_path.clone()),
-                    integrity: pkg_val.get("integrity").and_then(|i| i.as_str()).map(|s| s.to_string()),
+                    integrity: pkg_val
+                        .get("integrity")
+                        .and_then(|i| i.as_str())
+                        .map(|s| s.to_string()),
                 },
             );
         }
@@ -158,7 +170,10 @@ impl PackageLockParser {
                     req_deps.insert(k.clone(), v.as_str().unwrap_or(""));
                 }
             }
-            if let Some(od) = pkg_val.get("optionalDependencies").and_then(|v| v.as_object()) {
+            if let Some(od) = pkg_val
+                .get("optionalDependencies")
+                .and_then(|v| v.as_object())
+            {
                 for (k, v) in od {
                     req_deps.insert(k.clone(), v.as_str().unwrap_or(""));
                 }
@@ -200,7 +215,10 @@ impl PackageLockParser {
             graph: &mut DepGraph,
         ) {
             for (dep_name, dep_val) in deps {
-                let is_dev = dep_val.get("dev").and_then(|d| d.as_bool()).unwrap_or(false);
+                let is_dev = dep_val
+                    .get("dev")
+                    .and_then(|d| d.as_bool())
+                    .unwrap_or(false);
                 if !include_dev && is_dev {
                     continue;
                 }
@@ -224,7 +242,10 @@ impl PackageLockParser {
                     NodeInfo {
                         scope: if is_dev { "dev".into() } else { "prod".into() },
                         path: None,
-                        integrity: dep_val.get("integrity").and_then(|i| i.as_str()).map(|s| s.to_string()),
+                        integrity: dep_val
+                            .get("integrity")
+                            .and_then(|i| i.as_str())
+                            .map(|s| s.to_string()),
                     },
                 );
 

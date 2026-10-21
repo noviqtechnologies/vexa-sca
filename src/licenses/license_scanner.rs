@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LicenseCategory {
     #[serde(rename = "PERMISSIVE")]
     Permissive,
@@ -14,13 +14,8 @@ pub enum LicenseCategory {
     #[serde(rename = "STRONG_COPYLEFT")]
     StrongCopyleft,
     #[serde(rename = "UNKNOWN")]
+    #[default]
     Unknown,
-}
-
-impl Default for LicenseCategory {
-    fn default() -> Self {
-        LicenseCategory::Unknown
-    }
 }
 
 impl LicenseCategory {
@@ -52,10 +47,22 @@ impl Default for LicenseRisk {
 impl LicenseCategory {
     pub fn risk(&self) -> LicenseRisk {
         match self {
-            LicenseCategory::StrongCopyleft => LicenseRisk { level: "HIGH".to_string(), score: 3 },
-            LicenseCategory::WeakCopyleft => LicenseRisk { level: "MEDIUM".to_string(), score: 2 },
-            LicenseCategory::Unknown => LicenseRisk { level: "UNKNOWN".to_string(), score: 1 },
-            LicenseCategory::Permissive => LicenseRisk { level: "LOW".to_string(), score: 0 },
+            LicenseCategory::StrongCopyleft => LicenseRisk {
+                level: "HIGH".to_string(),
+                score: 3,
+            },
+            LicenseCategory::WeakCopyleft => LicenseRisk {
+                level: "MEDIUM".to_string(),
+                score: 2,
+            },
+            LicenseCategory::Unknown => LicenseRisk {
+                level: "UNKNOWN".to_string(),
+                score: 1,
+            },
+            LicenseCategory::Permissive => LicenseRisk {
+                level: "LOW".to_string(),
+                score: 0,
+            },
         }
     }
 }
@@ -107,7 +114,9 @@ impl LicenseScanner {
         let lower = t.to_lowercase();
         match lower.as_str() {
             "mit" => "MIT".to_string(),
-            "apache-2.0" | "apache 2.0" | "apache/2.0" | "asl 2.0" | "apache" => "Apache-2.0".to_string(),
+            "apache-2.0" | "apache 2.0" | "apache/2.0" | "asl 2.0" | "apache" => {
+                "Apache-2.0".to_string()
+            }
             "bsd-2-clause" => "BSD-2-Clause".to_string(),
             "bsd-3-clause" => "BSD-3-Clause".to_string(),
             "bsd-1-clause" => "BSD-1-Clause".to_string(),
@@ -184,10 +193,15 @@ impl LicenseScanner {
         }
 
         // Pre-clean legacy Apache slashes
-        let mut text = clean.replace("Apache/2.0", "Apache-2.0").replace("apache/2.0", "Apache-2.0");
+        let mut text = clean
+            .replace("Apache/2.0", "Apache-2.0")
+            .replace("apache/2.0", "Apache-2.0");
 
         // Convert legacy slash notation and pipe notation to standard SPDX boolean operator OR
-        text = text.replace(" / ", " OR ").replace('/', " OR ").replace(" | ", " OR ");
+        text = text
+            .replace(" / ", " OR ")
+            .replace('/', " OR ")
+            .replace(" | ", " OR ");
 
         // Normalize boolean operators case-insensitively
         let re_and = regex::Regex::new(r"(?i)\s+and\s+|\s+&\s+").unwrap();
@@ -313,7 +327,7 @@ impl LicenseScanner {
                 }
             }
             if full_wrap && depth == 0 {
-                s = &s[1..s.len() - 1].trim();
+                s = s[1..s.len() - 1].trim();
             } else {
                 break;
             }
@@ -360,10 +374,10 @@ impl LicenseScanner {
                     if highest_cat != LicenseCategory::StrongCopyleft {
                         highest_cat = LicenseCategory::WeakCopyleft;
                     }
-                } else if part_cat == LicenseCategory::Unknown {
-                    if highest_cat == LicenseCategory::Permissive {
-                        highest_cat = LicenseCategory::Unknown;
-                    }
+                } else if part_cat == LicenseCategory::Unknown
+                    && highest_cat == LicenseCategory::Permissive
+                {
+                    highest_cat = LicenseCategory::Unknown;
                 }
             }
             return (highest_cat, None);
@@ -410,7 +424,12 @@ impl LicenseScanner {
 
     fn classify_single_license(token: &str) -> LicenseCategory {
         let clean = token.trim().to_lowercase();
-        if clean.is_empty() || clean == "unknown" || clean == "none" || clean == "null" || clean == "noassertion" {
+        if clean.is_empty()
+            || clean == "unknown"
+            || clean == "none"
+            || clean == "null"
+            || clean == "noassertion"
+        {
             return LicenseCategory::Unknown;
         }
 
@@ -428,9 +447,27 @@ impl LicenseScanner {
 
         // Permissive
         let permissive_indicators = [
-            "mit", "apache", "asl", "bsd", "0bsd", "isc", "cc0", "unlicense",
-            "artistic", "zlib", "unicode", "bsl", "boost", "cdla-permissive",
-            "mit-0", "openssl", "curl", "libpng", "public-domain", "blessing", "bzip2",
+            "mit",
+            "apache",
+            "asl",
+            "bsd",
+            "0bsd",
+            "isc",
+            "cc0",
+            "unlicense",
+            "artistic",
+            "zlib",
+            "unicode",
+            "bsl",
+            "boost",
+            "cdla-permissive",
+            "mit-0",
+            "openssl",
+            "curl",
+            "libpng",
+            "public-domain",
+            "blessing",
+            "bzip2",
         ];
         if permissive_indicators.iter().any(|k| clean.contains(k)) {
             return LicenseCategory::Permissive;
@@ -504,8 +541,13 @@ impl LicenseScanner {
                     if let Some(root_node) = dep_graph.nodes.get(&dep_graph.root_node_id) {
                         for dep_node_id in &root_node.deps {
                             if let Some(dep_node) = dep_graph.nodes.get(dep_node_id) {
-                                if dep_node.pkg_id.starts_with(&format!("{}@", pkg.name)) || dep_node.pkg_id == pkg.name {
-                                    return Some(format!("{} -> {}", dep_graph.root_pkg.name, pkg.name));
+                                if dep_node.pkg_id.starts_with(&format!("{}@", pkg.name))
+                                    || dep_node.pkg_id == pkg.name
+                                {
+                                    return Some(format!(
+                                        "{} -> {}",
+                                        dep_graph.root_pkg.name, pkg.name
+                                    ));
                                 }
                             }
                         }
@@ -550,10 +592,11 @@ impl LicenseScanner {
                                 data.get("name").and_then(|n| n.as_str()),
                                 data.get("license"),
                             ) {
-                                let lic_str = lic
-                                    .as_str()
-                                    .map(|s| s.to_string())
-                                    .or_else(|| lic.get("type").and_then(|t| t.as_str()).map(|s| s.to_string()));
+                                let lic_str = lic.as_str().map(|s| s.to_string()).or_else(|| {
+                                    lic.get("type")
+                                        .and_then(|t| t.as_str())
+                                        .map(|s| s.to_string())
+                                });
                                 if let Some(l) = lic_str {
                                     map.insert(name.to_string(), l);
                                 }
@@ -739,12 +782,30 @@ mod tests {
 
     #[test]
     fn test_license_categorization() {
-        assert_eq!(LicenseScanner::categorize_license("MIT").category, LicenseCategory::Permissive);
-        assert_eq!(LicenseScanner::categorize_license("Apache-2.0").category, LicenseCategory::Permissive);
-        assert_eq!(LicenseScanner::categorize_license("BSD-3-Clause").category, LicenseCategory::Permissive);
-        assert_eq!(LicenseScanner::categorize_license("ISC").category, LicenseCategory::Permissive);
-        assert_eq!(LicenseScanner::categorize_license("MIT OR Apache-2.0").category, LicenseCategory::Permissive);
-        assert_eq!(LicenseScanner::categorize_license("Unicode-3.0").category, LicenseCategory::Permissive);
+        assert_eq!(
+            LicenseScanner::categorize_license("MIT").category,
+            LicenseCategory::Permissive
+        );
+        assert_eq!(
+            LicenseScanner::categorize_license("Apache-2.0").category,
+            LicenseCategory::Permissive
+        );
+        assert_eq!(
+            LicenseScanner::categorize_license("BSD-3-Clause").category,
+            LicenseCategory::Permissive
+        );
+        assert_eq!(
+            LicenseScanner::categorize_license("ISC").category,
+            LicenseCategory::Permissive
+        );
+        assert_eq!(
+            LicenseScanner::categorize_license("MIT OR Apache-2.0").category,
+            LicenseCategory::Permissive
+        );
+        assert_eq!(
+            LicenseScanner::categorize_license("Unicode-3.0").category,
+            LicenseCategory::Permissive
+        );
 
         // SPDX normalization and deduplication
         let dual_slash = LicenseScanner::categorize_license("MIT/Apache-2.0");

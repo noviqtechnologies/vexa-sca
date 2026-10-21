@@ -20,7 +20,10 @@ impl ReachabilityEngine {
         known.insert("CVE-2021-23337", vec!["template"]);
         known.insert("GHSA-35jh-r3h4-6jhm", vec!["template"]);
         known.insert("CVE-2020-8203", vec!["set", "setWith", "zipObjectDeep"]);
-        known.insert("GHSA-p6mc-m468-83gw", vec!["set", "setWith", "zipObjectDeep"]);
+        known.insert(
+            "GHSA-p6mc-m468-83gw",
+            vec!["set", "setWith", "zipObjectDeep"],
+        );
         known.insert("CVE-2026-2950", vec!["unset", "omit"]);
         known.insert("GHSA-f23m-r3pf-42rh", vec!["unset", "omit"]);
         known.insert("CVE-2020-28500", vec!["toNumber", "trim", "words"]);
@@ -37,8 +40,14 @@ impl ReachabilityEngine {
         known.insert("GHSA-xvch-5gv4-984h", vec!["minimist", "parse"]);
 
         // Log4j Core
-        known.insert("CVE-2021-44228", vec!["error", "warn", "info", "debug", "trace", "fatal"]);
-        known.insert("GHSA-jfh8-c2jp-5v3q", vec!["error", "warn", "info", "debug", "trace", "fatal"]);
+        known.insert(
+            "CVE-2021-44228",
+            vec!["error", "warn", "info", "debug", "trace", "fatal"],
+        );
+        known.insert(
+            "GHSA-jfh8-c2jp-5v3q",
+            vec!["error", "warn", "info", "debug", "trace", "fatal"],
+        );
 
         // Requests
         known.insert("CVE-2024-35195", vec!["Session", "request"]);
@@ -52,15 +61,20 @@ impl ReachabilityEngine {
     }
 
     fn find_source_files(dir: &Path, max_files: usize) -> Vec<PathBuf> {
-        let valid_exts: HashSet<&str> = [
-            "js", "ts", "mjs", "cjs", "jsx", "tsx", "py", "java", "go",
-        ]
-        .iter()
-        .cloned()
-        .collect();
+        let valid_exts: HashSet<&str> =
+            ["js", "ts", "mjs", "cjs", "jsx", "tsx", "py", "java", "go"]
+                .iter()
+                .cloned()
+                .collect();
 
         let ignore_dirs: HashSet<&str> = [
-            "node_modules", ".git", "dist", "build", ".sca-cache", "target", "vendor",
+            "node_modules",
+            ".git",
+            "dist",
+            "build",
+            ".sca-cache",
+            "target",
+            "vendor",
         ]
         .iter()
         .cloned()
@@ -95,7 +109,10 @@ impl ReachabilityEngine {
         files
     }
 
-    pub fn evaluate_reachability(&self, mut vulnerabilities: Vec<VulnerabilityFinding>) -> Vec<VulnerabilityFinding> {
+    pub fn evaluate_reachability(
+        &self,
+        mut vulnerabilities: Vec<VulnerabilityFinding>,
+    ) -> Vec<VulnerabilityFinding> {
         for v in &mut vulnerabilities {
             let reach = self.check_vulnerability(v);
             v.reachability = Some(reach);
@@ -181,7 +198,9 @@ impl ReachabilityEngine {
 
     fn infer_functions_from_details(&self, vuln: &VulnerabilityFinding) -> Option<Vec<String>> {
         let text = format!("{} {}", vuln.title, vuln.details.as_deref().unwrap_or(""));
-        let re = Regex::new(r"(?i)`?_?\.([a-zA-Z0-9_]+)`?\s+function|function\s+`?([a-zA-Z0-9_]+)`?").ok()?;
+        let re =
+            Regex::new(r"(?i)`?_?\.([a-zA-Z0-9_]+)`?\s+function|function\s+`?([a-zA-Z0-9_]+)`?")
+                .ok()?;
         if let Some(cap) = re.captures(&text) {
             let name = cap.get(1).or_else(|| cap.get(2))?.as_str();
             return Some(vec![name.to_string()]);
@@ -202,8 +221,12 @@ impl ReachabilityEngine {
         let mut imported_named_functions: HashSet<String> = HashSet::new();
 
         // 1. Identify bindings
-        let req_re = Regex::new(r#"(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*require\(['"]([^'"]+)['"]\)"#).unwrap();
-        let esm_re = Regex::new(r#"import\s+(?:\*\s+as\s+)?([a-zA-Z0-9_$]+)\s+from\s+['"]([^'"]+)['"]"#).unwrap();
+        let req_re =
+            Regex::new(r#"(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*require\(['"]([^'"]+)['"]\)"#)
+                .unwrap();
+        let esm_re =
+            Regex::new(r#"import\s+(?:\*\s+as\s+)?([a-zA-Z0-9_$]+)\s+from\s+['"]([^'"]+)['"]"#)
+                .unwrap();
         let named_esm_re = Regex::new(r#"import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]"#).unwrap();
         let py_re = Regex::new(r#"^import\s+([a-zA-Z0-9_]+)(?:\s+as\s+([a-zA-Z0-9_]+))?"#).unwrap();
         let py_from_re = Regex::new(r#"^from\s+([a-zA-Z0-9_]+)\s+import\s+(.+)"#).unwrap();
@@ -266,7 +289,11 @@ impl ReachabilityEngine {
                 let mut matched = false;
                 for fn_name in targets {
                     if let Some(alias) = &import_alias {
-                        let pat = format!(r"\b{}\.{}\s*\(", regex::escape(alias), regex::escape(fn_name));
+                        let pat = format!(
+                            r"\b{}\.{}\s*\(",
+                            regex::escape(alias),
+                            regex::escape(fn_name)
+                        );
                         if let Ok(re) = Regex::new(&pat) {
                             if re.is_match(line) {
                                 matches.push((

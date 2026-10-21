@@ -85,7 +85,9 @@ impl VulnScanner {
             }
         }
 
-        let full_advisories = self.fetch_advisories(unique_vuln_ids.into_iter().collect()).await;
+        let full_advisories = self
+            .fetch_advisories(unique_vuln_ids.into_iter().collect())
+            .await;
 
         // 4. Construct enriched and deduplicated vulnerability findings
         let mut vulnerabilities = Vec::new();
@@ -99,7 +101,11 @@ impl VulnScanner {
             let is_transitive = dep_graph.is_transitive(&pkg.id);
             let paths_strings: Vec<Vec<String>> = paths_to_root
                 .iter()
-                .map(|p| p.iter().map(|node| format!("{}@{}", node.name, node.version)).collect())
+                .map(|p| {
+                    p.iter()
+                        .map(|node| format!("{}@{}", node.name, node.version))
+                        .collect()
+                })
                 .collect();
 
             // Collect unique full advisories for this package
@@ -119,14 +125,18 @@ impl VulnScanner {
             let clusters = self.cluster_advisories(&pkg_advisories);
 
             for cluster in clusters {
-                if let Some(finding) = self.merge_cluster_into_finding(pkg, is_transitive, &paths_strings, &cluster) {
+                if let Some(finding) =
+                    self.merge_cluster_into_finding(pkg, is_transitive, &paths_strings, &cluster)
+                {
                     vulnerabilities.push(finding);
                 }
             }
         }
 
         // Enrich findings with EPSS exploit prediction likelihood
-        self.epss_resolver.enrich_findings(&mut vulnerabilities).await;
+        self.epss_resolver
+            .enrich_findings(&mut vulnerabilities)
+            .await;
 
         // Record scan volume under unlimited developer quota
         self.usage_limiter.record_scan();
@@ -171,7 +181,12 @@ impl VulnScanner {
                     if let Some(results) = data.get("results").and_then(|r| r.as_array()) {
                         return results
                             .iter()
-                            .map(|r| r.get("vulns").and_then(|v| v.as_array()).cloned().unwrap_or_default())
+                            .map(|r| {
+                                r.get("vulns")
+                                    .and_then(|v| v.as_array())
+                                    .cloned()
+                                    .unwrap_or_default()
+                            })
                             .collect();
                     }
                 }
@@ -310,43 +325,55 @@ impl VulnScanner {
             let k = kv.next().unwrap_or("").trim();
             let v = kv.next().unwrap_or("").trim();
             match k {
-                "AV" => av = match v {
-                    "N" => Some(0.85),
-                    "A" => Some(0.62),
-                    "L" => Some(0.55),
-                    "P" => Some(0.20),
-                    _ => None,
-                },
-                "AC" => ac = match v {
-                    "L" => Some(0.77),
-                    "H" => Some(0.44),
-                    _ => None,
-                },
+                "AV" => {
+                    av = match v {
+                        "N" => Some(0.85),
+                        "A" => Some(0.62),
+                        "L" => Some(0.55),
+                        "P" => Some(0.20),
+                        _ => None,
+                    }
+                }
+                "AC" => {
+                    ac = match v {
+                        "L" => Some(0.77),
+                        "H" => Some(0.44),
+                        _ => None,
+                    }
+                }
                 "PR" => pr = Some(v),
-                "UI" => ui = match v {
-                    "N" => Some(0.85),
-                    "R" => Some(0.62),
-                    _ => None,
-                },
+                "UI" => {
+                    ui = match v {
+                        "N" => Some(0.85),
+                        "R" => Some(0.62),
+                        _ => None,
+                    }
+                }
                 "S" => s_changed = v == "C",
-                "C" => c = match v {
-                    "H" => Some(0.56),
-                    "L" => Some(0.22),
-                    "N" => Some(0.0),
-                    _ => None,
-                },
-                "I" => i = match v {
-                    "H" => Some(0.56),
-                    "L" => Some(0.22),
-                    "N" => Some(0.0),
-                    _ => None,
-                },
-                "A" => a = match v {
-                    "H" => Some(0.56),
-                    "L" => Some(0.22),
-                    "N" => Some(0.0),
-                    _ => None,
-                },
+                "C" => {
+                    c = match v {
+                        "H" => Some(0.56),
+                        "L" => Some(0.22),
+                        "N" => Some(0.0),
+                        _ => None,
+                    }
+                }
+                "I" => {
+                    i = match v {
+                        "H" => Some(0.56),
+                        "L" => Some(0.22),
+                        "N" => Some(0.0),
+                        _ => None,
+                    }
+                }
+                "A" => {
+                    a = match v {
+                        "H" => Some(0.56),
+                        "L" => Some(0.22),
+                        "N" => Some(0.0),
+                        _ => None,
+                    }
+                }
                 _ => {}
             }
         }
@@ -391,7 +418,11 @@ impl VulnScanner {
     }
 
     fn estimate_score_from_cvss(&self, vector: &str) -> Option<f64> {
-        if vector.contains("AV:N") && vector.contains("AC:L") && vector.contains("C:H") && vector.contains("I:H") {
+        if vector.contains("AV:N")
+            && vector.contains("AC:L")
+            && vector.contains("C:H")
+            && vector.contains("I:H")
+        {
             Some(9.8)
         } else if vector.contains("AV:N") && vector.contains("AC:L") {
             Some(7.5)
@@ -464,9 +495,9 @@ impl VulnScanner {
         }
 
         let mut groups: HashMap<usize, Vec<&'a Value>> = HashMap::new();
-        for i in 0..n {
+        for (i, adv) in advisories.iter().enumerate().take(n) {
             let root = find(i, &mut parent);
-            groups.entry(root).or_default().push(advisories[i]);
+            groups.entry(root).or_default().push(*adv);
         }
 
         groups.into_values().collect()
@@ -502,10 +533,7 @@ impl VulnScanner {
         }
 
         // Find CVE if available
-        let cve = all_ids
-            .iter()
-            .find(|id| id.starts_with("CVE-"))
-            .cloned();
+        let cve = all_ids.iter().find(|id| id.starts_with("CVE-")).cloned();
 
         // Determine primary ID (Prefer GHSA -> CVE -> RUSTSEC -> others)
         let primary_id = primary_candidates
@@ -513,19 +541,34 @@ impl VulnScanner {
             .find(|id| id.starts_with("GHSA-"))
             .cloned()
             .or_else(|| cve.clone())
-            .or_else(|| primary_candidates.iter().find(|id| id.starts_with("RUSTSEC-")).cloned())
-            .unwrap_or_else(|| primary_candidates.first().cloned().unwrap_or_else(|| "UNKNOWN".to_string()));
+            .or_else(|| {
+                primary_candidates
+                    .iter()
+                    .find(|id| id.starts_with("RUSTSEC-"))
+                    .cloned()
+            })
+            .unwrap_or_else(|| {
+                primary_candidates
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "UNKNOWN".to_string())
+            });
 
-        let mut aliases: Vec<String> = all_ids
-            .into_iter()
-            .filter(|id| id != &primary_id)
-            .collect();
+        let mut aliases: Vec<String> = all_ids.into_iter().filter(|id| id != &primary_id).collect();
         aliases.sort();
 
         // 2. Classify Category (Security Vulnerability vs Unmaintained vs Informational)
         let is_unmaintained = cluster.iter().any(|adv| {
-            let sum = adv.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-            let det = adv.get("details").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let sum = adv
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let det = adv
+                .get("details")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
             sum.contains("is unmaintained")
                 || sum.contains("unmaintained crate")
                 || sum.contains("unmaintained;")
@@ -563,7 +606,7 @@ impl VulnScanner {
                     }
                 }
             }
-            highest_sev.unwrap_or_else(|| SeverityInfo {
+            highest_sev.unwrap_or(SeverityInfo {
                 level: SeverityLevel::Medium,
                 score: 5.0,
                 vector: None,
@@ -603,8 +646,13 @@ impl VulnScanner {
                     .iter()
                     .filter_map(|adv| adv.get("details").and_then(|d| d.as_str()))
                     .find_map(|s| {
-                        let first_line = s.lines().find(|l| !l.trim().is_empty()).unwrap_or(s).trim();
-                        let clean = first_line.trim_start_matches('#').trim_start_matches('*').trim_start_matches('-').trim();
+                        let first_line =
+                            s.lines().find(|l| !l.trim().is_empty()).unwrap_or(s).trim();
+                        let clean = first_line
+                            .trim_start_matches('#')
+                            .trim_start_matches('*')
+                            .trim_start_matches('-')
+                            .trim();
                         if clean.is_empty() {
                             return None;
                         }
@@ -709,7 +757,9 @@ mod tests {
         assert_eq!(clusters.len(), 2);
 
         let pkg = PkgInfo::new("hickory-proto", "0.25.2", "crates.io");
-        let merged1 = scanner.merge_cluster_into_finding(&pkg, true, &[], &[&adv1, &adv2]).unwrap();
+        let merged1 = scanner
+            .merge_cluster_into_finding(&pkg, true, &[], &[&adv1, &adv2])
+            .unwrap();
 
         assert_eq!(merged1.cve.as_deref(), Some("CVE-2026-93657"));
         assert_eq!(merged1.severity.level, SeverityLevel::High);
@@ -729,7 +779,9 @@ mod tests {
         });
 
         let pkg = PkgInfo::new("instant", "0.1.13", "crates.io");
-        let finding = scanner.merge_cluster_into_finding(&pkg, true, &[], &[&adv]).unwrap();
+        let finding = scanner
+            .merge_cluster_into_finding(&pkg, true, &[], &[&adv])
+            .unwrap();
 
         assert_eq!(finding.advisory_category, AdvisoryCategory::Unmaintained);
         assert_eq!(finding.severity.level, SeverityLevel::Low);
@@ -752,4 +804,3 @@ mod tests {
         assert_eq!(sev.score, 7.5);
     }
 }
-

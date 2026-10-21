@@ -66,7 +66,11 @@ pub fn format_sarif_report(
                     .join("\n")
             );
 
-            let mut tags = vec!["security".to_string(), "sca".to_string(), vuln.ecosystem.clone()];
+            let mut tags = vec![
+                "security".to_string(),
+                "sca".to_string(),
+                vuln.ecosystem.clone(),
+            ];
             for cwe in &vuln.cwes {
                 tags.push(cwe.clone());
             }
@@ -212,8 +216,10 @@ mod tests {
 
     #[test]
     fn test_format_sarif_report_valid_schema() {
-        let mut scan_result = ScanResult::default();
-        scan_result.scanned_packages_count = 5;
+        let mut scan_result = ScanResult {
+            scanned_packages_count: 5,
+            ..Default::default()
+        };
 
         scan_result.vulnerabilities.push(VulnerabilityFinding {
             id: "GHSA-35jh-r3h4-6jhm".to_string(),
@@ -231,24 +237,37 @@ mod tests {
             cwes: vec!["CWE-78".to_string()],
             fixed_in: vec!["4.17.21".to_string()],
             is_transitive: false,
-            paths: vec![vec!["my-app@1.0.0".to_string(), "lodash@4.17.15".to_string()]],
+            paths: vec![vec![
+                "my-app@1.0.0".to_string(),
+                "lodash@4.17.15".to_string(),
+            ]],
             details: Some("A command injection flaw exists in lodash template.".to_string()),
             references: vec!["https://nvd.nist.gov/vuln/detail/CVE-2021-23337".to_string()],
             reachability: None,
             ..Default::default()
         });
 
-        let sarif_str = format_sarif_report(&scan_result, &[], Some(Path::new("package-lock.json")));
+        let sarif_str =
+            format_sarif_report(&scan_result, &[], Some(Path::new("package-lock.json")));
         let parsed: Value = serde_json::from_str(&sarif_str).expect("Valid JSON");
 
         assert_eq!(parsed["version"], "2.1.0");
         assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "vexa-sca");
-        assert_eq!(parsed["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            parsed["runs"][0]["tool"]["driver"]["rules"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(parsed["runs"][0]["results"].as_array().unwrap().len(), 1);
 
         let res = &parsed["runs"][0]["results"][0];
         assert_eq!(res["ruleId"], "CVE-2021-23337");
         assert_eq!(res["level"], "error");
-        assert_eq!(res["locations"][0]["physicalLocation"]["artifactLocation"]["uri"], "package-lock.json");
+        assert_eq!(
+            res["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "package-lock.json"
+        );
     }
 }

@@ -30,6 +30,8 @@ impl Default for OsInfo {
     }
 }
 
+type ManifestInspection = Option<(Vec<String>, Option<String>)>;
+
 pub struct OsPackageDetector;
 
 impl OsPackageDetector {
@@ -52,7 +54,11 @@ impl OsPackageDetector {
             }
         }
 
-        OsInfo { name, version_id, id }
+        OsInfo {
+            name,
+            version_id,
+            id,
+        }
     }
 
     /// Parses Alpine Linux /lib/apk/db/installed
@@ -90,7 +96,9 @@ impl OsPackageDetector {
         }
 
         if let (Some(name), Some(ver)) = (current_pkg.take(), current_ver.take()) {
-            let lic = current_lic.take().or_else(|| Self::get_standard_linux_license(&name).map(|s| s.to_string()));
+            let lic = current_lic
+                .take()
+                .or_else(|| Self::get_standard_linux_license(&name).map(|s| s.to_string()));
             packages.push(OsPackage {
                 name,
                 version: ver,
@@ -117,7 +125,9 @@ impl OsPackageDetector {
             "libp11-kit0" => Some("BSD-3-Clause"),
             "libpsl5" => Some("MIT"),
             "libsqlite3-0" => Some("blessing"),
-            "libncurses6" | "libncursesw6" | "libtinfo6" | "ncurses-base" | "ncurses-bin" => Some("MIT"),
+            "libncurses6" | "libncursesw6" | "libtinfo6" | "ncurses-base" | "ncurses-bin" => {
+                Some("MIT")
+            }
             "tzdata" => Some("public-domain"),
             "login" | "passwd" | "shadow" => Some("BSD-3-Clause"),
             "liblzma5" | "xz-utils" => Some("0BSD"),
@@ -155,12 +165,17 @@ impl OsPackageDetector {
             "base-files" => Some("GPL-2.0-or-later"),
             "base-passwd" => Some("GPL-2.0-or-later"),
             "debianutils" => Some("GPL-2.0-or-later"),
-            "util-linux" | "libblkid1" | "libmount1" | "libsmartcols1" | "libuuid1" | "bsdextrautils" | "fdisk" | "mount" => {
+            "util-linux" | "libblkid1" | "libmount1" | "libsmartcols1" | "libuuid1"
+            | "bsdextrautils" | "fdisk" | "mount" => {
                 Some("GPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-4-Clause-UC")
             }
-            "e2fsprogs" | "libcom-err2" | "libext2fs2" | "libss2" => Some("GPL-2.0-or-later AND LGPL-2.0-or-later"),
+            "e2fsprogs" | "libcom-err2" | "libext2fs2" | "libss2" => {
+                Some("GPL-2.0-or-later AND LGPL-2.0-or-later")
+            }
             "libsepol2" | "libselinux1" => Some("GPL-2.0-or-later"),
-            "libpam0g" | "libpam-runtime" | "libpam-modules" | "libpam-modules-bin" => Some("BSD-3-Clause OR GPL-2.0-or-later"),
+            "libpam0g" | "libpam-runtime" | "libpam-modules" | "libpam-modules-bin" => {
+                Some("BSD-3-Clause OR GPL-2.0-or-later")
+            }
             "libcap2" | "libcap2-bin" => Some("GPL-2.0-only OR BSD-3-Clause"),
             "libattr1" => Some("GPL-2.0-or-later AND LGPL-2.1-or-later"),
             "ca-certificates" => Some("MPL-2.0 OR GPL-2.0-or-later"),
@@ -174,7 +189,11 @@ impl OsPackageDetector {
     }
 
     /// Parses Debian/Ubuntu /var/lib/dpkg/status
-    pub fn parse_debian_status(content: &str, os_id: &str, os_version: Option<&str>) -> Vec<OsPackage> {
+    pub fn parse_debian_status(
+        content: &str,
+        os_id: &str,
+        os_version: Option<&str>,
+    ) -> Vec<OsPackage> {
         let ecosystem = if os_id.contains("ubuntu") {
             if let Some(ver) = os_version {
                 if !ver.is_empty() && ver != "unknown" {
@@ -272,7 +291,10 @@ impl OsPackageDetector {
                             name: name.to_string(),
                             version: ver.to_string(),
                             architecture: None,
-                            license: v.get("license").and_then(|s| s.as_str()).map(|s| s.to_string()),
+                            license: v
+                                .get("license")
+                                .and_then(|s| s.as_str())
+                                .map(|s| s.to_string()),
                             ecosystem: "npm".to_string(),
                         });
                     }
@@ -377,7 +399,8 @@ impl OsPackageDetector {
 
     /// Scans a container archive (.tar or .tar.gz)
     pub fn scan_tar_archive(tar_path: &Path) -> Result<(OsInfo, Vec<OsPackage>), String> {
-        let is_gz = tar_path.to_string_lossy().ends_with(".gz") || tar_path.to_string_lossy().ends_with(".tgz");
+        let is_gz = tar_path.to_string_lossy().ends_with(".gz")
+            || tar_path.to_string_lossy().ends_with(".tgz");
 
         // Inspect manifest to detect Docker / OCI layered image archive
         let manifest_layers = Self::inspect_manifest(tar_path, is_gz)?;
@@ -386,7 +409,8 @@ impl OsPackageDetector {
             Self::scan_layered_tar(tar_path, is_gz, ordered_layers, repo_tag)
         } else {
             // Flat rootfs archive
-            let file = File::open(tar_path).map_err(|e| format!("Failed to open {}: {}", tar_path.display(), e))?;
+            let file = File::open(tar_path)
+                .map_err(|e| format!("Failed to open {}: {}", tar_path.display(), e))?;
             if is_gz {
                 let gz = GzDecoder::new(file);
                 let mut archive = Archive::new(gz);
@@ -398,8 +422,9 @@ impl OsPackageDetector {
         }
     }
 
-    fn inspect_manifest(tar_path: &Path, is_gz: bool) -> Result<Option<(Vec<String>, Option<String>)>, String> {
-        let file = File::open(tar_path).map_err(|e| format!("Failed to open {}: {}", tar_path.display(), e))?;
+    fn inspect_manifest(tar_path: &Path, is_gz: bool) -> Result<ManifestInspection, String> {
+        let file = File::open(tar_path)
+            .map_err(|e| format!("Failed to open {}: {}", tar_path.display(), e))?;
         let mut manifest_content = None;
         let mut index_content = None;
 
@@ -454,7 +479,8 @@ impl OsPackageDetector {
                 if let Some(manifests) = idx_val.get("manifests").and_then(|m| m.as_array()) {
                     if let Some(first_man) = manifests.first() {
                         if let Some(digest) = first_man.get("digest").and_then(|d| d.as_str()) {
-                            let digest_blob = format!("blobs/sha256/{}", digest.trim_start_matches("sha256:"));
+                            let digest_blob =
+                                format!("blobs/sha256/{}", digest.trim_start_matches("sha256:"));
                             return Ok(Some((vec![digest_blob], None)));
                         }
                     }
@@ -470,7 +496,10 @@ impl OsPackageDetector {
         man: &mut Option<String>,
         idx: &mut Option<String>,
     ) {
-        let path = entry.path().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+        let path = entry
+            .path()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
         if path == "manifest.json" {
             let mut buf = String::new();
             let _ = entry.read_to_string(&mut buf);
@@ -488,16 +517,18 @@ impl OsPackageDetector {
         ordered_layers: Vec<String>,
         repo_tag: Option<String>,
     ) -> Result<(OsInfo, Vec<OsPackage>), String> {
-        let mut layer_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut layer_map: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for (idx, layer) in ordered_layers.iter().enumerate() {
             let norm = layer.replace('\\', "/");
             layer_map.insert(norm.clone(), idx);
-            if let Some(filename) = norm.split('/').last() {
+            if let Some(filename) = norm.split('/').next_back() {
                 layer_map.insert(filename.to_string(), idx);
             }
         }
 
-        let file = File::open(tar_path).map_err(|e| format!("Failed to open {}: {}", tar_path.display(), e))?;
+        let file = File::open(tar_path)
+            .map_err(|e| format!("Failed to open {}: {}", tar_path.display(), e))?;
 
         let mut latest_os_release: Option<(usize, String)> = None;
         let mut latest_dpkg: Option<(usize, String)> = None;
@@ -572,14 +603,21 @@ impl OsPackageDetector {
         latest_apk: &mut Option<(usize, String)>,
         app_packages: &mut Vec<OsPackage>,
     ) {
-        let path = entry.path().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+        let path = entry
+            .path()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
 
         let layer_idx = if let Some(&idx) = layer_map.get(&path) {
             Some(idx)
-        } else if let Some(filename) = path.split('/').last() {
+        } else if let Some(filename) = path.split('/').next_back() {
             if let Some(&idx) = layer_map.get(filename) {
                 Some(idx)
-            } else if path.starts_with("blobs/sha256/") || path.ends_with("/layer.tar") || path.ends_with(".tar") || path.ends_with(".tar.gz") {
+            } else if path.starts_with("blobs/sha256/")
+                || path.ends_with("/layer.tar")
+                || path.ends_with(".tar")
+                || path.ends_with(".tar.gz")
+            {
                 Some(0)
             } else {
                 None
@@ -636,10 +674,15 @@ impl OsPackageDetector {
         };
 
         for mut entry in entries.flatten() {
-            let path = entry.path().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+            let path = entry
+                .path()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
 
             if path.ends_with("etc/os-release") || path.ends_with("usr/lib/os-release") {
-                let should_read = latest_os_release.as_ref().map_or(true, |(idx, _)| layer_idx >= *idx);
+                let should_read = latest_os_release
+                    .as_ref()
+                    .is_none_or(|(idx, _)| layer_idx >= *idx);
                 if should_read {
                     let mut buf = String::new();
                     if entry.read_to_string(&mut buf).is_ok() {
@@ -647,7 +690,9 @@ impl OsPackageDetector {
                     }
                 }
             } else if path.ends_with("var/lib/dpkg/status") {
-                let should_read = latest_dpkg.as_ref().map_or(true, |(idx, _)| layer_idx >= *idx);
+                let should_read = latest_dpkg
+                    .as_ref()
+                    .is_none_or(|(idx, _)| layer_idx >= *idx);
                 if should_read {
                     let mut buf = String::new();
                     if entry.read_to_string(&mut buf).is_ok() {
@@ -655,7 +700,7 @@ impl OsPackageDetector {
                     }
                 }
             } else if path.ends_with("lib/apk/db/installed") {
-                let should_read = latest_apk.as_ref().map_or(true, |(idx, _)| layer_idx >= *idx);
+                let should_read = latest_apk.as_ref().is_none_or(|(idx, _)| layer_idx >= *idx);
                 if should_read {
                     let mut buf = String::new();
                     if entry.read_to_string(&mut buf).is_ok() {
@@ -681,12 +726,16 @@ impl OsPackageDetector {
         }
     }
 
-    fn extract_and_parse_tar<R: Read>(archive: &mut Archive<R>) -> Result<(OsInfo, Vec<OsPackage>), String> {
+    fn extract_and_parse_tar<R: Read>(
+        archive: &mut Archive<R>,
+    ) -> Result<(OsInfo, Vec<OsPackage>), String> {
         let mut os_release_content = None;
         let mut apk_content = None;
         let mut dpkg_content = None;
 
-        let entries = archive.entries().map_err(|e| format!("Failed to read tar entries: {}", e))?;
+        let entries = archive
+            .entries()
+            .map_err(|e| format!("Failed to read tar entries: {}", e))?;
 
         for entry_res in entries {
             let mut entry = match entry_res {
@@ -694,7 +743,10 @@ impl OsPackageDetector {
                 Err(_) => continue,
             };
 
-            let path = entry.path().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+            let path = entry
+                .path()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
 
             if path.ends_with("etc/os-release") && os_release_content.is_none() {
                 let mut buf = String::new();

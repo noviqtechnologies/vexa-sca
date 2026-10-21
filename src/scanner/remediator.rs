@@ -5,7 +5,9 @@ use std::collections::{BTreeSet, HashMap};
 pub struct Remediator;
 
 impl Remediator {
-    pub fn generate_remediation(vulnerabilities: &[VulnerabilityFinding]) -> Vec<RemediationAction> {
+    pub fn generate_remediation(
+        vulnerabilities: &[VulnerabilityFinding],
+    ) -> Vec<RemediationAction> {
         let mut by_pkg: HashMap<String, Vec<&VulnerabilityFinding>> = HashMap::new();
         for v in vulnerabilities {
             by_pkg.entry(v.pkg_id.clone()).or_default().push(v);
@@ -34,7 +36,9 @@ impl Remediator {
             let mut valid_upgrades: Vec<String> = candidate_fixes
                 .into_iter()
                 .filter(|fix| {
-                    if let (Some(cur), Some(candidate)) = (&current_semver, clean_or_coerce_version(fix)) {
+                    if let (Some(cur), Some(candidate)) =
+                        (&current_semver, clean_or_coerce_version(fix))
+                    {
                         candidate > *cur
                     } else {
                         false
@@ -174,7 +178,11 @@ mod tests {
             },
             fixed_in: vec!["0.11.17".to_string()],
             is_transitive: true,
-            paths: vec![vec!["my-app@1.0.0".to_string(), "quinn@0.11.11".to_string(), "quinn-proto@0.11.16".to_string()]],
+            paths: vec![vec![
+                "my-app@1.0.0".to_string(),
+                "quinn@0.11.11".to_string(),
+                "quinn-proto@0.11.16".to_string(),
+            ]],
             ..Default::default()
         };
 
@@ -192,7 +200,11 @@ mod tests {
             },
             fixed_in: vec!["0.11.18".to_string()],
             is_transitive: true,
-            paths: vec![vec!["my-app@1.0.0".to_string(), "quinn@0.11.11".to_string(), "quinn-proto@0.11.16".to_string()]],
+            paths: vec![vec![
+                "my-app@1.0.0".to_string(),
+                "quinn@0.11.11".to_string(),
+                "quinn-proto@0.11.16".to_string(),
+            ]],
             ..Default::default()
         };
 
@@ -205,4 +217,3 @@ mod tests {
         assert_eq!(rem.resolved_vulnerability_count, 2);
     }
 }
-

@@ -21,8 +21,8 @@ impl PomXmlParser {
             return Err(format!("pom.xml not found at {}", pom_path.display()));
         }
 
-        let content = fs::read_to_string(&pom_path)
-            .map_err(|e| format!("Failed to read pom.xml: {}", e))?;
+        let content =
+            fs::read_to_string(&pom_path).map_err(|e| format!("Failed to read pom.xml: {}", e))?;
 
         let root_artifact = Self::extract_tag(&content, "artifactId").unwrap_or_else(|| {
             project_dir
@@ -31,7 +31,8 @@ impl PomXmlParser {
                 .unwrap_or("java-app")
                 .to_string()
         });
-        let root_version = Self::extract_tag(&content, "version").unwrap_or_else(|| "1.0.0".to_string());
+        let root_version =
+            Self::extract_tag(&content, "version").unwrap_or_else(|| "1.0.0".to_string());
 
         let root_pkg = PkgInfo::new(root_artifact, root_version, "Maven");
         let mut graph = DepGraph::new(
@@ -47,7 +48,8 @@ impl PomXmlParser {
             let block = &cap[1];
             let group_id = Self::extract_tag(block, "groupId");
             let artifact_id = Self::extract_tag(block, "artifactId");
-            let version = Self::extract_tag(block, "version").unwrap_or_else(|| "0.0.0".to_string());
+            let version =
+                Self::extract_tag(block, "version").unwrap_or_else(|| "0.0.0".to_string());
             let scope = Self::extract_tag(block, "scope").unwrap_or_else(|| "prod".to_string());
 
             if let (Some(gid), Some(aid)) = (group_id, artifact_id) {

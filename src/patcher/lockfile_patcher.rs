@@ -69,7 +69,10 @@ impl LockfilePatcher {
     ) -> Result<PatchResult, String> {
         let pkg_json_path = project_dir.join("package.json");
         if !pkg_json_path.exists() {
-            return Err(format!("package.json not found in {}", project_dir.display()));
+            return Err(format!(
+                "package.json not found in {}",
+                project_dir.display()
+            ));
         }
 
         let original_content = fs::read_to_string(&pkg_json_path)
@@ -97,10 +100,14 @@ impl LockfilePatcher {
             if !rem.is_transitive {
                 let mut found = false;
 
-                if let Some(deps) = pkg_json.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
+                if let Some(deps) = pkg_json
+                    .get_mut("dependencies")
+                    .and_then(|d| d.as_object_mut())
+                {
                     if let Some(old_val) = deps.get(&rem.package).cloned() {
                         let old_ver = old_val.as_str().unwrap_or("").to_string();
-                        let (change, is_breaking) = classify_semver_change(&old_ver, target_version);
+                        let (change, is_breaking) =
+                            classify_semver_change(&old_ver, target_version);
                         deps.insert(rem.package.clone(), Value::String(new_ver.clone()));
                         changes.direct_upgrades.push(DirectUpgrade {
                             package: rem.package.clone(),
@@ -117,10 +124,14 @@ impl LockfilePatcher {
                     }
                 }
 
-                if let Some(dev_deps) = pkg_json.get_mut("devDependencies").and_then(|d| d.as_object_mut()) {
+                if let Some(dev_deps) = pkg_json
+                    .get_mut("devDependencies")
+                    .and_then(|d| d.as_object_mut())
+                {
                     if let Some(old_val) = dev_deps.get(&rem.package).cloned() {
                         let old_ver = old_val.as_str().unwrap_or("").to_string();
-                        let (change, is_breaking) = classify_semver_change(&old_ver, target_version);
+                        let (change, is_breaking) =
+                            classify_semver_change(&old_ver, target_version);
                         dev_deps.insert(rem.package.clone(), Value::String(new_ver.clone()));
                         changes.direct_upgrades.push(DirectUpgrade {
                             package: rem.package.clone(),
@@ -140,7 +151,8 @@ impl LockfilePatcher {
                 if !found {
                     // Add to overrides
                     Self::insert_override(&mut pkg_json, &rem.package, &new_ver);
-                    let (change, is_breaking) = classify_semver_change(&rem.current_version, target_version);
+                    let (change, is_breaking) =
+                        classify_semver_change(&rem.current_version, target_version);
                     changes.transitive_overrides.push(TransitiveOverride {
                         package: rem.package.clone(),
                         current_version: Some(rem.current_version.clone()),
@@ -154,7 +166,8 @@ impl LockfilePatcher {
                 }
             } else {
                 Self::insert_override(&mut pkg_json, &rem.package, &new_ver);
-                let (change, is_breaking) = classify_semver_change(&rem.current_version, target_version);
+                let (change, is_breaking) =
+                    classify_semver_change(&rem.current_version, target_version);
                 changes.transitive_overrides.push(TransitiveOverride {
                     package: rem.package.clone(),
                     current_version: Some(rem.current_version.clone()),
@@ -191,7 +204,10 @@ impl LockfilePatcher {
         if pkg_json.get("overrides").is_none() {
             pkg_json["overrides"] = Value::Object(serde_json::Map::new());
         }
-        if let Some(ov) = pkg_json.get_mut("overrides").and_then(|o| o.as_object_mut()) {
+        if let Some(ov) = pkg_json
+            .get_mut("overrides")
+            .and_then(|o| o.as_object_mut())
+        {
             ov.insert(package.to_string(), Value::String(pinned_to.to_string()));
         }
     }
@@ -214,7 +230,11 @@ mod tests {
                 "lodash": "4.17.15"
             }
         });
-        fs::write(&pkg_json_path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
+        fs::write(
+            &pkg_json_path,
+            serde_json::to_string_pretty(&initial).unwrap(),
+        )
+        .unwrap();
 
         let remediations = vec![
             RemediationAction {

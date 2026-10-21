@@ -99,7 +99,8 @@ mod tests {
     #[test]
     fn test_python_requirements_parser_fixture() {
         let fixture_dir = Path::new("test/fixtures/python-app");
-        let graph = PythonRequirementsParser::parse(fixture_dir).expect("should parse requirements.txt");
+        let graph =
+            PythonRequirementsParser::parse(fixture_dir).expect("should parse requirements.txt");
 
         let pkgs = graph.get_all_pkgs();
         let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();

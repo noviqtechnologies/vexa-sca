@@ -9,6 +9,7 @@ pub struct QualityGateOptions {
     pub fail_on_reachable: bool,
     pub fail_on_licenses: Option<String>,
     pub fail_on_unmaintained: bool,
+    pub no_fail: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -17,6 +18,7 @@ pub struct QualityGateResult {
     pub failure_reasons: Vec<String>,
     pub reachable_violations: usize,
     pub deferred_unreachable_count: usize,
+    pub no_fail: bool,
 }
 
 pub struct QualityGate;
@@ -32,13 +34,23 @@ impl QualityGate {
         let reachable_count = scan_result
             .vulnerabilities
             .iter()
-            .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false))
+            .filter(|v| {
+                v.reachability
+                    .as_ref()
+                    .map(|r| r.status == ReachabilityStatus::Reachable)
+                    .unwrap_or(false)
+            })
             .count();
 
         let unreachable_count = scan_result
             .vulnerabilities
             .iter()
-            .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Unreachable).unwrap_or(false))
+            .filter(|v| {
+                v.reachability
+                    .as_ref()
+                    .map(|r| r.status == ReachabilityStatus::Unreachable)
+                    .unwrap_or(false)
+            })
             .count();
 
         let sec_vulns: Vec<_> = scan_result
@@ -60,7 +72,11 @@ impl QualityGate {
                 .filter(|v| {
                     let meets_sev = v.severity.level.weight() >= threshold.weight();
                     if options.fail_on_reachable {
-                        meets_sev && v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false)
+                        meets_sev
+                            && v.reachability
+                                .as_ref()
+                                .map(|r| r.status == ReachabilityStatus::Reachable)
+                                .unwrap_or(false)
                     } else {
                         meets_sev
                     }
@@ -68,7 +84,11 @@ impl QualityGate {
                 .count();
 
             if violating_count > 0 {
-                let scope = if options.fail_on_reachable { "reachable " } else { "" };
+                let scope = if options.fail_on_reachable {
+                    "reachable "
+                } else {
+                    ""
+                };
                 failure_reasons.push(format!(
                     "Found {} {}vulnerabilities at or above '{}' threshold",
                     violating_count,
@@ -112,37 +132,57 @@ impl QualityGate {
         if let Some(lic_policy) = &options.fail_on_licenses {
             if let Some(audit) = license_audit {
                 let policy_lower = lic_policy.trim().to_lowercase();
-                if policy_lower.contains("strong") || policy_lower == "copyleft" {
-                    if audit.summary.strong_copyleft > 0 {
-                        failure_reasons.push(format!(
-                            "Found {} Strong Copyleft (GPL/AGPL) licensed packages violating policy",
-                            audit.summary.strong_copyleft
-                        ));
-                    }
-                } else if policy_lower.contains("weak") {
-                    if audit.summary.weak_copyleft > 0 || audit.summary.strong_copyleft > 0 {
-                        failure_reasons.push(format!(
-                            "Found {} Copyleft (Weak/Strong) licensed packages violating policy",
-                            audit.summary.weak_copyleft + audit.summary.strong_copyleft
-                        ));
-                    }
+                if (policy_lower.contains("strong") || policy_lower == "copyleft")
+                    && audit.summary.strong_copyleft > 0
+                {
+                    failure_reasons.push(format!(
+                        "Found {} Strong Copyleft (GPL/AGPL) licensed packages violating policy",
+                        audit.summary.strong_copyleft
+                    ));
+                } else if policy_lower.contains("weak")
+                    && (audit.summary.weak_copyleft > 0 || audit.summary.strong_copyleft > 0)
+                {
+                    failure_reasons.push(format!(
+                        "Found {} Copyleft (Weak/Strong) licensed packages violating policy",
+                        audit.summary.weak_copyleft + audit.summary.strong_copyleft
+                    ));
                 }
             }
         }
 
-        let passed = failure_reasons.is_empty();
+        let passed = if options.no_fail {
+            true
+        } else {
+            failure_reasons.is_empty()
+        };
         QualityGateResult {
             passed,
             failure_reasons,
             reachable_violations: reachable_count,
             deferred_unreachable_count: unreachable_count,
+            no_fail: options.no_fail,
         }
     }
 
     pub fn print_terminal_summary(res: &QualityGateResult) {
         println!("\n{}", "─".repeat(70));
-        if res.passed {
-            println!("{}", "✔ CI/CD QUALITY GATE PASSED: All security & policy checks satisfied.".green().bold());
+        if res.no_fail && !res.failure_reasons.is_empty() {
+            println!(
+                "{}",
+                "ℹ CI/CD QUALITY GATE: Findings detected, exiting 0 (--no-fail / --report-only active)."
+                    .yellow()
+                    .bold()
+            );
+            for reason in &res.failure_reasons {
+                println!("  ↳ {}", reason.dimmed());
+            }
+        } else if res.passed {
+            println!(
+                "{}",
+                "✔ CI/CD QUALITY GATE PASSED: All security & policy checks satisfied."
+                    .green()
+                    .bold()
+            );
             if res.deferred_unreachable_count > 0 {
                 println!(
                     "  ↳ {} unreachable vulnerabilities deferred to backlog (0 active runtime risks)",
@@ -150,7 +190,12 @@ impl QualityGate {
                 );
             }
         } else {
-            println!("{}", "✖ CI/CD QUALITY GATE FAILED: Policy violation(s) detected:".red().bold());
+            println!(
+                "{}",
+                "✖ CI/CD QUALITY GATE FAILED: Policy violation(s) detected:"
+                    .red()
+                    .bold()
+            );
             for reason in &res.failure_reasons {
                 println!("  ↳ {}", reason.yellow());
             }
@@ -186,19 +231,15 @@ mod tests {
         // Fail only on HIGH: should PASS because finding is LOW
         let opts = QualityGateOptions {
             fail_on_severity: Some(SeverityLevel::High),
-            fail_on_reachable: false,
-            fail_on_licenses: None,
-            fail_on_unmaintained: false,
+            ..Default::default()
         };
         let res = QualityGate::evaluate(&scan_result, None, &opts);
         assert!(res.passed);
 
         // Fail on reachable: finding has no reachability -> PASS
         let opts_reach = QualityGateOptions {
-            fail_on_severity: None,
             fail_on_reachable: true,
-            fail_on_licenses: None,
-            fail_on_unmaintained: false,
+            ..Default::default()
         };
         let res_reach = QualityGate::evaluate(&scan_result, None, &opts_reach);
         assert!(res_reach.passed);
@@ -209,8 +250,34 @@ mod tests {
             fail_on_reachable: false,
             fail_on_licenses: None,
             fail_on_unmaintained: false,
+            no_fail: false,
         };
         let res_low = QualityGate::evaluate(&scan_result, None, &opts_low);
         assert!(!res_low.passed);
+
+        // Default gate (no flags): fails on any active security vulnerability
+        let opts_default = QualityGateOptions {
+            fail_on_severity: None,
+            fail_on_reachable: false,
+            fail_on_licenses: None,
+            fail_on_unmaintained: false,
+            no_fail: false,
+        };
+        let res_default = QualityGate::evaluate(&scan_result, None, &opts_default);
+        assert!(!res_default.passed);
+        assert_eq!(res_default.failure_reasons.len(), 1);
+
+        // --no-fail / --report-only: passes even if findings exist
+        let opts_no_fail = QualityGateOptions {
+            fail_on_severity: None,
+            fail_on_reachable: false,
+            fail_on_licenses: None,
+            fail_on_unmaintained: false,
+            no_fail: true,
+        };
+        let res_no_fail = QualityGate::evaluate(&scan_result, None, &opts_no_fail);
+        assert!(res_no_fail.passed);
+        assert!(res_no_fail.no_fail);
+        assert!(!res_no_fail.failure_reasons.is_empty());
     }
 }

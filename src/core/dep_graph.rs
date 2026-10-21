@@ -91,10 +91,16 @@ impl DepGraph {
 
     pub fn add_edge(&mut self, from_node_id: &str, to_node_id: &str) -> Result<(), String> {
         if !self.nodes.contains_key(from_node_id) {
-            return Err(format!("Parent node \"{}\" does not exist in graph", from_node_id));
+            return Err(format!(
+                "Parent node \"{}\" does not exist in graph",
+                from_node_id
+            ));
         }
         if !self.nodes.contains_key(to_node_id) {
-            return Err(format!("Child node \"{}\" does not exist in graph", to_node_id));
+            return Err(format!(
+                "Child node \"{}\" does not exist in graph",
+                to_node_id
+            ));
         }
 
         let parent = self.nodes.get_mut(from_node_id).unwrap();
@@ -192,7 +198,11 @@ impl DepGraph {
             .collect()
     }
 
-    fn find_paths_to_root_dfs(&self, current_node_id: &str, remaining_limit: usize) -> Vec<Vec<String>> {
+    fn find_paths_to_root_dfs(
+        &self,
+        current_node_id: &str,
+        remaining_limit: usize,
+    ) -> Vec<Vec<String>> {
         let mut paths = Vec::new();
         if remaining_limit == 0 {
             return paths;
@@ -358,6 +368,7 @@ impl DepGraph {
         out
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_tree_dfs(
         &self,
         node_id: &str,
@@ -392,7 +403,11 @@ impl DepGraph {
         if current_depth >= max_depth {
             if !node.deps.is_empty() {
                 let next_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
-                out.push_str(&format!("{}└── ... ({} dependencies truncated)\n", next_prefix, node.deps.len()));
+                out.push_str(&format!(
+                    "{}└── ... ({} dependencies truncated)\n",
+                    next_prefix,
+                    node.deps.len()
+                ));
             }
             return;
         }
@@ -428,12 +443,28 @@ mod tests {
     #[test]
     fn test_dep_graph_basic() {
         let root = PkgInfo::new("my-app", "1.0.0", "npm");
-        let mut graph = DepGraph::new(root, PkgManagerInfo { name: "npm".into(), version: "1.0.0".into() });
+        let mut graph = DepGraph::new(
+            root,
+            PkgManagerInfo {
+                name: "npm".into(),
+                version: "1.0.0".into(),
+            },
+        );
 
         let dep1 = PkgInfo::new("express", "4.18.2", "npm");
         let pkg_id = graph.add_pkg(dep1.clone());
-        graph.add_node("node-express".into(), pkg_id, NodeInfo { scope: "prod".into(), path: None, integrity: None });
-        graph.add_edge(&graph.root_node_id.clone(), "node-express").unwrap();
+        graph.add_node(
+            "node-express".into(),
+            pkg_id,
+            NodeInfo {
+                scope: "prod".into(),
+                path: None,
+                integrity: None,
+            },
+        );
+        graph
+            .add_edge(&graph.root_node_id.clone(), "node-express")
+            .unwrap();
 
         assert_eq!(graph.get_all_pkgs().len(), 1);
         assert!(!graph.is_transitive(&dep1.id));
@@ -442,7 +473,13 @@ mod tests {
     #[test]
     fn test_dep_graph_transitive_and_paths() {
         let root = PkgInfo::new("my-app", "1.0.0", "npm");
-        let mut graph = DepGraph::new(root, PkgManagerInfo { name: "npm".into(), version: "1.0.0".into() });
+        let mut graph = DepGraph::new(
+            root,
+            PkgManagerInfo {
+                name: "npm".into(),
+                version: "1.0.0".into(),
+            },
+        );
 
         let direct = PkgInfo::new("express", "4.18.2", "npm");
         let transitive = PkgInfo::new("qs", "6.11.0", "npm");
@@ -450,10 +487,28 @@ mod tests {
         graph.add_pkg(direct.clone());
         graph.add_pkg(transitive.clone());
 
-        graph.add_node("node-direct".into(), direct.id.clone(), NodeInfo { scope: "prod".into(), path: None, integrity: None });
-        graph.add_node("node-transitive".into(), transitive.id.clone(), NodeInfo { scope: "prod".into(), path: None, integrity: None });
+        graph.add_node(
+            "node-direct".into(),
+            direct.id.clone(),
+            NodeInfo {
+                scope: "prod".into(),
+                path: None,
+                integrity: None,
+            },
+        );
+        graph.add_node(
+            "node-transitive".into(),
+            transitive.id.clone(),
+            NodeInfo {
+                scope: "prod".into(),
+                path: None,
+                integrity: None,
+            },
+        );
 
-        graph.add_edge(&graph.root_node_id.clone(), "node-direct").unwrap();
+        graph
+            .add_edge(&graph.root_node_id.clone(), "node-direct")
+            .unwrap();
         graph.add_edge("node-direct", "node-transitive").unwrap();
 
         assert!(graph.is_transitive(&transitive.id));
@@ -468,7 +523,13 @@ mod tests {
     #[test]
     fn test_dep_graph_cycle_detection() {
         let root = PkgInfo::new("cycle-app", "1.0.0", "npm");
-        let mut graph = DepGraph::new(root, PkgManagerInfo { name: "npm".into(), version: "1.0.0".into() });
+        let mut graph = DepGraph::new(
+            root,
+            PkgManagerInfo {
+                name: "npm".into(),
+                version: "1.0.0".into(),
+            },
+        );
 
         let a = PkgInfo::new("a", "1.0.0", "npm");
         let b = PkgInfo::new("b", "1.0.0", "npm");
@@ -476,10 +537,28 @@ mod tests {
         graph.add_pkg(a.clone());
         graph.add_pkg(b.clone());
 
-        graph.add_node("node-a".into(), a.id.clone(), NodeInfo { scope: "prod".into(), path: None, integrity: None });
-        graph.add_node("node-b".into(), b.id.clone(), NodeInfo { scope: "prod".into(), path: None, integrity: None });
+        graph.add_node(
+            "node-a".into(),
+            a.id.clone(),
+            NodeInfo {
+                scope: "prod".into(),
+                path: None,
+                integrity: None,
+            },
+        );
+        graph.add_node(
+            "node-b".into(),
+            b.id.clone(),
+            NodeInfo {
+                scope: "prod".into(),
+                path: None,
+                integrity: None,
+            },
+        );
 
-        graph.add_edge(&graph.root_node_id.clone(), "node-a").unwrap();
+        graph
+            .add_edge(&graph.root_node_id.clone(), "node-a")
+            .unwrap();
         graph.add_edge("node-a", "node-b").unwrap();
         assert!(!graph.has_cycles());
 
@@ -490,7 +569,13 @@ mod tests {
     #[test]
     fn test_dep_graph_serialization() {
         let root = PkgInfo::new("schema-app", "1.0.0", "npm");
-        let graph = DepGraph::new(root, PkgManagerInfo { name: "npm".into(), version: "1.0.0".into() });
+        let graph = DepGraph::new(
+            root,
+            PkgManagerInfo {
+                name: "npm".into(),
+                version: "1.0.0".into(),
+            },
+        );
         let json = graph.to_json();
 
         assert_eq!(json["schemaVersion"], "1.2.0");

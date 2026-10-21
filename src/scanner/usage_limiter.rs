@@ -105,8 +105,14 @@ mod tests {
         let limiter = CloudUsageLimiter::new(&temp_dir);
         let report = limiter.get_usage_report();
 
-        assert!(report.is_unlimited, "Free Developer tier must be unlimited for local scans");
-        assert_eq!(report.monthly_limit, None, "Monthly limit should be None for unlimited");
+        assert!(
+            report.is_unlimited,
+            "Free Developer tier must be unlimited for local scans"
+        );
+        assert_eq!(
+            report.monthly_limit, None,
+            "Monthly limit should be None for unlimited"
+        );
         assert_eq!(report.status, "Active (Unrestricted)");
 
         let updated = limiter.record_scan();

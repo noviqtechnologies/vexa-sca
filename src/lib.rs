@@ -83,7 +83,12 @@ pub async fn scan_project(
 
     let unreachable_total = active
         .iter()
-        .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Unreachable).unwrap_or(false))
+        .filter(|v| {
+            v.reachability
+                .as_ref()
+                .map(|r| r.status == ReachabilityStatus::Unreachable)
+                .unwrap_or(false)
+        })
         .count();
 
     // Filter to reachable only if requested
@@ -109,12 +114,22 @@ pub async fn scan_project(
 
     // Sort: Reachable first, then by severity
     active.sort_by(|a, b| {
-        let reach_a = if a.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false) {
+        let reach_a = if a
+            .reachability
+            .as_ref()
+            .map(|r| r.status == ReachabilityStatus::Reachable)
+            .unwrap_or(false)
+        {
             1
         } else {
             0
         };
-        let reach_b = if b.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false) {
+        let reach_b = if b
+            .reachability
+            .as_ref()
+            .map(|r| r.status == ReachabilityStatus::Reachable)
+            .unwrap_or(false)
+        {
             1
         } else {
             0
@@ -136,7 +151,10 @@ pub async fn scan_project(
 
     // 7. License audit
     let license_audit = if options.licenses {
-        Some(LicenseScanner::scan_graph_licenses(&detection.graph, project_dir))
+        Some(LicenseScanner::scan_graph_licenses(
+            &detection.graph,
+            project_dir,
+        ))
     } else {
         None
     };
@@ -175,10 +193,7 @@ mod tests {
             .collect();
         assert!(!lodash_vulns.is_empty());
 
-        let lodash_rem = output
-            .remediations
-            .iter()
-            .find(|r| r.package == "lodash");
+        let lodash_rem = output.remediations.iter().find(|r| r.package == "lodash");
         assert!(lodash_rem.is_some());
         let rem = lodash_rem.unwrap();
         assert!(rem.target_version.is_some());
@@ -189,18 +204,30 @@ mod tests {
     async fn test_scan_project_reachability_filter() {
         let fixture_dir = Path::new("test/fixtures/reachability-app");
 
-        let normal = scan_project(fixture_dir, ScanOptions::default()).await.unwrap();
+        let normal = scan_project(fixture_dir, ScanOptions::default())
+            .await
+            .unwrap();
         let reachable_count = normal
             .scan_result
             .vulnerabilities
             .iter()
-            .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false))
+            .filter(|v| {
+                v.reachability
+                    .as_ref()
+                    .map(|r| r.status == ReachabilityStatus::Reachable)
+                    .unwrap_or(false)
+            })
             .count();
         let unreachable_count = normal
             .scan_result
             .vulnerabilities
             .iter()
-            .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Unreachable).unwrap_or(false))
+            .filter(|v| {
+                v.reachability
+                    .as_ref()
+                    .map(|r| r.status == ReachabilityStatus::Unreachable)
+                    .unwrap_or(false)
+            })
             .count();
 
         assert!(reachable_count > 0);
@@ -217,11 +244,11 @@ mod tests {
         .unwrap();
 
         assert!(!filtered.scan_result.vulnerabilities.is_empty());
-        assert!(filtered
-            .scan_result
-            .vulnerabilities
-            .iter()
-            .all(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false)));
+        assert!(filtered.scan_result.vulnerabilities.iter().all(|v| v
+            .reachability
+            .as_ref()
+            .map(|r| r.status == ReachabilityStatus::Reachable)
+            .unwrap_or(false)));
     }
 
     #[tokio::test]
@@ -257,7 +284,8 @@ mod tests {
             Some(&output.manifest_file),
         );
 
-        let parsed: serde_json::Value = serde_json::from_str(&sarif_json).expect("valid SARIF JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&sarif_json).expect("valid SARIF JSON");
         assert_eq!(parsed["version"], "2.1.0");
         assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "vexa-sca");
         assert!(!parsed["runs"][0]["results"].as_array().unwrap().is_empty());
@@ -266,7 +294,9 @@ mod tests {
     #[tokio::test]
     async fn test_scan_project_html_dashboard() {
         let fixture_dir = Path::new("test/fixtures/npm-app");
-        let output = scan_project(fixture_dir, ScanOptions::default()).await.unwrap();
+        let output = scan_project(fixture_dir, ScanOptions::default())
+            .await
+            .unwrap();
 
         let html = crate::reporters::export::format_html_report(
             &output.scan_result,
@@ -286,7 +316,9 @@ mod tests {
     #[tokio::test]
     async fn test_scan_project_cyclonedx_sbom() {
         let fixture_dir = Path::new("test/fixtures/npm-app");
-        let output = scan_project(fixture_dir, ScanOptions::default()).await.unwrap();
+        let output = scan_project(fixture_dir, ScanOptions::default())
+            .await
+            .unwrap();
 
         let cdx_json = crate::reporters::export::format_cyclonedx_sbom(
             &output.dep_graph,
@@ -303,9 +335,10 @@ mod tests {
     #[tokio::test]
     async fn test_scan_container_rootfs_fixture() {
         let fixture_dir = Path::new("test/fixtures/alpine-rootfs");
-        let output = crate::container::container_scanner::ContainerScanner::scan_target(fixture_dir)
-            .await
-            .expect("should scan container rootfs");
+        let output =
+            crate::container::container_scanner::ContainerScanner::scan_target(fixture_dir)
+                .await
+                .expect("should scan container rootfs");
 
         assert_eq!(output.os_info.id, "alpine");
         assert_eq!(output.packages.len(), 3);

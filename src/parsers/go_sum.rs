@@ -26,14 +26,13 @@ impl GoLockParser {
             ));
         }
 
-        let root_module_name = Self::read_root_module_name(&go_mod_path)
-            .unwrap_or_else(|| {
-                project_dir
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("go-app")
-                    .to_string()
-            });
+        let root_module_name = Self::read_root_module_name(&go_mod_path).unwrap_or_else(|| {
+            project_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("go-app")
+                .to_string()
+        });
 
         let root_pkg = PkgInfo::new(root_module_name, "1.0.0", "Go");
         let mut graph = DepGraph::new(
@@ -71,8 +70,8 @@ impl GoLockParser {
     }
 
     fn parse_go_sum(graph: &mut DepGraph, go_sum_path: &Path) -> Result<(), String> {
-        let content = fs::read_to_string(go_sum_path)
-            .map_err(|e| format!("Failed to read go.sum: {}", e))?;
+        let content =
+            fs::read_to_string(go_sum_path).map_err(|e| format!("Failed to read go.sum: {}", e))?;
         let mut seen = HashSet::new();
 
         for line in content.lines() {
@@ -117,8 +116,8 @@ impl GoLockParser {
     }
 
     fn parse_go_mod(graph: &mut DepGraph, go_mod_path: &Path) -> Result<(), String> {
-        let content = fs::read_to_string(go_mod_path)
-            .map_err(|e| format!("Failed to read go.mod: {}", e))?;
+        let content =
+            fs::read_to_string(go_mod_path).map_err(|e| format!("Failed to read go.mod: {}", e))?;
         let mut in_require = false;
 
         for line in content.lines() {
@@ -188,7 +187,10 @@ mod tests {
         assert!(names.contains(&"github.com/gin-gonic/gin"));
         assert!(names.contains(&"golang.org/x/crypto"));
 
-        let gin = pkgs.iter().find(|p| p.name == "github.com/gin-gonic/gin").unwrap();
+        let gin = pkgs
+            .iter()
+            .find(|p| p.name == "github.com/gin-gonic/gin")
+            .unwrap();
         assert_eq!(gin.version, "1.7.0");
         assert_eq!(gin.ecosystem, "Go");
     }

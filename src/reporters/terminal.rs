@@ -1,7 +1,9 @@
 use crate::licenses::license_scanner::{LicenseAudit, LicenseCategory};
 use crate::policy::policy_engine::SuppressedFinding;
 use crate::scanner::vuln_scanner::ScanResult;
-use crate::types::{AdvisoryCategory, ReachabilityResult, ReachabilityStatus, RemediationAction, SeverityLevel};
+use crate::types::{
+    AdvisoryCategory, ReachabilityResult, ReachabilityStatus, RemediationAction, SeverityLevel,
+};
 use colored::*;
 use std::path::Path;
 
@@ -18,7 +20,9 @@ pub fn format_severity_badge(level: SeverityLevel) -> ColoredString {
 pub fn format_reachability_badge(reachability: Option<&ReachabilityResult>) -> String {
     match reachability {
         Some(r) => match r.status {
-            ReachabilityStatus::Reachable => format!("{}", " 🚨 REACHABLE ".on_red().white().bold()),
+            ReachabilityStatus::Reachable => {
+                format!("{}", " 🚨 REACHABLE ".on_red().white().bold())
+            }
             ReachabilityStatus::Unreachable => format!("{}", "[🛡️ UNREACHABLE]".green().bold()),
             ReachabilityStatus::Unknown => "".to_string(),
         },
@@ -36,11 +40,22 @@ pub fn render_terminal_report(
     let vulns = &scan_result.vulnerabilities;
 
     println!("\n{}", "=".repeat(78));
-    println!(" {}", "Vexa SCA Security & Reachability Scan Results (Rust Core)".cyan().bold());
+    println!(
+        " {}",
+        "Vexa SCA Security & Reachability Scan Results (Rust Core)"
+            .cyan()
+            .bold()
+    );
     println!("{}", "=".repeat(78));
 
-    println!("Scanned Dependencies : {}", scan_result.scanned_packages_count.to_string().bold());
-    println!("Scan Quota           : {}", "Unlimited (Free Developer Edition)".green());
+    println!(
+        "Scanned Dependencies : {}",
+        scan_result.scanned_packages_count.to_string().bold()
+    );
+    println!(
+        "Scan Quota           : {}",
+        "Unlimited (Free Developer Edition)".green()
+    );
     println!(
         "Dependency Cycles    : {}",
         if scan_result.has_cycles {
@@ -52,14 +67,24 @@ pub fn render_terminal_report(
 
     let reachable_count = vulns
         .iter()
-        .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Reachable).unwrap_or(false))
+        .filter(|v| {
+            v.reachability
+                .as_ref()
+                .map(|r| r.status == ReachabilityStatus::Reachable)
+                .unwrap_or(false)
+        })
         .count();
     let unreachable_count = if scan_result.unreachable_count > 0 {
         scan_result.unreachable_count
     } else {
         vulns
             .iter()
-            .filter(|v| v.reachability.as_ref().map(|r| r.status == ReachabilityStatus::Unreachable).unwrap_or(false))
+            .filter(|v| {
+                v.reachability
+                    .as_ref()
+                    .map(|r| r.status == ReachabilityStatus::Unreachable)
+                    .unwrap_or(false)
+            })
             .count()
     };
 
@@ -67,15 +92,22 @@ pub fn render_terminal_report(
         println!(
             "Reachability (Deep)  : 🚨 {} | 🛡️ {}",
             if reachable_count > 0 {
-                format!("{} Active Call-sites", reachable_count).red().bold().to_string()
+                format!("{} Active Call-sites", reachable_count)
+                    .red()
+                    .bold()
+                    .to_string()
             } else {
                 "0".green().to_string()
             },
             if unreachable_count > 0 {
                 if vulns.is_empty() {
-                    format!("{} Filtered (Low Risk / Unreachable)", unreachable_count).green().to_string()
+                    format!("{} Filtered (Low Risk / Unreachable)", unreachable_count)
+                        .green()
+                        .to_string()
                 } else {
-                    format!("{} Not Called (Low Risk)", unreachable_count).green().to_string()
+                    format!("{} Not Called (Low Risk)", unreachable_count)
+                        .green()
+                        .to_string()
                 }
             } else {
                 "0".to_string()
@@ -91,20 +123,38 @@ pub fn render_terminal_report(
     }
 
     if let Some(pf) = policy_file {
-        println!("Policy File          : {}", pf.display().to_string().dimmed());
+        println!(
+            "Policy File          : {}",
+            pf.display().to_string().dimmed()
+        );
     }
     if !suppressed.is_empty() {
-        println!("Suppressed (Ignored) : {}", suppressed.len().to_string().yellow().bold());
+        println!(
+            "Suppressed (Ignored) : {}",
+            suppressed.len().to_string().yellow().bold()
+        );
     }
     let unm_vulns: Vec<_> = vulns
         .iter()
         .filter(|v| v.advisory_category == AdvisoryCategory::Unmaintained)
         .collect();
 
-    let crit_count = vulns.iter().filter(|v| v.severity.level == SeverityLevel::Critical).count();
-    let high_count = vulns.iter().filter(|v| v.severity.level == SeverityLevel::High).count();
-    let med_count = vulns.iter().filter(|v| v.severity.level == SeverityLevel::Medium).count();
-    let low_count = vulns.iter().filter(|v| v.severity.level == SeverityLevel::Low).count();
+    let crit_count = vulns
+        .iter()
+        .filter(|v| v.severity.level == SeverityLevel::Critical)
+        .count();
+    let high_count = vulns
+        .iter()
+        .filter(|v| v.severity.level == SeverityLevel::High)
+        .count();
+    let med_count = vulns
+        .iter()
+        .filter(|v| v.severity.level == SeverityLevel::Medium)
+        .count();
+    let low_count = vulns
+        .iter()
+        .filter(|v| v.severity.level == SeverityLevel::Low)
+        .count();
 
     let mut breakdown = Vec::new();
     if crit_count > 0 {
@@ -120,7 +170,11 @@ pub fn render_terminal_report(
         breakdown.push(format!("LOW: {}", low_count).blue().to_string());
     }
     if !unm_vulns.is_empty() {
-        breakdown.push(format!("UNMAINTAINED: {}", unm_vulns.len()).magenta().to_string());
+        breakdown.push(
+            format!("UNMAINTAINED: {}", unm_vulns.len())
+                .magenta()
+                .to_string(),
+        );
     }
 
     let breakdown_str = if !breakdown.is_empty() {
@@ -146,7 +200,10 @@ pub fn render_terminal_report(
         println!(" {}", "License Compliance Audit:".bold());
         println!("{}", "-".repeat(78));
         println!(" Total Evaluated     : {}", sum.total);
-        println!(" Permissive (Low)    : {}", sum.permissive.to_string().green());
+        println!(
+            " Permissive (Low)    : {}",
+            sum.permissive.to_string().green()
+        );
         println!(
             " Weak Copyleft (Med) : {}",
             if sum.weak_copyleft > 0 {
@@ -158,19 +215,37 @@ pub fn render_terminal_report(
         println!(
             " Strong Copyleft     : {}",
             if sum.strong_copyleft > 0 {
-                format!("{} (High Risk / GPL!)", sum.strong_copyleft).red().bold().to_string()
+                format!("{} (High Risk / GPL!)", sum.strong_copyleft)
+                    .red()
+                    .bold()
+                    .to_string()
             } else {
                 "0 (None)".green().to_string()
             }
         );
         if sum.unknown > 0 {
-            println!(" Unknown / Unset     : {}", sum.unknown.to_string().dimmed());
+            println!(
+                " Unknown / Unset     : {}",
+                sum.unknown.to_string().dimmed()
+            );
         }
 
         if sum.strong_copyleft > 0 {
-            println!("\n {} Strong copyleft licenses detected:", " WARNING ".on_red().white());
-            for r in audit.results.iter().filter(|r| r.category == LicenseCategory::StrongCopyleft) {
-                println!("   • {}@{}: {}", r.package.bold(), r.version, r.license.red());
+            println!(
+                "\n {} Strong copyleft licenses detected:",
+                " WARNING ".on_red().white()
+            );
+            for r in audit
+                .results
+                .iter()
+                .filter(|r| r.category == LicenseCategory::StrongCopyleft)
+            {
+                println!(
+                    "   • {}@{}: {}",
+                    r.package.bold(),
+                    r.version,
+                    r.license.red()
+                );
             }
         }
     }
@@ -178,7 +253,12 @@ pub fn render_terminal_report(
     // 2. Suppressed
     if !suppressed.is_empty() {
         println!("\n{}", "-".repeat(78));
-        println!(" {}", "Suppressed Vulnerabilities (via Vexa SCA Policy):".yellow().bold());
+        println!(
+            " {}",
+            "Suppressed Vulnerabilities (via Vexa SCA Policy):"
+                .yellow()
+                .bold()
+        );
         println!("{}", "-".repeat(78));
         for s in suppressed {
             let v = &s.vulnerability;
@@ -209,7 +289,12 @@ pub fn render_terminal_report(
                 format_severity_badge(v.severity.level)
             };
             let reach_badge = format_reachability_badge(v.reachability.as_ref());
-            let cve_str = v.cve.as_ref().map(|c| format!("({})", c)).unwrap_or_default().dimmed();
+            let cve_str = v
+                .cve
+                .as_ref()
+                .map(|c| format!("({})", c))
+                .unwrap_or_default()
+                .dimmed();
             let score_str = if v.advisory_category == AdvisoryCategory::Unmaintained {
                 "Advisory".to_string()
             } else if let Some(ref epss) = v.epss {
@@ -220,7 +305,8 @@ pub fn render_terminal_report(
             };
 
             let id_display = if !v.aliases.is_empty() {
-                let alias_filter: Vec<_> = v.aliases
+                let alias_filter: Vec<_> = v
+                    .aliases
                     .iter()
                     .filter(|a| a.as_str() != v.id.as_str() && Some(a.as_str()) != v.cve.as_deref())
                     .take(3)
@@ -235,19 +321,32 @@ pub fn render_terminal_report(
                 v.id.cyan().to_string()
             };
 
-            println!("\n {} {} {} {}", sev_badge, reach_badge, v.title.bold(), cve_str);
+            println!(
+                "\n {} {} {} {}",
+                sev_badge,
+                reach_badge,
+                v.title.bold(),
+                cve_str
+            );
             println!("   ID          : {} [{}]", id_display, score_str);
             println!(
                 "   Package     : {}@{} ({})",
                 v.package.magenta(),
                 v.version,
-                if v.is_transitive { "Transitive" } else { "Direct" }
+                if v.is_transitive {
+                    "Transitive"
+                } else {
+                    "Direct"
+                }
             );
 
             if !v.fixed_in.is_empty() {
                 println!("   Fixed in    : {}", v.fixed_in.join(", ").green().bold());
             } else {
-                println!("   Fixed in    : {}", "No fix available (Vendor backlog / unfixed)".dimmed());
+                println!(
+                    "   Fixed in    : {}",
+                    "No fix available (Vendor backlog / unfixed)".dimmed()
+                );
             }
 
             if let Some(reach) = &v.reachability {
@@ -264,7 +363,8 @@ pub fn render_terminal_report(
                 } else if reach.status == ReachabilityStatus::Unreachable {
                     println!(
                         "   Execution   : {}",
-                        "Unreachable in application source code (vulnerable functions not called)".green()
+                        "Unreachable in application source code (vulnerable functions not called)"
+                            .green()
                     );
                 }
             }
@@ -280,13 +380,21 @@ pub fn render_terminal_report(
             }
         }
     } else {
-        println!("\n{}", "✔ No active vulnerabilities found in project dependencies!".green().bold());
+        println!(
+            "\n{}",
+            "✔ No active vulnerabilities found in project dependencies!"
+                .green()
+                .bold()
+        );
     }
 
     // 4. Remediations
     if !remediations.is_empty() {
         println!("\n{}", "=".repeat(78));
-        println!(" {}", "Recommended Remediations & Upgrade Paths:".green().bold());
+        println!(
+            " {}",
+            "Recommended Remediations & Upgrade Paths:".green().bold()
+        );
         println!("{}", "=".repeat(78));
 
         for (idx, rem) in remediations.iter().enumerate() {
@@ -295,10 +403,17 @@ pub fn render_terminal_report(
                 idx + 1,
                 rem.package.bold(),
                 rem.current_version,
-                if rem.is_transitive { "transitive" } else { "direct" }
+                if rem.is_transitive {
+                    "transitive"
+                } else {
+                    "direct"
+                }
             );
             println!("     Action : {}", rem.advice.yellow());
-            println!("     Impact : Resolves {} vulnerability/advisories", rem.resolved_vulnerability_count);
+            println!(
+                "     Impact : Resolves {} vulnerability/advisories",
+                rem.resolved_vulnerability_count
+            );
         }
 
         println!(
