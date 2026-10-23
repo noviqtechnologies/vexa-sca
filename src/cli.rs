@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+﻿use clap::{Parser, Subcommand};
 use colored::*;
 use std::path::PathBuf;
 use std::process::exit;
@@ -211,6 +211,12 @@ pub enum Commands {
         /// Do not fail scan with exit code 1 when vulnerabilities are found (report-only mode)
         #[arg(long, visible_alias = "report-only")]
         no_fail: bool,
+
+        /// Allow scan to succeed (exit 0) even when the OSV advisory database is unreachable.
+        /// Without this flag, an advisory service outage exits with code 3 to prevent
+        /// silent false-negative reports.
+        #[arg(long)]
+        allow_unavailable: bool,
     },
 
     /// Automatically patch dependencies and overrides
@@ -1112,6 +1118,7 @@ pub async fn run() {
             strict_epss,
             usage,
             no_fail,
+            allow_unavailable,
         } => {
             let options = ScanOptions {
                 dev: !prod_only,
@@ -1121,10 +1128,40 @@ pub async fn run() {
                 policy_file: policy,
                 timeout_secs: 15,
                 licenses: true,
+                allow_unavailable,
             };
 
             match scan_project(&path, options).await {
                 Ok(mut output) => {
+                    // Advisory outage check: fail-safe when OSV could not be reached and no cache was available
+                    if output.scan_result.advisory_status.has_unreliable_data()
+                        && !allow_unavailable
+                        && !no_fail
+                    {
+                        let status_str = output.scan_result.advisory_status.as_str();
+                        let unavail_n = output.scan_result.packages_unavailable;
+                        if json {
+                            let report = format_json_report(
+                                &output.scan_result,
+                                &output.suppressed,
+                                &output.remediations,
+                                output.license_audit.as_ref(),
+                                output.policy_file.as_deref(),
+                            );
+                            println!("{}", report);
+                        } else {
+                            eprintln!(
+                                "{} Advisory database {} — {} package{} could not be checked. \
+Use --allow-unavailable to suppress this gate, or fix the network issue.",
+                                "Error:".red().bold(),
+                                status_str,
+                                unavail_n,
+                                if unavail_n == 1 { "" } else { "s" }
+                            );
+                        }
+                        exit(3);
+                    }
+
                     if let Some(thresh) = epss_threshold {
                         let mut retained = Vec::new();
                         let mut heuristic_or_unavailable_count = 0;

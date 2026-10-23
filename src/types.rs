@@ -1,5 +1,47 @@
 use serde::{Deserialize, Serialize};
 
+/// Represents the status of an advisory database lookup for a scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AdvisoryStatus {
+    /// All packages were checked successfully against the live OSV API.
+    #[default]
+    Success,
+    /// All packages were served from local cache; no network request was made.
+    CacheHit,
+    /// Some packages were checked but others failed (network / parse error).
+    PartialFailure,
+    /// The advisory service was completely unreachable or returned an error for all packages.
+    Unavailable,
+    /// The upstream service returned a response that could not be parsed.
+    MalformedUpstreamResponse,
+}
+
+impl AdvisoryStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::CacheHit => "cache_hit",
+            Self::PartialFailure => "partial_failure",
+            Self::Unavailable => "unavailable",
+            Self::MalformedUpstreamResponse => "malformed_upstream_response",
+        }
+    }
+
+    /// Returns true when the advisory service could not be reached for all uncached packages.
+    pub fn is_service_unavailable(&self) -> bool {
+        matches!(self, Self::Unavailable | Self::MalformedUpstreamResponse)
+    }
+
+    /// Returns true when the advisory result is at least partially unreliable.
+    pub fn has_unreliable_data(&self) -> bool {
+        matches!(
+            self,
+            Self::Unavailable | Self::MalformedUpstreamResponse | Self::PartialFailure
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SeverityLevel {
     #[serde(rename = "CRITICAL")]

@@ -3,11 +3,23 @@ use crate::core::semver_utils::extract_fixed_versions;
 use crate::scanner::cache::VulnCache;
 use crate::scanner::epss::EpssResolver;
 use crate::scanner::usage_limiter::CloudUsageLimiter;
-use crate::types::{AdvisoryCategory, PkgInfo, SeverityInfo, SeverityLevel, VulnerabilityFinding};
+use crate::types::{
+    AdvisoryCategory, AdvisoryStatus, PkgInfo, SeverityInfo, SeverityLevel, VulnerabilityFinding,
+};
 use reqwest::Client;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
+
+/// Internal result of a single OSV batch query attempt.
+enum BatchFetchOutcome {
+    /// Successfully retrieved advisory IDs (may be empty if no vulns).
+    Success(Vec<Vec<Value>>),
+    /// The HTTP request failed or returned a non-2xx status.
+    NetworkError,
+    /// The response body could not be parsed as expected JSON.
+    ParseError,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
@@ -16,6 +28,12 @@ pub struct ScanResult {
     pub has_cycles: bool,
     pub vulnerabilities: Vec<VulnerabilityFinding>,
     pub unreachable_count: usize,
+    /// Status of the advisory database lookup for this scan.
+    pub advisory_status: AdvisoryStatus,
+    /// Number of packages that were successfully checked (cache hit or live query).
+    pub packages_checked: usize,
+    /// Number of packages that could NOT be checked due to advisory service failure.
+    pub packages_unavailable: usize,
 }
 
 pub struct VulnScanner {
@@ -54,6 +72,7 @@ impl VulnScanner {
         let pkgs = dep_graph.get_all_pkgs();
         let mut uncached: Vec<PkgInfo> = Vec::new();
         let mut results_map: HashMap<String, Vec<Value>> = HashMap::new();
+        let total_pkgs = pkgs.len();
 
         // 1. Check cache
         for pkg in &pkgs {
@@ -64,14 +83,50 @@ impl VulnScanner {
             }
         }
 
+        let cached_count = total_pkgs - uncached.len();
+        let mut packages_unavailable: usize = 0;
+        let mut had_network_error = false;
+        let mut had_parse_error = false;
+
         // 2. Query batch for uncached packages
         if !uncached.is_empty() {
-            let fetched = self.fetch_batch(&uncached).await;
-            for (pkg, raw_vulns) in uncached.iter().zip(fetched) {
-                self.cache.set(pkg, &raw_vulns);
-                results_map.insert(pkg.id.clone(), raw_vulns);
+            match self.fetch_batch(&uncached).await {
+                BatchFetchOutcome::Success(fetched) => {
+                    // Only cache on actual success; never cache empty results from a failed query
+                    for (pkg, raw_vulns) in uncached.iter().zip(fetched) {
+                        self.cache.set(pkg, &raw_vulns);
+                        results_map.insert(pkg.id.clone(), raw_vulns);
+                    }
+                }
+                BatchFetchOutcome::NetworkError => {
+                    had_network_error = true;
+                    packages_unavailable = uncached.len();
+                    // Do NOT cache anything; do NOT insert empty entries into results_map
+                }
+                BatchFetchOutcome::ParseError => {
+                    had_parse_error = true;
+                    packages_unavailable = uncached.len();
+                    // Do NOT cache anything; do NOT insert empty entries into results_map
+                }
             }
         }
+
+        // Determine advisory status
+        let advisory_status = if had_network_error {
+            if cached_count == 0 {
+                AdvisoryStatus::Unavailable
+            } else {
+                AdvisoryStatus::PartialFailure
+            }
+        } else if had_parse_error {
+            AdvisoryStatus::MalformedUpstreamResponse
+        } else if uncached.is_empty() && cached_count > 0 {
+            AdvisoryStatus::CacheHit
+        } else {
+            AdvisoryStatus::Success
+        };
+
+        let packages_checked = total_pkgs - packages_unavailable;
 
         // 3. Collect unique vuln IDs to fetch full advisory records
         let mut unique_vuln_ids = HashSet::new();
@@ -145,15 +200,18 @@ impl VulnScanner {
         vulnerabilities.sort_by_key(|b| std::cmp::Reverse(b.severity.level.weight()));
 
         Ok(ScanResult {
-            scanned_packages_count: pkgs.len(),
+            scanned_packages_count: total_pkgs,
             vulnerabilities_count: vulnerabilities.len(),
             has_cycles: dep_graph.has_cycles(),
             vulnerabilities,
             unreachable_count: 0,
+            advisory_status,
+            packages_checked,
+            packages_unavailable,
         })
     }
 
-    async fn fetch_batch(&self, pkgs: &[PkgInfo]) -> Vec<Vec<Value>> {
+    async fn fetch_batch(&self, pkgs: &[PkgInfo]) -> BatchFetchOutcome {
         let queries: Vec<Value> = pkgs
             .iter()
             .map(|p| {
@@ -169,31 +227,45 @@ impl VulnScanner {
 
         let body = serde_json::json!({ "queries": queries });
 
-        match self
+        let resp = match self
             .client
             .post(&self.batch_api_url)
             .json(&body)
             .send()
             .await
         {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(data) = resp.json::<Value>().await {
-                    if let Some(results) = data.get("results").and_then(|r| r.as_array()) {
-                        return results
-                            .iter()
-                            .map(|r| {
-                                r.get("vulns")
-                                    .and_then(|v| v.as_array())
-                                    .cloned()
-                                    .unwrap_or_default()
-                            })
-                            .collect();
-                    }
-                }
-                vec![Vec::new(); pkgs.len()]
+            Ok(r) if r.status().is_success() => r,
+            Ok(_) | Err(_) => {
+                return BatchFetchOutcome::NetworkError;
             }
-            _ => vec![Vec::new(); pkgs.len()],
+        };
+
+        let data = match resp.json::<Value>().await {
+            Ok(d) => d,
+            Err(_) => return BatchFetchOutcome::ParseError,
+        };
+
+        let results = match data.get("results").and_then(|r| r.as_array()) {
+            Some(arr) => arr,
+            None => return BatchFetchOutcome::ParseError,
+        };
+
+        // If the server returned a different number of results than queries, treat as parse error
+        if results.len() != pkgs.len() {
+            return BatchFetchOutcome::ParseError;
         }
+
+        let fetched = results
+            .iter()
+            .map(|r| {
+                r.get("vulns")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
+
+        BatchFetchOutcome::Success(fetched)
     }
 
     async fn fetch_advisories(&self, vuln_ids: Vec<String>) -> HashMap<String, Value> {
@@ -830,5 +902,85 @@ mod tests {
             .contains(&"https://github.com/lodash/lodash/commit/e2a663".to_string()));
         assert!(finding.details.as_ref().unwrap().contains("snyk"));
         assert_eq!(finding.cve.as_deref(), Some("CVE-2020-8203"));
+    }
+
+    /// Verifies that a scan against an unreachable OSV API endpoint returns
+    /// `AdvisoryStatus::Unavailable` and marks all packages as unavailable.
+    /// This prevents the fail-open false-negative: an outage must NOT produce
+    /// a clean report with zero vulnerabilities and exit code 0.
+    #[tokio::test]
+    async fn test_scan_graph_advisory_unavailable_when_api_unreachable() {
+        use crate::core::dep_graph::{DepGraph, PkgManagerInfo};
+        use crate::scanner::cache::VulnCache;
+
+        // Use a clean temporary cache directory to guarantee no cache hits
+        let temp_dir = std::env::temp_dir().join(format!(
+            "vexa_scanner_outage_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let cache = VulnCache::new(&temp_dir);
+
+        // Point the scanner at an unreachable local port so all requests fail fast
+        let unreachable_url = "http://127.0.0.1:19999/v1/querybatch".to_string();
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(300))
+            .build()
+            .unwrap();
+
+        let scanner = VulnScanner {
+            cache,
+            batch_api_url: unreachable_url,
+            client,
+            ..VulnScanner::default()
+        };
+
+        let root = PkgInfo::new("my-app", "1.0.0", "npm");
+        let mut graph = DepGraph::new(
+            root,
+            PkgManagerInfo {
+                name: "npm".to_string(),
+                version: "8.0.0".to_string(),
+            },
+        );
+        let dep = PkgInfo::new("test-pkg-outage-target", "1.0.0", "npm");
+        graph.add_pkg(dep);
+
+        let result = scanner
+            .scan_graph(&graph)
+            .await
+            .expect("scan_graph should not return Err on network failure");
+
+        // The advisory status must NOT be success — it must signal unavailability
+        assert!(
+            result.advisory_status.has_unreliable_data(),
+            "Expected advisory_status to indicate unreliable data when API is unreachable, got {:?}",
+            result.advisory_status
+        );
+
+        // packages_unavailable must match the number of uncached packages queried
+        assert!(
+            result.packages_unavailable > 0,
+            "Expected packages_unavailable > 0 when API is unreachable"
+        );
+
+        // The report must NOT claim zero dependencies were scanned
+        assert_eq!(
+            result.scanned_packages_count, 1,
+            "scanned_packages_count should reflect the number of packages in the graph"
+        );
+
+        // Vulnerabilities must be empty (no false findings), but the status signals incompleteness
+        assert!(
+            result.vulnerabilities.is_empty(),
+            "No vulnerabilities should be fabricated from a failed advisory query"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

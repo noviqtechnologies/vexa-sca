@@ -30,6 +30,9 @@ pub struct ScanOptions {
     pub policy_file: Option<PathBuf>,
     pub timeout_secs: u64,
     pub licenses: bool,
+    /// When true, do not fail the scan when the OSV advisory service is unavailable.
+    /// Equivalent to passing `--allow-unavailable` on the CLI.
+    pub allow_unavailable: bool,
 }
 
 impl Default for ScanOptions {
@@ -42,6 +45,7 @@ impl Default for ScanOptions {
             policy_file: None,
             timeout_secs: 15,
             licenses: true,
+            allow_unavailable: false,
         }
     }
 }
