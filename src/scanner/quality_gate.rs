@@ -10,6 +10,7 @@ pub struct QualityGateOptions {
     pub fail_on_licenses: Option<String>,
     pub fail_on_unmaintained: bool,
     pub no_fail: bool,
+    pub baseline_mode: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -31,8 +32,17 @@ impl QualityGate {
     ) -> QualityGateResult {
         let mut failure_reasons = Vec::new();
 
-        let reachable_count = scan_result
-            .vulnerabilities
+        let vulns_to_eval: Vec<&crate::types::VulnerabilityFinding> = if options.baseline_mode {
+            scan_result
+                .vulnerabilities
+                .iter()
+                .filter(|v| v.is_new)
+                .collect()
+        } else {
+            scan_result.vulnerabilities.iter().collect()
+        };
+
+        let reachable_count = vulns_to_eval
             .iter()
             .filter(|v| {
                 v.reachability
@@ -42,8 +52,7 @@ impl QualityGate {
             })
             .count();
 
-        let unreachable_count = scan_result
-            .vulnerabilities
+        let unreachable_count = vulns_to_eval
             .iter()
             .filter(|v| {
                 v.reachability
@@ -53,14 +62,13 @@ impl QualityGate {
             })
             .count();
 
-        let sec_vulns: Vec<_> = scan_result
-            .vulnerabilities
+        let sec_vulns: Vec<_> = vulns_to_eval
             .iter()
             .filter(|v| v.advisory_category == AdvisoryCategory::Vulnerability)
+            .copied()
             .collect();
 
-        let unmaintained_count = scan_result
-            .vulnerabilities
+        let unmaintained_count = vulns_to_eval
             .iter()
             .filter(|v| v.advisory_category == AdvisoryCategory::Unmaintained)
             .count();
@@ -89,9 +97,11 @@ impl QualityGate {
                 } else {
                     ""
                 };
+                let new_tag = if options.baseline_mode { "new " } else { "" };
                 failure_reasons.push(format!(
-                    "Found {} {}vulnerabilities at or above '{}' threshold",
+                    "Found {} {}{}vulnerabilities at or above '{}' threshold",
                     violating_count,
+                    new_tag,
                     scope,
                     threshold.as_str()
                 ));
@@ -99,23 +109,27 @@ impl QualityGate {
         } else if options.fail_on_reachable {
             // 2. Reachable-only Gate without explicit severity threshold
             if reachable_count > 0 {
+                let new_tag = if options.baseline_mode { "new " } else { "" };
                 failure_reasons.push(format!(
-                    "Found {} vulnerabilities with confirmed runtime reachability (🚨 REACHABLE)",
-                    reachable_count
+                    "Found {} {}vulnerabilities with confirmed runtime reachability (🚨 REACHABLE)",
+                    reachable_count, new_tag
                 ));
             }
         } else if !sec_vulns.is_empty() && options.fail_on_licenses.is_none() {
             // 3. Default behavior: fail on any active security vulnerability
+            let new_tag = if options.baseline_mode { "new " } else { "" };
             if reachable_count == 0 && unreachable_count > 0 {
                 failure_reasons.push(format!(
-                    "Found {} active security vulnerabilities (0 reachable, {} unreachable). Tip: use '--fail-on reachable' to block only on confirmed runtime call paths.",
+                    "Found {} {}active security vulnerabilities (0 reachable, {} unreachable). Tip: use '--fail-on reachable' to block only on confirmed runtime call paths.",
                     sec_vulns.len(),
+                    new_tag,
                     unreachable_count
                 ));
             } else {
                 failure_reasons.push(format!(
-                    "Found {} active security vulnerabilities",
-                    sec_vulns.len()
+                    "Found {} {}active security vulnerabilities",
+                    sec_vulns.len(),
+                    new_tag
                 ));
             }
         }
@@ -247,21 +261,14 @@ mod tests {
         // Fail on LOW: should FAIL
         let opts_low = QualityGateOptions {
             fail_on_severity: Some(SeverityLevel::Low),
-            fail_on_reachable: false,
-            fail_on_licenses: None,
-            fail_on_unmaintained: false,
-            no_fail: false,
+            ..Default::default()
         };
         let res_low = QualityGate::evaluate(&scan_result, None, &opts_low);
         assert!(!res_low.passed);
 
         // Default gate (no flags): fails on any active security vulnerability
         let opts_default = QualityGateOptions {
-            fail_on_severity: None,
-            fail_on_reachable: false,
-            fail_on_licenses: None,
-            fail_on_unmaintained: false,
-            no_fail: false,
+            ..Default::default()
         };
         let res_default = QualityGate::evaluate(&scan_result, None, &opts_default);
         assert!(!res_default.passed);
@@ -269,11 +276,8 @@ mod tests {
 
         // --no-fail / --report-only: passes even if findings exist
         let opts_no_fail = QualityGateOptions {
-            fail_on_severity: None,
-            fail_on_reachable: false,
-            fail_on_licenses: None,
-            fail_on_unmaintained: false,
             no_fail: true,
+            ..Default::default()
         };
         let res_no_fail = QualityGate::evaluate(&scan_result, None, &opts_no_fail);
         assert!(res_no_fail.passed);

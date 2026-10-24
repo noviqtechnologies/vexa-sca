@@ -49,13 +49,34 @@ pub fn render_terminal_report(
     println!("{}", "=".repeat(78));
 
     println!(
+        "Scan Status          : {}",
+        match scan_result.scan_status {
+            crate::types::ScanStatus::Pass => " PASS ".on_green().white().bold(),
+            crate::types::ScanStatus::Fail => " FAIL ".on_red().white().bold(),
+            crate::types::ScanStatus::Incomplete => " INCOMPLETE ".on_yellow().black().bold(),
+        }
+    );
+    println!(
         "Scanned Dependencies : {}",
         scan_result.scanned_packages_count.to_string().bold()
     );
-    println!(
-        "Scan Quota           : {}",
-        "Unlimited (Free Developer Edition)".green()
-    );
+    if scan_result.baseline_vulnerabilities_count > 0 {
+        println!(
+            "New Findings (PR)    : {}",
+            scan_result
+                .new_vulnerabilities_count
+                .to_string()
+                .red()
+                .bold()
+        );
+        println!(
+            "Baseline Findings    : {}",
+            scan_result
+                .baseline_vulnerabilities_count
+                .to_string()
+                .dimmed()
+        );
+    }
     println!(
         "Dependency Cycles    : {}",
         if scan_result.has_cycles {
@@ -74,51 +95,23 @@ pub fn render_terminal_report(
                 .unwrap_or(false)
         })
         .count();
-    let unreachable_count = if scan_result.unreachable_count > 0 {
-        scan_result.unreachable_count
-    } else {
-        vulns
-            .iter()
-            .filter(|v| {
-                v.reachability
-                    .as_ref()
-                    .map(|r| r.status == ReachabilityStatus::Unreachable)
-                    .unwrap_or(false)
-            })
-            .count()
-    };
 
-    if reachable_count > 0 || unreachable_count > 0 {
+    if reachable_count > 0 {
         println!(
-            "Reachability (Deep)  : 🚨 {} | 🛡️ {}",
-            if reachable_count > 0 {
-                format!("{} Active Call-sites", reachable_count)
-                    .red()
-                    .bold()
-                    .to_string()
-            } else {
-                "0".green().to_string()
-            },
-            if unreachable_count > 0 {
-                if vulns.is_empty() {
-                    format!("{} Filtered (Low Risk / Unreachable)", unreachable_count)
-                        .green()
-                        .to_string()
-                } else {
-                    format!("{} Not Called (Low Risk)", unreachable_count)
-                        .green()
-                        .to_string()
-                }
-            } else {
-                "0".to_string()
-            }
+            "Reachability Evidence: 🚨 {}",
+            format!("{} Active Call-sites Found", reachable_count)
+                .red()
+                .bold()
         );
     } else if vulns.is_empty() {
-        println!("Reachability (Deep)  : {}", "0 (Clean)".green());
+        println!(
+            "Reachability Evidence: {}",
+            "Clean (No Vulnerabilities)".green()
+        );
     } else {
         println!(
-            "Reachability (Deep)  : {}",
-            "N/A (OS Binary Packages - Call-path AST requires application source code)".dimmed()
+            "Reachability Evidence: {}",
+            "0 Direct Call-sites (Conservative triage: no symbols confirmed)".dimmed()
         );
     }
 
@@ -276,10 +269,57 @@ pub fn render_terminal_report(
         }
     }
 
-    // 3. Active Vulnerabilities
+    // 3. Top Priority Recommendations (FR-008a)
     if !vulns.is_empty() {
         println!("\n{}", "-".repeat(78));
-        println!(" {}", "Detected Vulnerabilities:".bold());
+        println!(
+            " {}",
+            "Top Priority Recommendations (Action within 30s):".bold()
+        );
+        println!("{}", "-".repeat(78));
+
+        let mut prioritized = vulns.clone();
+        prioritized.sort_by(|a, b| {
+            b.priority_score
+                .partial_cmp(&a.priority_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        for (idx, v) in prioritized.iter().take(3).enumerate() {
+            let reason = match v.usage_signal {
+                crate::types::UsageSignal::ImportedSource => {
+                    "Imported directly in first-party source code"
+                }
+                crate::types::UsageSignal::ReferencedConfigOrScript => {
+                    "Referenced in build/dev scripts or configuration"
+                }
+                crate::types::UsageSignal::NoReferenceFoundWithinScope => {
+                    "No active reference found in analyzed scope"
+                }
+                crate::types::UsageSignal::Unknown => "Usage analysis inconclusive",
+            };
+            let fix = if let Some(first_fix) = v.fixed_in.first() {
+                format!("Upgrade to {}", first_fix)
+            } else {
+                "No patch currently published".to_string()
+            };
+            println!(
+                " {}. {}@{} [{}] - Priority: {:.1}",
+                idx + 1,
+                v.package.bold(),
+                v.version,
+                v.severity.level.as_str().red(),
+                v.priority_score
+            );
+            println!("    ↳ Reason : {}", reason.yellow());
+            println!("    ↳ Fix    : {}", fix.green().bold());
+        }
+    }
+
+    // 4. All Detected Vulnerabilities
+    if !vulns.is_empty() {
+        println!("\n{}", "-".repeat(78));
+        println!(" {}", "All Detected Vulnerabilities:".bold());
         println!("{}", "-".repeat(78));
 
         for v in vulns {

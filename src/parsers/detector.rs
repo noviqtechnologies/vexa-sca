@@ -45,12 +45,64 @@ pub struct DetectionResult {
     pub manifest_type: ManifestType,
     pub graph: DepGraph,
     pub manifest_file: PathBuf,
+    pub discovered_projects: Vec<PathBuf>,
+}
+
+pub fn discover_manifests(root: &Path, max_depth: usize) -> Vec<PathBuf> {
+    let mut results = Vec::new();
+    discover_recursive(root, 0, max_depth, &mut results);
+    results.sort();
+    results
+}
+
+fn discover_recursive(dir: &Path, depth: usize, max_depth: usize, results: &mut Vec<PathBuf>) {
+    if depth > max_depth {
+        return;
+    }
+    let supported = [
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "pnpm-lock.yml",
+        "requirements.txt",
+        "Cargo.lock",
+        "go.sum",
+        "pom.xml",
+    ];
+
+    for s in &supported {
+        let p = dir.join(s);
+        if p.is_file() {
+            results.push(p);
+        }
+    }
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name.starts_with('.')
+                    || name == "node_modules"
+                    || name == "target"
+                    || name == "vendor"
+                    || name == "dist"
+                    || name == "build"
+                {
+                    continue;
+                }
+                discover_recursive(&path, depth + 1, max_depth, results);
+            }
+        }
+    }
 }
 
 pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<DetectionResult, String> {
     let abs_dir = project_dir
         .canonicalize()
         .unwrap_or_else(|_| project_dir.to_path_buf());
+
+    let discovered_projects = discover_manifests(&abs_dir, 4);
 
     let npm_lock = abs_dir.join("package-lock.json");
     if npm_lock.exists() {
@@ -59,6 +111,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             manifest_type: ManifestType::NpmPackageLock,
             graph,
             manifest_file: npm_lock,
+            discovered_projects,
         });
     }
 
@@ -69,6 +122,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             manifest_type: ManifestType::YarnLock,
             graph,
             manifest_file: yarn_lock,
+            discovered_projects,
         });
     }
 
@@ -85,6 +139,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             manifest_type: ManifestType::PnpmLock,
             graph,
             manifest_file: main_file,
+            discovered_projects,
         });
     }
 
@@ -95,6 +150,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             manifest_type: ManifestType::PythonRequirements,
             graph,
             manifest_file: req_txt,
+            discovered_projects,
         });
     }
 
@@ -105,6 +161,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             manifest_type: ManifestType::RustCargoLock,
             graph,
             manifest_file: cargo_lock,
+            discovered_projects,
         });
     }
 
@@ -117,6 +174,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             manifest_type: ManifestType::GoModSum,
             graph,
             manifest_file: main_file,
+            discovered_projects,
         });
     }
 
@@ -127,6 +185,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             manifest_type: ManifestType::JavaMavenPom,
             graph,
             manifest_file: pom_xml,
+            discovered_projects,
         });
     }
 
@@ -200,5 +259,18 @@ mod tests {
         let pnpm_det = detect_and_parse(Path::new("test/fixtures/pnpm-app"), true).unwrap();
         assert_eq!(pnpm_det.manifest_type, ManifestType::PnpmLock);
         assert_eq!(pnpm_det.graph.get_all_pkgs().len(), 2);
+    }
+
+    #[test]
+    fn test_discover_manifests_multi_project() {
+        let discovered = discover_manifests(Path::new("test/fixtures"), 4);
+        assert!(
+            discovered.len() >= 5,
+            "Must discover multiple fixture manifests"
+        );
+        let has_npm = discovered.iter().any(|p| p.ends_with("package-lock.json"));
+        let has_cargo = discovered.iter().any(|p| p.ends_with("Cargo.lock"));
+        let has_pnpm = discovered.iter().any(|p| p.ends_with("pnpm-lock.yaml"));
+        assert!(has_npm && has_cargo && has_pnpm);
     }
 }

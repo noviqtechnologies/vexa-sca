@@ -66,7 +66,7 @@ impl PythonRequirementsParser {
                 let (n, v) = base.split_at(idx);
                 (n.trim(), v.trim_start_matches("~=").trim())
             } else {
-                (base, "0.0.0")
+                (base, "*")
             };
 
             if !name.is_empty() {

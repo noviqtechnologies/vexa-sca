@@ -221,26 +221,23 @@ pub fn format_cyclonedx_sbom(
                 vuln_obj["cwes"] = json!(cwe_ids);
             }
 
-            // VEX / Reachability analysis state
+            // VEX / Reachability analysis state (FR-009: do not emit not_affected without positive proof)
             if let Some(reach) = &v.reachability {
                 use crate::types::ReachabilityStatus;
                 let state = match reach.status {
                     ReachabilityStatus::Reachable => "exploitable",
-                    ReachabilityStatus::Unreachable => "not_affected",
+                    ReachabilityStatus::Unreachable => "in_triage",
                     ReachabilityStatus::Unknown => "in_triage",
                 };
                 let mut analysis = json!({
                     "state": state
                 });
-                if reach.status == ReachabilityStatus::Unreachable {
-                    analysis["justification"] = json!("code_not_reachable");
-                    analysis["detail"] = json!(
-                        "AST call graph analysis confirmed vulnerability code is not executed."
-                    );
-                } else if reach.status == ReachabilityStatus::Reachable {
-                    analysis["detail"] = json!(
-                        "AST call graph analysis detected active call path to vulnerable function."
-                    );
+                if reach.status == ReachabilityStatus::Reachable {
+                    analysis["detail"] =
+                        json!("Direct call site detected to vulnerable symbol in analyzed source.");
+                } else {
+                    analysis["detail"] =
+                        json!("Under triage; inconclusive evidence in current analysis scope.");
                 }
                 vuln_obj["analysis"] = analysis;
             }
@@ -592,6 +589,11 @@ mod tests {
                 aliases: vec![],
                 advisory_category: Default::default(),
                 epss: None,
+                fingerprint: "test-fp-1".to_string(),
+                usage_signal: crate::types::UsageSignal::Unknown,
+                reason_code: None,
+                priority_score: 5.0,
+                is_new: true,
             }],
             ..Default::default()
         };
@@ -701,6 +703,11 @@ mod tests {
                 aliases: vec![],
                 advisory_category: Default::default(),
                 epss: None,
+                fingerprint: "test-fp-2".to_string(),
+                usage_signal: crate::types::UsageSignal::Unknown,
+                reason_code: None,
+                priority_score: 5.0,
+                is_new: true,
             }],
             ..Default::default()
         };

@@ -543,3 +543,131 @@ fn test_cli_scan_allow_unavailable_flag_suppresses_exit_3() {
 
     let _ = fs::remove_dir_all(&temp_cache);
 }
+
+/// Test that `vexa-sca init` generates a pinned GitHub Actions workflow file.
+#[test]
+fn test_cli_init_command_creates_pinned_workflow() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+
+    let temp_dir = std::env::temp_dir().join(format!("vexa_init_test_{}", std::process::id()));
+    let _ = fs::create_dir_all(&temp_dir);
+
+    let output = Command::new(&bin)
+        .args(["init", temp_dir.to_str().unwrap(), "--enforce"])
+        .output()
+        .expect("vexa-sca init failed to run");
+
+    assert!(output.status.success(), "vexa-sca init should exit 0");
+
+    let workflow_path = temp_dir
+        .join(".github")
+        .join("workflows")
+        .join("vexa-sca.yml");
+    assert!(workflow_path.exists(), "Workflow file must be created");
+
+    let content = fs::read_to_string(&workflow_path).expect("Failed to read workflow");
+    assert!(
+        content.contains("actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"),
+        "Workflow must use pinned commit SHA for checkout action"
+    );
+    assert!(
+        content.contains("vexa-sca ci --fail-on high"),
+        "Workflow with --enforce must contain --fail-on high"
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+/// Test that `vexa-sca ci` runs automation profile and writes GitHub Actions Step Summary.
+#[test]
+fn test_cli_ci_profile_and_step_summary() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/npm-app");
+
+    let temp_summary =
+        std::env::temp_dir().join(format!("vexa_step_summary_{}.md", std::process::id()));
+
+    let output = Command::new(&bin)
+        .args([
+            "ci",
+            fixture.to_str().unwrap(),
+            "--no-fail",
+            "--job-summary-file",
+            temp_summary.to_str().unwrap(),
+        ])
+        .output()
+        .expect("vexa-sca ci failed to run");
+
+    assert!(
+        output.status.success(),
+        "vexa-sca ci with --no-fail should exit 0"
+    );
+    assert!(
+        temp_summary.exists(),
+        "Job summary markdown must be created"
+    );
+
+    let summary_md = fs::read_to_string(&temp_summary).expect("Failed to read summary");
+    assert!(
+        summary_md.contains("Vexa SCA Security Report"),
+        "Summary must contain report header"
+    );
+    assert!(
+        summary_md.contains("Top Priority Findings") || summary_md.contains("Status:"),
+        "Summary must contain findings or status line"
+    );
+
+    let _ = fs::remove_file(&temp_summary);
+}
+
+/// Test that `--baseline` PR-diff mode suppresses failures for pre-existing baseline vulnerabilities.
+#[test]
+fn test_cli_pr_diff_baseline_mode() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/npm-app");
+
+    let temp_baseline =
+        std::env::temp_dir().join(format!("vexa_baseline_{}.json", std::process::id()));
+
+    // 1. Generate baseline JSON
+    let base_output = Command::new(&bin)
+        .args(["scan", fixture.to_str().unwrap(), "--no-fail", "--json"])
+        .output()
+        .expect("baseline scan failed");
+    assert!(base_output.status.success());
+    fs::write(&temp_baseline, &base_output.stdout).expect("Failed to write baseline file");
+
+    // 2. Normal scan with --fail-on high fails with code 1
+    let unbaselined = Command::new(&bin)
+        .args(["scan", fixture.to_str().unwrap(), "--fail-on", "high"])
+        .output()
+        .expect("scan failed");
+    assert_eq!(
+        unbaselined.status.code(),
+        Some(1),
+        "Normal scan should fail with code 1 on fixture vulnerabilities"
+    );
+
+    // 3. Differential scan with --baseline: existing findings are tagged as baseline, gate evaluates ONLY new findings -> exits 0!
+    let baselined = Command::new(&bin)
+        .args([
+            "scan",
+            fixture.to_str().unwrap(),
+            "--baseline",
+            temp_baseline.to_str().unwrap(),
+            "--fail-on",
+            "high",
+        ])
+        .output()
+        .expect("scan with baseline failed");
+    assert_eq!(
+        baselined.status.code(),
+        Some(0),
+        "PR-diff scan must exit 0 when all findings are present in baseline"
+    );
+
+    let _ = fs::remove_file(&temp_baseline);
+}

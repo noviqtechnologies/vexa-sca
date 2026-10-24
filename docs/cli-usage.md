@@ -1,7 +1,14 @@
 # Vexa SCA CLI Usage Guide
 
 ## Executive Summary
-The Vexa SCA Command-Line Interface (CLI) provides a commercial-grade, ultra-fast Software Composition Analysis engine directly inside developer terminals. It analyzes multi-ecosystem dependency manifests, calculates deep call-graph Abstract Syntax Tree (AST) reachability to eliminate false positives, audits open-source licenses, generates compliant Software Bill of Materials (SBOMs), and automates security patch management.
+The Vexa SCA Command-Line Interface (CLI) provides a fast, deterministic Software Composition Analysis engine. Built in pure Rust, it is optimized for modern JavaScript and TypeScript development (`package-lock.json` v2/v3, `pnpm`) in pull request automation workflows and GitHub Actions pipelines.
+
+Vexa SCA analyzes multi-ecosystem dependency manifests, classifies findings using **Repository Usage Signals** (direct source imports, `package.json` scripts/bin entries, and configs) without unsafe suppression under positive-proof verdict rules, enforces deterministic quality gates, and generates compliant Software Bill of Materials (SBOMs) and automated same-major pull requests.
+
+> [!NOTE]
+> **Ecosystem Maturity Tiers:**
+> - **Production Ready / GA (P0):** Node.js / JavaScript / TypeScript (`package-lock.json` v2 & v3, `pnpm-lock.yaml`), PR-differential scanning (`--baseline`), GitHub Actions integration (`vexa-sca ci`, `vexa-sca init`), same-major remediation (`vexa-sca fix`), policy engine (`.vexa-sca`), process exit code contract (0, 1, 2, 3, 4).
+> - **Experimental / Early Access (P2):** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn v1 (`yarn.lock`), Container OS packages (`vexa-sca container`), Copyleft license audit (`vexa-sca licenses`).
 
 ---
 

@@ -49,7 +49,7 @@ impl PomXmlParser {
             let group_id = Self::extract_tag(block, "groupId");
             let artifact_id = Self::extract_tag(block, "artifactId");
             let version =
-                Self::extract_tag(block, "version").unwrap_or_else(|| "0.0.0".to_string());
+                Self::extract_tag(block, "version").unwrap_or_else(|| "unresolved".to_string());
             let scope = Self::extract_tag(block, "scope").unwrap_or_else(|| "prod".to_string());
 
             if let (Some(gid), Some(aid)) = (group_id, artifact_id) {

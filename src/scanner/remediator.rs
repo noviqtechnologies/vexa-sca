@@ -55,31 +55,71 @@ impl Remediator {
                 }
             });
 
-            // Pick the highest required upgrade version to ensure all candidate vulnerabilities are resolved
-            let target_version = valid_upgrades.last().cloned();
+            // Same-major preference per FR-020:
+            let same_major_candidates: Vec<String> = if let Some(cur) = &current_semver {
+                valid_upgrades
+                    .iter()
+                    .filter(|v| {
+                        if let Some(cand) = clean_or_coerce_version(v) {
+                            cand.major == cur.major
+                        } else {
+                            false
+                        }
+                    })
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            let (target_version, is_major_bump) = if !same_major_candidates.is_empty() {
+                // Pick the upgrade within same major version to ensure all same-major vulns are addressed
+                (same_major_candidates.last().cloned(), false)
+            } else if let Some(highest) = valid_upgrades.last().cloned() {
+                let is_bump = if let (Some(cur), Some(cand)) =
+                    (&current_semver, clean_or_coerce_version(&highest))
+                {
+                    cand.major > cur.major
+                } else {
+                    false
+                };
+                (Some(highest), is_bump)
+            } else {
+                (None, false)
+            };
 
             let (action_type, advice) = match &target_version {
                 Some(target) => {
                     if !is_transitive {
+                        let bump_warning = if is_major_bump {
+                            "[MAJOR UPGRADE WARNING - Breaking change risk; review release notes before applying] "
+                        } else {
+                            ""
+                        };
                         let direct_msg = match sample.ecosystem.as_str() {
                             "crates.io" => format!(
-                                "Upgrade direct dependency \"{}\" from {} to {} in Cargo.toml.",
-                                sample.package, current_version, target
+                                "{}Upgrade direct dependency \"{}\" from {} to {} in Cargo.toml.",
+                                bump_warning, sample.package, current_version, target
                             ),
                             "Go" => format!(
-                                "Upgrade direct dependency \"{}\" from {} to {} via 'go get {}@{}'.",
-                                sample.package, current_version, target, sample.package, target
+                                "{}Upgrade direct dependency \"{}\" from {} to {} via 'go get {}@{}'.",
+                                bump_warning, sample.package, current_version, target, sample.package, target
                             ),
                             "PyPI" => format!(
-                                "Upgrade direct dependency \"{}\" from {} to {} in requirements.txt or pyproject.toml.",
-                                sample.package, current_version, target
+                                "{}Upgrade direct dependency \"{}\" from {} to {} in requirements.txt or pyproject.toml.",
+                                bump_warning, sample.package, current_version, target
                             ),
                             _ => format!(
-                                "Upgrade direct dependency \"{}\" from {} to {} in package.json.",
-                                sample.package, current_version, target
+                                "{}Upgrade direct dependency \"{}\" from {} to {} via 'npm install {}@{}'.",
+                                bump_warning, sample.package, current_version, target, sample.package, target
                             ),
                         };
-                        ("UPGRADE_DIRECT".to_string(), direct_msg)
+                        let act = if is_major_bump {
+                            "UPGRADE_DIRECT_MAJOR".to_string()
+                        } else {
+                            "UPGRADE_DIRECT".to_string()
+                        };
+                        (act, direct_msg)
                     } else {
                         let mut introducers = BTreeSet::new();
                         for v in &vulns {
@@ -109,8 +149,8 @@ impl Remediator {
                                 introducer_list, sample.package, target
                             ),
                             _ => format!(
-                                "Transitive vulnerability introduced by {}. Upgrade top-level parent or add package override \"{}\": \"{}\".",
-                                introducer_list, sample.package, target
+                                "Transitive vulnerability introduced by {}. Run 'npm audit fix' (or 'npm update {}') or configure override \"{}\": \"{}\".",
+                                introducer_list, sample.package, sample.package, target
                             ),
                         };
 
@@ -215,5 +255,37 @@ mod tests {
         assert_eq!(rem.target_version.as_deref(), Some("0.11.18"));
         assert!(rem.advice.contains("0.11.18"));
         assert_eq!(rem.resolved_vulnerability_count, 2);
+    }
+
+    #[test]
+    fn test_remediator_prefers_same_major_over_breaking_jump() {
+        let vuln = VulnerabilityFinding {
+            id: "GHSA-test-major".to_string(),
+            title: "Security Issue".to_string(),
+            package: "example-lib".to_string(),
+            version: "1.0.4".to_string(),
+            ecosystem: "npm".to_string(),
+            pkg_id: "npm/example-lib@1.0.4".to_string(),
+            severity: SeverityInfo {
+                level: SeverityLevel::High,
+                score: 8.0,
+                vector: None,
+            },
+            fixed_in: vec!["1.0.5".to_string(), "2.0.0".to_string()],
+            is_transitive: false,
+            paths: vec![vec![
+                "my-app@1.0.0".to_string(),
+                "example-lib@1.0.4".to_string(),
+            ]],
+            ..Default::default()
+        };
+
+        let remediations = Remediator::generate_remediation(&[vuln]);
+        assert_eq!(remediations.len(), 1);
+        let rem = &remediations[0];
+        assert_eq!(rem.package, "example-lib");
+        // Must choose same-major 1.0.5 instead of jumping to 2.0.0!
+        assert_eq!(rem.target_version.as_deref(), Some("1.0.5"));
+        assert_eq!(rem.action_type, "UPGRADE_DIRECT");
     }
 }

@@ -1,4 +1,6 @@
-use crate::types::{CallSite, ReachabilityResult, ReachabilityStatus, VulnerabilityFinding};
+use crate::types::{
+    CallSite, ReachabilityResult, ReachabilityStatus, ReasonCode, UsageSignal, VulnerabilityFinding,
+};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -9,11 +11,19 @@ pub struct ReachabilityEngine {
     pub source_dir: PathBuf,
     pub source_files: Vec<PathBuf>,
     pub known_functions: HashMap<&'static str, Vec<&'static str>>,
+    pub max_files: usize,
+    pub file_limit_hit: bool,
+    pub config_referenced_pkgs: HashSet<String>,
 }
 
 impl ReachabilityEngine {
     pub fn new(source_dir: &Path) -> Self {
-        let source_files = Self::find_source_files(source_dir, 200);
+        Self::new_with_limit(source_dir, 1000)
+    }
+
+    pub fn new_with_limit(source_dir: &Path, max_files: usize) -> Self {
+        let (source_files, file_limit_hit) = Self::find_source_files(source_dir, max_files);
+        let config_referenced_pkgs = Self::find_config_referenced_pkgs(source_dir);
 
         let mut known = HashMap::new();
         // Lodash
@@ -57,10 +67,81 @@ impl ReachabilityEngine {
             source_dir: source_dir.to_path_buf(),
             source_files,
             known_functions: known,
+            max_files,
+            file_limit_hit,
+            config_referenced_pkgs,
         }
     }
 
-    fn find_source_files(dir: &Path, max_files: usize) -> Vec<PathBuf> {
+    fn find_config_referenced_pkgs(dir: &Path) -> HashSet<String> {
+        let mut referenced = HashSet::new();
+
+        let pkg_json = dir.join("package.json");
+        if let Ok(content) = fs::read_to_string(&pkg_json) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(scripts) = val.get("scripts").and_then(|s| s.as_object()) {
+                    for (_k, v) in scripts {
+                        if let Some(cmd) = v.as_str() {
+                            for token in cmd.split_whitespace() {
+                                let clean = token.trim_matches(|c: char| {
+                                    !c.is_alphanumeric()
+                                        && c != '-'
+                                        && c != '_'
+                                        && c != '@'
+                                        && c != '/'
+                                });
+                                if !clean.is_empty() {
+                                    referenced.insert(clean.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(bin) = val.get("bin") {
+                    if let Some(s) = bin.as_str() {
+                        referenced.insert(s.to_string());
+                    } else if let Some(obj) = bin.as_object() {
+                        for k in obj.keys() {
+                            referenced.insert(k.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        let config_names = [
+            "tsconfig.json",
+            ".eslintrc",
+            ".eslintrc.json",
+            ".eslintrc.js",
+            "eslint.config.js",
+            "eslint.config.mjs",
+            "webpack.config.js",
+            "vite.config.js",
+            "vite.config.ts",
+            "rollup.config.js",
+            "jest.config.js",
+            "jest.config.json",
+        ];
+
+        for cfg in &config_names {
+            let p = dir.join(cfg);
+            if let Ok(c) = fs::read_to_string(&p) {
+                for word in c.split(|ch: char| {
+                    !ch.is_alphanumeric() && ch != '-' && ch != '_' && ch != '@' && ch != '/'
+                }) {
+                    let clean = word.trim();
+                    if clean.len() > 2 {
+                        referenced.insert(clean.to_string());
+                    }
+                }
+            }
+        }
+
+        referenced
+    }
+
+    fn find_source_files(dir: &Path, max_files: usize) -> (Vec<PathBuf>, bool) {
         let valid_exts: HashSet<&str> =
             ["js", "ts", "mjs", "cjs", "jsx", "tsx", "py", "java", "go"]
                 .iter()
@@ -81,6 +162,7 @@ impl ReachabilityEngine {
         .collect();
 
         let mut files = Vec::new();
+        let mut hit_limit = false;
 
         for entry in WalkDir::new(dir)
             .into_iter()
@@ -95,6 +177,7 @@ impl ReachabilityEngine {
             .filter_map(|e| e.ok())
         {
             if files.len() >= max_files {
+                hit_limit = true;
                 break;
             }
             if entry.file_type().is_file() {
@@ -106,7 +189,7 @@ impl ReachabilityEngine {
             }
         }
 
-        files
+        (files, hit_limit)
     }
 
     pub fn evaluate_reachability(
@@ -114,13 +197,24 @@ impl ReachabilityEngine {
         mut vulnerabilities: Vec<VulnerabilityFinding>,
     ) -> Vec<VulnerabilityFinding> {
         for v in &mut vulnerabilities {
-            let reach = self.check_vulnerability(v);
+            let (reach, usage) = self.check_vulnerability_and_usage(v);
+            v.reason_code = reach.reason_code;
             v.reachability = Some(reach);
+            v.usage_signal = usage;
+            v.priority_score = v.compute_priority_score();
         }
         vulnerabilities
     }
 
     pub fn check_vulnerability(&self, vuln: &VulnerabilityFinding) -> ReachabilityResult {
+        let (reach, _) = self.check_vulnerability_and_usage(vuln);
+        reach
+    }
+
+    pub fn check_vulnerability_and_usage(
+        &self,
+        vuln: &VulnerabilityFinding,
+    ) -> (ReachabilityResult, UsageSignal) {
         let target_functions: Option<Vec<String>> = if let Some(cve) = &vuln.cve {
             self.known_functions
                 .get(cve.as_str())
@@ -149,6 +243,7 @@ impl ReachabilityEngine {
         };
 
         let mut call_sites = Vec::new();
+        let mut imported_in_source = false;
 
         for file_path in &self.source_files {
             let content = match fs::read_to_string(file_path) {
@@ -162,7 +257,11 @@ impl ReachabilityEngine {
                 .to_string_lossy()
                 .to_string();
 
-            let matches = self.inspect_file(&content, pkg_name, target_functions.as_deref());
+            let (file_imported, matches) =
+                self.inspect_file(&content, pkg_name, target_functions.as_deref());
+            if file_imported {
+                imported_in_source = true;
+            }
             for m in matches {
                 call_sites.push(CallSite {
                     file: relative_path.clone(),
@@ -174,26 +273,58 @@ impl ReachabilityEngine {
             }
         }
 
-        if !call_sites.is_empty() {
-            let has_specific = call_sites.iter().any(|c| c.is_specific_function_match);
-            ReachabilityResult {
-                status: ReachabilityStatus::Reachable,
-                is_direct_call: has_specific,
-                call_sites: call_sites.into_iter().take(5).collect(),
-                target_functions: target_functions.unwrap_or_else(|| vec!["*".to_string()]),
-            }
+        let has_call_sites = !call_sites.is_empty();
+        let is_specific = call_sites.iter().any(|c| c.is_specific_function_match);
+
+        // Determine UsageSignal (FR-007a)
+        let usage_signal = if has_call_sites || imported_in_source {
+            UsageSignal::ImportedSource
+        } else if self.config_referenced_pkgs.contains(pkg_name) {
+            UsageSignal::ReferencedConfigOrScript
+        } else if self.file_limit_hit || self.source_files.is_empty() {
+            UsageSignal::Unknown
         } else {
-            ReachabilityResult {
-                status: if !self.source_files.is_empty() {
-                    ReachabilityStatus::Unreachable
-                } else {
-                    ReachabilityStatus::Unknown
-                },
-                is_direct_call: false,
-                call_sites: Vec::new(),
-                target_functions: target_functions.unwrap_or_else(|| vec!["*".to_string()]),
-            }
-        }
+            UsageSignal::NoReferenceFoundWithinScope
+        };
+
+        // Determine Reachability Verdict (FR-001, FR-002, FR-003)
+        let (status, reason_code) = if has_call_sites {
+            (
+                ReachabilityStatus::Reachable,
+                Some(ReasonCode::DirectUsageFound),
+            )
+        } else if target_functions.is_none() {
+            (ReachabilityStatus::Unknown, Some(ReasonCode::NoSymbolData))
+        } else if vuln.is_transitive {
+            (
+                ReachabilityStatus::Unknown,
+                Some(ReasonCode::TransitiveNotAnalyzed),
+            )
+        } else if self.file_limit_hit {
+            (ReachabilityStatus::Unknown, Some(ReasonCode::FileLimitHit))
+        } else if self.source_files.is_empty() {
+            (
+                ReachabilityStatus::Unknown,
+                Some(ReasonCode::SourceUnavailable),
+            )
+        } else {
+            // Positive proof: known target functions exist, direct dep, all files analyzed, no call found
+            (
+                ReachabilityStatus::Unreachable,
+                Some(ReasonCode::AnalysisCompleteNoUsage),
+            )
+        };
+
+        let result = ReachabilityResult {
+            status,
+            is_direct_call: is_specific,
+            call_sites: call_sites.into_iter().take(5).collect(),
+            target_functions: target_functions.unwrap_or_else(|| vec!["*".to_string()]),
+            reason_code,
+            analyzer_version: "1.0.0".to_string(),
+        };
+
+        (result, usage_signal)
     }
 
     fn infer_functions_from_details(&self, vuln: &VulnerabilityFinding) -> Option<Vec<String>> {
@@ -213,7 +344,7 @@ impl ReachabilityEngine {
         content: &str,
         pkg_name: &str,
         target_functions: Option<&[String]>,
-    ) -> Vec<(usize, String, String, bool)> {
+    ) -> (bool, Vec<(usize, String, String, bool)>) {
         let mut matches = Vec::new();
         let lines: Vec<&str> = content.lines().collect();
 
@@ -274,8 +405,9 @@ impl ReachabilityEngine {
             }
         }
 
-        if import_alias.is_none() && imported_named_functions.is_empty() {
-            return matches;
+        let is_imported = import_alias.is_some() || !imported_named_functions.is_empty();
+        if !is_imported {
+            return (false, matches);
         }
 
         // 2. Search call sites
@@ -342,7 +474,7 @@ impl ReachabilityEngine {
             }
         }
 
-        matches
+        (true, matches)
     }
 }
 

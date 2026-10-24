@@ -2,9 +2,9 @@ use crate::core::dep_graph::DepGraph;
 use crate::core::semver_utils::extract_fixed_versions;
 use crate::scanner::cache::VulnCache;
 use crate::scanner::epss::EpssResolver;
-use crate::scanner::usage_limiter::CloudUsageLimiter;
 use crate::types::{
-    AdvisoryCategory, AdvisoryStatus, PkgInfo, SeverityInfo, SeverityLevel, VulnerabilityFinding,
+    AdvisoryCategory, AdvisoryStatus, CompletenessReport, PkgInfo, ScanStatus, SeverityInfo,
+    SeverityLevel, UsageSignal, VulnerabilityFinding,
 };
 use reqwest::Client;
 use serde_json::Value;
@@ -34,6 +34,14 @@ pub struct ScanResult {
     pub packages_checked: usize,
     /// Number of packages that could NOT be checked due to advisory service failure.
     pub packages_unavailable: usize,
+    /// Top-level scan status (PASS, FAIL, INCOMPLETE).
+    pub scan_status: ScanStatus,
+    /// Completeness metrics and limits.
+    pub completeness: CompletenessReport,
+    /// Number of new findings relative to baseline.
+    pub new_vulnerabilities_count: usize,
+    /// Number of baseline findings.
+    pub baseline_vulnerabilities_count: usize,
 }
 
 pub struct VulnScanner {
@@ -42,7 +50,6 @@ pub struct VulnScanner {
     pub vuln_api_url: String,
     pub client: Client,
     pub epss_resolver: EpssResolver,
-    pub usage_limiter: CloudUsageLimiter,
 }
 
 impl Default for VulnScanner {
@@ -64,7 +71,6 @@ impl VulnScanner {
             vuln_api_url: "https://api.osv.dev/v1/vulns".to_string(),
             client,
             epss_resolver: EpssResolver::default(),
-            usage_limiter: CloudUsageLimiter::default(),
         }
     }
 
@@ -193,21 +199,48 @@ impl VulnScanner {
             .enrich_findings(&mut vulnerabilities)
             .await;
 
-        // Record scan volume under unlimited developer quota
-        self.usage_limiter.record_scan();
-
         // Sort by severity (Critical -> High -> Medium -> Low)
         vulnerabilities.sort_by_key(|b| std::cmp::Reverse(b.severity.level.weight()));
 
+        let scan_status = if advisory_status.has_unreliable_data() {
+            ScanStatus::Incomplete
+        } else if vulnerabilities.is_empty() {
+            ScanStatus::Pass
+        } else {
+            ScanStatus::Fail
+        };
+
+        let completeness = CompletenessReport {
+            manifests_detected: 1,
+            manifests_analysed: 1,
+            manifests_skipped: 0,
+            packages_discovered: total_pkgs,
+            packages_resolved: total_pkgs,
+            packages_unresolved: 0,
+            packages_checked,
+            source_files_discovered: 0,
+            source_files_analysed: 0,
+            source_files_skipped: 0,
+            source_files_failed: 0,
+            limits_hit: Vec::new(),
+            advisory_source: "OSV (api.osv.dev)".to_string(),
+            advisory_status,
+        };
+
+        let vulns_count = vulnerabilities.len();
         Ok(ScanResult {
             scanned_packages_count: total_pkgs,
-            vulnerabilities_count: vulnerabilities.len(),
+            vulnerabilities_count: vulns_count,
             has_cycles: dep_graph.has_cycles(),
             vulnerabilities,
             unreachable_count: 0,
             advisory_status,
             packages_checked,
             packages_unavailable,
+            scan_status,
+            completeness,
+            new_vulnerabilities_count: vulns_count,
+            baseline_vulnerabilities_count: 0,
         })
     }
 
@@ -766,7 +799,19 @@ impl VulnScanner {
             .max_by_key(|s| s.len())
             .map(|s| s.to_string());
 
-        Some(VulnerabilityFinding {
+        let scope = if is_transitive {
+            "transitive"
+        } else {
+            "direct"
+        };
+        let fingerprint = VulnerabilityFinding::calculate_fingerprint(
+            &pkg.ecosystem,
+            &pkg.name,
+            &primary_id,
+            scope,
+        );
+
+        let mut finding = VulnerabilityFinding {
             id: primary_id,
             title,
             package: pkg.name.clone(),
@@ -785,7 +830,15 @@ impl VulnScanner {
             aliases,
             advisory_category,
             epss: None,
-        })
+            fingerprint,
+            usage_signal: UsageSignal::Unknown,
+            reason_code: None,
+            priority_score: 0.0,
+            is_new: false,
+        };
+        finding.priority_score = finding.compute_priority_score();
+
+        Some(finding)
     }
 }
 

@@ -1,4 +1,4 @@
-﻿use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use colored::*;
 use std::path::PathBuf;
 use std::process::exit;
@@ -10,8 +10,8 @@ use crate::parsers::detector::detect_and_parse;
 use crate::patcher;
 use crate::patcher::pr_creator::PrCreator;
 use crate::reporters::export::{
-    format_cyclonedx_sbom, format_html_report, format_json_report, format_markdown_report,
-    format_sarif_report, format_spdx_sbom, SbomFormat,
+    emit_github_annotations, format_cyclonedx_sbom, format_github_step_summary, format_html_report,
+    format_json_report, format_markdown_report, format_sarif_report, format_spdx_sbom, SbomFormat,
 };
 use crate::reporters::terminal::render_terminal_report;
 use crate::scanner::quality_gate::{QualityGate, QualityGateOptions};
@@ -208,6 +208,10 @@ pub enum Commands {
         #[arg(long)]
         usage: bool,
 
+        /// Baseline report file (JSON or SARIF) for PR-diff gating
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+
         /// Do not fail scan with exit code 1 when vulnerabilities are found (report-only mode)
         #[arg(long, visible_alias = "report-only")]
         no_fail: bool,
@@ -217,6 +221,121 @@ pub enum Commands {
         /// silent false-negative reports.
         #[arg(long)]
         allow_unavailable: bool,
+    },
+
+    /// Automated scan profile for CI/CD pipelines (fails closed on incomplete data/advisory outage)
+    Ci {
+        /// Target path to scan (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Baseline report file (JSON or SARIF) for PR-diff gating
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+
+        /// Path to write GitHub Actions Step Summary markdown (or writes to $GITHUB_STEP_SUMMARY)
+        #[arg(long)]
+        job_summary_file: Option<PathBuf>,
+
+        /// Emit GitHub workflow annotations (notice/warning/error) to stdout
+        #[arg(long, default_value_t = true)]
+        emit_annotations: bool,
+
+        /// Only show vulnerabilities with confirmed AST execution paths
+        #[arg(long)]
+        reachable_only: bool,
+
+        /// Exclude devDependencies
+        #[arg(long)]
+        prod_only: bool,
+
+        /// Path to custom policy file (.vexa-sca)
+        #[arg(long)]
+        policy: Option<PathBuf>,
+
+        /// Filter by minimum severity (low, medium, high, critical)
+        #[arg(long, value_parser = parse_severity_threshold)]
+        severity_threshold: Option<SeverityLevel>,
+
+        /// Ignore vulnerabilities without a known fixed version
+        #[arg(long, visible_alias = "only-fixed")]
+        ignore_unfixed: bool,
+
+        /// Output report in JSON format
+        #[arg(long)]
+        json: bool,
+
+        /// Output report in Markdown format
+        #[arg(long)]
+        markdown: bool,
+
+        /// Output report in standard OASIS SARIF v2.1.0 format
+        #[arg(long)]
+        sarif: bool,
+
+        /// Save SARIF report to a file path
+        #[arg(long)]
+        sarif_file: Option<PathBuf>,
+
+        /// Output Software Bill of Materials (cyclonedx or spdx)
+        #[arg(
+            long,
+            value_enum,
+            default_missing_value = "cyclonedx",
+            num_args = 0..=1
+        )]
+        sbom: Option<SbomFormat>,
+
+        /// Save SBOM report to a file path
+        #[arg(long)]
+        sbom_file: Option<PathBuf>,
+
+        /// CI/CD Quality Gate: fail on or above severity threshold (low, medium, high, critical)
+        #[arg(long, value_parser = parse_fail_on_scan)]
+        fail_on: Option<String>,
+
+        /// CI/CD Quality Gate: fail only if at least one vulnerability has confirmed AST reachability
+        #[arg(long)]
+        fail_on_reachable: bool,
+
+        /// CI/CD Quality Gate: fail on license risk category (e.g. strong-copyleft, weak-copyleft)
+        #[arg(long, value_parser = parse_fail_on_licenses)]
+        fail_on_licenses: Option<String>,
+
+        /// CI/CD Quality Gate: fail on unmaintained or deprecated dependencies
+        #[arg(long)]
+        fail_on_unmaintained: bool,
+
+        /// Filter by minimum EPSS exploit prediction probability (0.0 to 1.0)
+        #[arg(long, value_parser = parse_epss_threshold)]
+        epss_threshold: Option<f64>,
+
+        /// Allow local heuristic estimates to satisfy --epss-threshold when FIRST.org is unreachable
+        #[arg(long)]
+        epss_allow_heuristic: bool,
+
+        /// Strict EPSS enforcement: require authoritative FIRST.org EPSS data for all evaluated vulnerabilities
+        #[arg(long)]
+        strict_epss: bool,
+
+        /// Do not fail scan with exit code 1 when vulnerabilities are found (report-only mode)
+        #[arg(long, visible_alias = "report-only")]
+        no_fail: bool,
+
+        /// Allow scan to succeed (exit 0) even when the OSV advisory database is unreachable
+        #[arg(long)]
+        allow_unavailable: bool,
+    },
+
+    /// Initialize pinned GitHub Actions workflow for Vexa SCA in .github/workflows/vexa-sca.yml
+    Init {
+        /// Target path (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Enforce quality gate (fail CI on high or critical vulnerabilities)
+        #[arg(long)]
+        enforce: bool,
     },
 
     /// Automatically patch dependencies and overrides
@@ -1117,6 +1236,7 @@ pub async fn run() {
             epss_allow_heuristic,
             strict_epss,
             usage,
+            baseline,
             no_fail,
             allow_unavailable,
         } => {
@@ -1129,6 +1249,8 @@ pub async fn run() {
                 timeout_secs: 15,
                 licenses: true,
                 allow_unavailable,
+                baseline_file: baseline.clone(),
+                is_ci_profile: false,
             };
 
             match scan_project(&path, options).await {
@@ -1231,19 +1353,16 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                     }
 
                     if usage && !json && !sarif && !html && sbom.is_none() {
-                        let limiter = crate::scanner::usage_limiter::CloudUsageLimiter::default();
-                        let report = limiter.get_usage_report();
                         println!("\n{}", "Vexa SCA Scan Volume & Quota Status:".bold());
-                        println!("  Plan:         {}", report.plan_tier.cyan());
+                        println!("  Edition:      {}", "Open Source Engine".cyan().bold());
                         println!(
                             "  Scan Quota:   {}",
-                            "Unlimited (Local CLI & Public Repos)".green().bold()
+                            "Unlimited (Local CLI & Repositories)".green().bold()
                         );
-                        println!("  Status:       {}", report.status.green());
-                        println!("  Period:       {}", report.billing_period);
+                        println!("  Status:       {}", "Active".green());
                         println!(
-                            "  Scans Used:   {} tests run this month\n",
-                            report.scans_this_month
+                            "  Policy:       {}\n",
+                            "No cloud telemetry or scan quotas enforced.".dimmed()
                         );
                     }
                     let project_name = output
@@ -1416,6 +1535,7 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                         fail_on_licenses,
                         fail_on_unmaintained,
                         no_fail,
+                        baseline_mode: baseline.is_some(),
                     };
                     let gate_res = QualityGate::evaluate(
                         &output.scan_result,
@@ -1436,6 +1556,387 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                     exit(2);
                 }
             }
+        }
+
+        Commands::Ci {
+            path,
+            baseline,
+            job_summary_file,
+            emit_annotations,
+            reachable_only,
+            prod_only,
+            policy,
+            severity_threshold,
+            ignore_unfixed,
+            json,
+            markdown,
+            sarif,
+            sarif_file,
+            sbom,
+            sbom_file,
+            fail_on,
+            fail_on_reachable,
+            fail_on_licenses,
+            fail_on_unmaintained,
+            epss_threshold,
+            epss_allow_heuristic,
+            strict_epss,
+            no_fail,
+            allow_unavailable,
+        } => {
+            let options = ScanOptions {
+                dev: !prod_only,
+                reachable_only,
+                severity_threshold,
+                ignore_unfixed,
+                policy_file: policy,
+                timeout_secs: 15,
+                licenses: true,
+                allow_unavailable,
+                baseline_file: baseline.clone(),
+                is_ci_profile: true,
+            };
+
+            match scan_project(&path, options).await {
+                Ok(mut output) => {
+                    // Advisory outage or incomplete analysis check: fail-closed with exit code 3 in CI profile
+                    let has_advisory_outage =
+                        output.scan_result.advisory_status.has_unreliable_data();
+                    let is_incomplete =
+                        output.scan_result.scan_status == crate::types::ScanStatus::Incomplete;
+
+                    if (has_advisory_outage || is_incomplete) && !allow_unavailable && !no_fail {
+                        let reason = if has_advisory_outage {
+                            format!(
+                                "Advisory database {} — {} package(s) could not be checked",
+                                output.scan_result.advisory_status.as_str(),
+                                output.scan_result.packages_unavailable
+                            )
+                        } else {
+                            "Analysis completeness checks failed (file limit or symbol data missing)".to_string()
+                        };
+
+                        if json {
+                            let report = format_json_report(
+                                &output.scan_result,
+                                &output.suppressed,
+                                &output.remediations,
+                                output.license_audit.as_ref(),
+                                output.policy_file.as_deref(),
+                            );
+                            println!("{}", report);
+                        } else {
+                            eprintln!(
+                                "{} {}. Failing closed with exit code 3 in CI profile. Use --allow-unavailable to suppress.",
+                                "CI Failure:".red().bold(),
+                                reason
+                            );
+                        }
+                        exit(3);
+                    }
+
+                    if let Some(thresh) = epss_threshold {
+                        let mut retained = Vec::new();
+                        let mut heuristic_or_unavailable_count = 0;
+                        let mut strict_failure = false;
+
+                        for v in output.scan_result.vulnerabilities {
+                            let (matches, is_heuristic_or_unavail) = match &v.epss {
+                                Some(epss) => match epss.source {
+                                    crate::types::EpssSource::FirstOrg
+                                    | crate::types::EpssSource::Cache => {
+                                        (epss.score >= thresh, false)
+                                    }
+                                    crate::types::EpssSource::Heuristic => {
+                                        if epss_allow_heuristic {
+                                            (epss.score >= thresh, false)
+                                        } else {
+                                            (true, true)
+                                        }
+                                    }
+                                    crate::types::EpssSource::Unavailable => (true, true),
+                                },
+                                None => (true, true),
+                            };
+
+                            if is_heuristic_or_unavail {
+                                heuristic_or_unavailable_count += 1;
+                                if strict_epss {
+                                    eprintln!(
+                                        "{} EPSS data is unavailable or heuristic for vulnerability {} affecting {} (authoritative EPSS required by --strict-epss).",
+                                        "Error:".red().bold(),
+                                        v.id,
+                                        v.package
+                                    );
+                                    strict_failure = true;
+                                }
+                            }
+
+                            if matches {
+                                retained.push(v);
+                            }
+                        }
+
+                        if strict_failure {
+                            exit(2);
+                        }
+
+                        if heuristic_or_unavailable_count > 0 && !json && !sarif && sbom.is_none() {
+                            println!(
+                                "{}",
+                                format!(
+                                    "ℹ Notice: {} vulnerabilit{} retained under fail-closed EPSS policy (EPSS unavailable/heuristic from FIRST.org).",
+                                    heuristic_or_unavailable_count,
+                                    if heuristic_or_unavailable_count == 1 { "y" } else { "ies" }
+                                )
+                                .yellow()
+                            );
+                        }
+
+                        output.scan_result.vulnerabilities = retained;
+                        output.scan_result.vulnerabilities_count =
+                            output.scan_result.vulnerabilities.len();
+                    }
+
+                    // SARIF Report
+                    let sarif_output = if sarif || sarif_file.is_some() {
+                        Some(format_sarif_report(
+                            &output.scan_result,
+                            &output.remediations,
+                            Some(&output.manifest_file),
+                        ))
+                    } else {
+                        None
+                    };
+
+                    if let (Some(file_path), Some(content)) = (&sarif_file, &sarif_output) {
+                        if let Err(e) = std::fs::write(file_path, content) {
+                            eprintln!(
+                                "{} Failed to write SARIF report to {}: {}",
+                                "Error:".red(),
+                                file_path.display(),
+                                e
+                            );
+                        } else {
+                            println!("✔ SARIF v2.1.0 report saved to {}", file_path.display());
+                        }
+                    }
+
+                    // SBOM Report
+                    let sbom_output = if sbom.is_some() || sbom_file.is_some() {
+                        let fmt = sbom.unwrap_or(SbomFormat::CycloneDx);
+                        Some(match fmt {
+                            SbomFormat::CycloneDx => format_cyclonedx_sbom(
+                                &output.dep_graph,
+                                Some(&output.scan_result),
+                                output.license_audit.as_ref(),
+                            ),
+                            SbomFormat::Spdx => format_spdx_sbom(
+                                &output.dep_graph,
+                                Some(&output.scan_result),
+                                output.license_audit.as_ref(),
+                            ),
+                        })
+                    } else {
+                        None
+                    };
+
+                    if let (Some(file_path), Some(content)) = (&sbom_file, &sbom_output) {
+                        if let Err(e) = std::fs::write(file_path, content) {
+                            eprintln!(
+                                "{} Failed to write SBOM report to {}: {}",
+                                "Error:".red(),
+                                file_path.display(),
+                                e
+                            );
+                        } else {
+                            println!("✔ SBOM report saved to {}", file_path.display());
+                        }
+                    }
+
+                    // Write GitHub Step Summary ($GITHUB_STEP_SUMMARY or custom file)
+                    let summary_md =
+                        format_github_step_summary(&output.scan_result, &output.remediations);
+
+                    let summary_target = job_summary_file
+                        .or_else(|| std::env::var_os("GITHUB_STEP_SUMMARY").map(PathBuf::from));
+
+                    if let Some(summary_path) = summary_target {
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&summary_path)
+                        {
+                            let _ = writeln!(f, "{}", summary_md);
+                        }
+                    }
+
+                    // Emit GitHub Actions Annotations (warning/error notice)
+                    if emit_annotations {
+                        emit_github_annotations(&output.scan_result.vulnerabilities);
+                    }
+
+                    // Output routing
+                    if sbom.is_some() && sbom_file.is_none() {
+                        if let Some(content) = &sbom_output {
+                            println!("{}", content);
+                        }
+                    } else if sarif && sarif_file.is_none() {
+                        if let Some(content) = &sarif_output {
+                            println!("{}", content);
+                        }
+                    } else if json {
+                        println!(
+                            "{}",
+                            format_json_report(
+                                &output.scan_result,
+                                &output.suppressed,
+                                &output.remediations,
+                                output.license_audit.as_ref(),
+                                output.policy_file.as_deref()
+                            )
+                        );
+                    } else if markdown {
+                        println!(
+                            "{}",
+                            format_markdown_report(
+                                &output.scan_result,
+                                &output.suppressed,
+                                &output.remediations,
+                                output.license_audit.as_ref(),
+                                output.policy_file.as_deref()
+                            )
+                        );
+                    } else {
+                        render_terminal_report(
+                            &output.scan_result,
+                            &output.suppressed,
+                            &output.remediations,
+                            output.license_audit.as_ref(),
+                            output.policy_file.as_deref(),
+                        );
+                    }
+
+                    // CI Quality Gate Evaluation
+                    let mut effective_fail_on_reachable = fail_on_reachable;
+                    let mut effective_severity = None;
+
+                    if let Some(fo) = &fail_on {
+                        let lower = fo.trim().to_lowercase();
+                        if lower == "reachable" {
+                            effective_fail_on_reachable = true;
+                        } else if lower.starts_with("reachable-") || lower.starts_with("reachable_")
+                        {
+                            effective_fail_on_reachable = true;
+                            let sev_str = &lower[10..];
+                            effective_severity = Some(SeverityLevel::from_str_loose(sev_str));
+                        } else {
+                            effective_severity = Some(SeverityLevel::from_str_loose(&lower));
+                        }
+                    }
+
+                    let gate_opts = QualityGateOptions {
+                        fail_on_severity: effective_severity,
+                        fail_on_reachable: effective_fail_on_reachable,
+                        fail_on_licenses,
+                        fail_on_unmaintained,
+                        no_fail,
+                        baseline_mode: baseline.is_some(),
+                    };
+
+                    let gate_res = QualityGate::evaluate(
+                        &output.scan_result,
+                        output.license_audit.as_ref(),
+                        &gate_opts,
+                    );
+
+                    if !json && !sarif && sbom.is_none() {
+                        QualityGate::print_terminal_summary(&gate_res);
+                    }
+
+                    if !gate_res.passed {
+                        exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("CI Scan error: {}", e);
+                    exit(2);
+                }
+            }
+        }
+
+        Commands::Init { path, enforce } => {
+            let workflows_dir = path.join(".github").join("workflows");
+            if let Err(e) = std::fs::create_dir_all(&workflows_dir) {
+                eprintln!(
+                    "{} Failed to create {}: {}",
+                    "Error:".red(),
+                    workflows_dir.display(),
+                    e
+                );
+                exit(2);
+            }
+            let workflow_file = workflows_dir.join("vexa-sca.yml");
+            let gate_flag = if enforce {
+                "--fail-on high"
+            } else {
+                "--no-fail"
+            };
+            let workflow_content = format!(
+                r#"name: Vexa SCA Security Scan
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  vexa-scan:
+    name: Vexa SCA Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Vexa SCA
+        run: |
+          curl -fsSL https://github.com/noviqtechnologies/vexa-sca/releases/latest/download/vexa-sca-linux-x86_64.tar.gz | tar -xz
+          sudo mv vexa-sca /usr/local/bin/
+
+      - name: Run Vexa SCA CI Scan
+        run: vexa-sca ci {}
+"#,
+                gate_flag
+            );
+
+            if let Err(e) = std::fs::write(&workflow_file, workflow_content) {
+                eprintln!(
+                    "{} Failed to write {}: {}",
+                    "Error:".red(),
+                    workflow_file.display(),
+                    e
+                );
+                exit(2);
+            }
+
+            println!(
+                "✔ Pinned GitHub Actions workflow initialized at {}",
+                workflow_file.display().to_string().green().bold()
+            );
+            println!(
+                "  Policy enforcement: {}",
+                if enforce {
+                    "Strict (fails on high/critical)".yellow()
+                } else {
+                    "Report-only (non-blocking)".green()
+                }
+            );
+            println!("  Authoritative surfaces: GitHub Step Summary ($GITHUB_STEP_SUMMARY) and Workflow Annotations.");
         }
 
         Commands::Container {
@@ -1585,6 +2086,7 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                         fail_on_licenses,
                         fail_on_unmaintained: false,
                         no_fail,
+                        baseline_mode: false,
                     };
                     let gate_res = QualityGate::evaluate(
                         &output.scan_result,
@@ -1608,34 +2110,32 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
         }
 
         Commands::Usage { json } => {
-            let limiter = crate::scanner::usage_limiter::CloudUsageLimiter::default();
-            let report = limiter.get_usage_report();
             if json {
+                let report = serde_json::json!({
+                    "plan_tier": "Open Source Engine",
+                    "scan_quota": "unlimited",
+                    "status": "active",
+                    "telemetry": "disabled"
+                });
                 println!("{}", serde_json::to_string_pretty(&report).unwrap());
             } else {
-                println!("\n{}", "Vexa SCA Usage & Quota Status".bold().underline());
+                println!("\n{}", "Vexa SCA Usage & Engine Status".bold().underline());
                 println!("──────────────────────────────────────────────────");
                 println!(
                     "  {}   {}",
-                    "Plan Tier:   ".bold(),
-                    report.plan_tier.cyan().bold()
+                    "Edition:     ".bold(),
+                    "Open Source Engine".cyan().bold()
                 );
                 println!(
                     "  {}   {}",
                     "Scan Quota:  ".bold(),
-                    "Unlimited (Local CLI & Public Repos)".green().bold()
+                    "Unlimited (Local CLI & Repositories)".green().bold()
                 );
-                println!("  {}   {}", "Status:      ".bold(), report.status.green());
-                println!("  {}   {}", "Period:      ".bold(), report.billing_period);
-                println!(
-                    "  {}   {} tests run this month",
-                    "Usage:       ".bold(),
-                    report.scans_this_month
-                );
+                println!("  {}   {}", "Status:      ".bold(), "Active".green());
                 println!(
                     "  {}   {}",
                     "Policy:      ".dimmed(),
-                    report.message.dimmed()
+                    "No cloud telemetry or scan quotas enforced.".dimmed()
                 );
                 println!("──────────────────────────────────────────────────\n");
             }

@@ -52,10 +52,13 @@ pub fn format_json_report(
             },
             "suppressedCount": suppressed.len(),
             "hasCycles": scan_result.has_cycles,
-            "licenseCompliance": license_audit.map(|a| &a.summary),
+            "status": scan_result.scan_status.as_str(),
             "advisoryStatus": scan_result.advisory_status.as_str(),
             "packagesChecked": scan_result.packages_checked,
             "packagesUnavailable": scan_result.packages_unavailable,
+            "newVulnerabilitiesCount": scan_result.new_vulnerabilities_count,
+            "baselineVulnerabilitiesCount": scan_result.baseline_vulnerabilities_count,
+            "completeness": &scan_result.completeness,
         },
         "vulnerabilities": scan_result.vulnerabilities,
         "suppressed": suppressed,
@@ -227,4 +230,100 @@ pub fn format_markdown_report(
     }
 
     md
+}
+
+/// Formats the GitHub Actions job summary per PRD v2.2 FR-017a.
+pub fn format_github_step_summary(
+    scan_result: &ScanResult,
+    remediations: &[RemediationAction],
+) -> String {
+    let mut out = String::new();
+    out.push_str("## 🛡️ Vexa SCA Security Report\n\n");
+    let status_badge = match scan_result.scan_status {
+        crate::types::ScanStatus::Pass => "🟢 **PASS**",
+        crate::types::ScanStatus::Fail => "🔴 **FAIL**",
+        crate::types::ScanStatus::Incomplete => "🟡 **INCOMPLETE**",
+    };
+    out.push_str(&format!(
+        "**Status:** {} | **Dependencies:** {} | **Active Vulnerabilities:** {}\n\n",
+        status_badge,
+        scan_result.scanned_packages_count,
+        scan_result.vulnerabilities.len()
+    ));
+
+    if scan_result.baseline_vulnerabilities_count > 0 {
+        out.push_str(&format!(
+            "- **New Findings (PR):** {}\n- **Baseline Findings:** {}\n\n",
+            scan_result.new_vulnerabilities_count, scan_result.baseline_vulnerabilities_count
+        ));
+    }
+
+    if !scan_result.vulnerabilities.is_empty() {
+        out.push_str("### ⚡ Top Priority Findings\n\n");
+        out.push_str("| Package | Severity | Priority | Usage Signal | Safest Fix |\n");
+        out.push_str("| :--- | :--- | :--- | :--- | :--- |\n");
+
+        let mut prioritized = scan_result.vulnerabilities.clone();
+        prioritized.sort_by(|a, b| {
+            b.priority_score
+                .partial_cmp(&a.priority_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        for v in prioritized.iter().take(3) {
+            let fix = v
+                .fixed_in
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "No fix published".to_string());
+            out.push_str(&format!(
+                "| `{}` | `{}` | `{:.1}` | `{}` | `{}` |\n",
+                v.package,
+                v.severity.level.as_str(),
+                v.priority_score,
+                v.usage_signal.as_str(),
+                fix
+            ));
+        }
+        out.push('\n');
+    }
+
+    if !remediations.is_empty() {
+        out.push_str("### 🛠️ Recommended Remediation Actions\n\n");
+        for rem in remediations.iter().take(5) {
+            out.push_str(&format!("- **{}**: {}\n", rem.package, rem.advice));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+/// Emits workflow annotations to stdout/stderr in GitHub Actions per PRD v2.2 FR-017a.
+pub fn emit_github_annotations(vulns: &[crate::types::VulnerabilityFinding]) {
+    for v in vulns {
+        let (file, line) = if let Some(reach) = &v.reachability {
+            if let Some(site) = reach.call_sites.first() {
+                (site.file.clone(), site.line)
+            } else {
+                ("package.json".to_string(), 1)
+            }
+        } else {
+            ("package.json".to_string(), 1)
+        };
+        let level = match v.severity.level {
+            crate::types::SeverityLevel::Critical | crate::types::SeverityLevel::High => "error",
+            crate::types::SeverityLevel::Medium => "warning",
+            _ => "notice",
+        };
+        let fix = if let Some(target) = v.fixed_in.first() {
+            format!(" Upgrade to {}.", target)
+        } else {
+            String::new()
+        };
+        println!(
+            "::{} file={},line={},title=Vulnerability in {} ({})::{} in {}@{}.{}",
+            level, file, line, v.package, v.id, v.title, v.package, v.version, fix
+        );
+    }
 }

@@ -33,6 +33,10 @@ pub struct ScanOptions {
     /// When true, do not fail the scan when the OSV advisory service is unavailable.
     /// Equivalent to passing `--allow-unavailable` on the CLI.
     pub allow_unavailable: bool,
+    /// Path to baseline report file for PR-diff comparison per PRD v2.2 FR-016.
+    pub baseline_file: Option<PathBuf>,
+    /// When true, enforce CI automation profile semantics per PRD v2.2 FR-010a.
+    pub is_ci_profile: bool,
 }
 
 impl Default for ScanOptions {
@@ -46,6 +50,8 @@ impl Default for ScanOptions {
             timeout_secs: 15,
             licenses: true,
             allow_unavailable: false,
+            baseline_file: None,
+            is_ci_profile: false,
         }
     }
 }
@@ -59,6 +65,43 @@ pub struct ProjectScanOutput {
     pub remediations: Vec<RemediationAction>,
     pub license_audit: Option<LicenseAudit>,
     pub policy_file: Option<PathBuf>,
+    pub discovered_projects: Vec<PathBuf>,
+}
+
+/// Helper to load baseline fingerprints from previous JSON or SARIF report per FR-016.
+pub fn load_baseline_fingerprints(baseline_path: &Path) -> std::collections::HashSet<String> {
+    let mut fingerprints = std::collections::HashSet::new();
+    if let Ok(content) = std::fs::read_to_string(baseline_path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(vulns) = val.get("vulnerabilities").and_then(|v| v.as_array()) {
+                for v in vulns {
+                    if let Some(fp) = v.get("fingerprint").and_then(|f| f.as_str()) {
+                        fingerprints.insert(fp.to_string());
+                    } else if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                        fingerprints.insert(id.to_string());
+                    }
+                }
+            }
+            if let Some(runs) = val.get("runs").and_then(|r| r.as_array()) {
+                for run in runs {
+                    if let Some(results) = run.get("results").and_then(|res| res.as_array()) {
+                        for res in results {
+                            if let Some(fp) = res
+                                .get("partialFingerprints")
+                                .and_then(|p| p.get("vexaFindingFingerprint/v1"))
+                                .and_then(|f| f.as_str())
+                            {
+                                fingerprints.insert(fp.to_string());
+                            } else if let Some(rid) = res.get("ruleId").and_then(|r| r.as_str()) {
+                                fingerprints.insert(rid.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fingerprints
 }
 
 pub async fn scan_project(
@@ -81,7 +124,7 @@ pub async fn scan_project(
     let (mut active, suppressed) =
         policy_engine.filter_vulnerabilities(&raw_scan_result.vulnerabilities, None);
 
-    // 4. Run Reachability Analysis
+    // 4. Run Reachability Analysis & Usage Signals (FR-001, FR-007a)
     let reachability_engine = ReachabilityEngine::new(project_dir);
     active = reachability_engine.evaluate_reachability(active);
 
@@ -95,6 +138,23 @@ pub async fn scan_project(
         })
         .count();
 
+    // 5. Evaluate PR-Diff baseline if provided (FR-016)
+    if let Some(base_path) = &options.baseline_file {
+        let baseline_fps = load_baseline_fingerprints(base_path);
+        for v in &mut active {
+            v.is_new = !baseline_fps.contains(&v.fingerprint) && !baseline_fps.contains(&v.id);
+            v.priority_score = v.compute_priority_score();
+        }
+        let new_count = active.iter().filter(|v| v.is_new).count();
+        let baseline_count = active.iter().filter(|v| !v.is_new).count();
+        raw_scan_result.new_vulnerabilities_count = new_count;
+        raw_scan_result.baseline_vulnerabilities_count = baseline_count;
+    } else {
+        let count = active.len();
+        raw_scan_result.new_vulnerabilities_count = count;
+        raw_scan_result.baseline_vulnerabilities_count = 0;
+    }
+
     // Filter to reachable only if requested
     if options.reachable_only {
         active.retain(|v| {
@@ -105,49 +165,47 @@ pub async fn scan_project(
         });
     }
 
-    // 5. Filter by severity threshold
+    // Filter by severity threshold
     if let Some(min_level) = options.severity_threshold {
         active.retain(|v| v.severity.level.weight() >= min_level.weight());
     }
 
-    // 6. Filter unfixed if requested
+    // Filter unfixed if requested
     if options.ignore_unfixed {
         active.retain(|v| !v.fixed_in.is_empty());
     }
 
-    // Sort: Reachable first, then by severity
+    // Sort by priority score first (FR-007, FR-008a)
     active.sort_by(|a, b| {
-        let reach_a = if a
-            .reachability
-            .as_ref()
-            .map(|r| r.status == ReachabilityStatus::Reachable)
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        };
-        let reach_b = if b
-            .reachability
-            .as_ref()
-            .map(|r| r.status == ReachabilityStatus::Reachable)
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        };
-
-        if reach_b != reach_a {
-            reach_b.cmp(&reach_a)
-        } else {
-            b.severity.level.weight().cmp(&a.severity.level.weight())
-        }
+        b.priority_score
+            .partial_cmp(&a.priority_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     raw_scan_result.vulnerabilities = active;
     raw_scan_result.vulnerabilities_count = raw_scan_result.vulnerabilities.len();
     raw_scan_result.unreachable_count = unreachable_total;
+
+    // Determine ScanStatus (FR-005, FR-010a)
+    let scan_status = if raw_scan_result.advisory_status.has_unreliable_data() {
+        crate::types::ScanStatus::Incomplete
+    } else if raw_scan_result.vulnerabilities.is_empty()
+        || (options.baseline_file.is_some() && raw_scan_result.new_vulnerabilities_count == 0)
+    {
+        crate::types::ScanStatus::Pass
+    } else {
+        crate::types::ScanStatus::Fail
+    };
+    raw_scan_result.scan_status = scan_status;
+
+    raw_scan_result.completeness.source_files_discovered = reachability_engine.source_files.len();
+    raw_scan_result.completeness.source_files_analysed = reachability_engine.source_files.len();
+    if reachability_engine.file_limit_hit {
+        raw_scan_result
+            .completeness
+            .limits_hit
+            .push("FILE_LIMIT_HIT".to_string());
+    }
 
     // 6. Generate remediations
     let remediations = Remediator::generate_remediation(&raw_scan_result.vulnerabilities);
@@ -171,6 +229,7 @@ pub async fn scan_project(
         remediations,
         license_audit,
         policy_file: policy_path,
+        discovered_projects: detection.discovered_projects,
     })
 }
 

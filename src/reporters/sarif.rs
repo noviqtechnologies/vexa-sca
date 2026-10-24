@@ -173,13 +173,19 @@ pub fn format_sarif_report(
                     }
                 }
             ],
+            "partialFingerprints": {
+                "vexaFindingFingerprint/v1": vuln.fingerprint.clone()
+            },
             "properties": {
                 "package": vuln.package,
                 "version": vuln.version,
                 "ecosystem": vuln.ecosystem,
                 "isTransitive": vuln.is_transitive,
                 "reachability": reach_str,
-                "dependencyPath": dep_path
+                "dependencyPath": dep_path,
+                "fingerprint": vuln.fingerprint,
+                "usageSignal": vuln.usage_signal.as_str(),
+                "priorityScore": vuln.priority_score
             }
         });
 
