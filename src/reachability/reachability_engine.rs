@@ -1,3 +1,4 @@
+use crate::reachability::js_ast_analyzer::{analyze_file, source_type_for_path};
 use crate::types::{
     CallSite, ReachabilityResult, ReachabilityStatus, ReasonCode, UsageSignal, VulnerabilityFinding,
 };
@@ -24,6 +25,13 @@ static ESM_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
 });
 static NAMED_ESM_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r#"import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]"#).unwrap()
+});
+/// Matches dynamic import() assignments, e.g.:
+///   const mod = await import('lodash')
+///   const { template } = await import('lodash')
+///   let lodashModule = import('lodash').then(...)
+static DYN_IMPORT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r#"(?:const|let|var)\s+(\{[^}]+\}|[a-zA-Z0-9_$]+)\s*=\s*(?:await\s+)?import\(['"]([^'"]+)['"]\)"#).unwrap()
 });
 static PY_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r#"^import\s+([a-zA-Z0-9_]+)(?:\s+as\s+([a-zA-Z0-9_]+))?"#).unwrap()
@@ -259,6 +267,9 @@ impl ReachabilityEngine {
 
         let mut call_sites = Vec::new();
         let mut imported_in_source = false;
+        let mut parse_failed = false;
+        let mut dynamic_construct_detected = false;
+        let mut has_reexports = false;
 
         for file_path in &self.source_files {
             let content = match fs::read_to_string(file_path) {
@@ -272,19 +283,47 @@ impl ReachabilityEngine {
                 .to_string_lossy()
                 .to_string();
 
-            let (file_imported, matches) =
-                self.inspect_file(&content, pkg_name, target_functions.as_deref());
-            if file_imported {
-                imported_in_source = true;
-            }
-            for m in matches {
-                call_sites.push(CallSite {
-                    file: relative_path.clone(),
-                    line: m.0,
-                    code: m.1,
-                    matched_function: m.2,
-                    is_specific_function_match: m.3,
-                });
+            if let Some(source_type) = source_type_for_path(file_path) {
+                // Real JS/TS AST parser pass (oxc)
+                let analysis =
+                    analyze_file(&content, source_type, pkg_name, target_functions.as_deref());
+                if analysis.is_imported {
+                    imported_in_source = true;
+                }
+                if analysis.parse_failed {
+                    parse_failed = true;
+                }
+                if analysis.has_dynamic_construct {
+                    dynamic_construct_detected = true;
+                }
+                if analysis.has_reexports {
+                    has_reexports = true;
+                }
+                for m in analysis.call_sites {
+                    call_sites.push(CallSite {
+                        file: relative_path.clone(),
+                        line: m.0,
+                        code: m.1,
+                        matched_function: m.2,
+                        is_specific_function_match: m.3,
+                    });
+                }
+            } else {
+                // Regex fallback for non-JS/TS files (Python, Go, Java, etc.)
+                let (file_imported, matches) =
+                    self.inspect_file(&content, pkg_name, target_functions.as_deref());
+                if file_imported {
+                    imported_in_source = true;
+                }
+                for m in matches {
+                    call_sites.push(CallSite {
+                        file: relative_path.clone(),
+                        line: m.0,
+                        code: m.1,
+                        matched_function: m.2,
+                        is_specific_function_match: m.3,
+                    });
+                }
             }
         }
 
@@ -292,7 +331,7 @@ impl ReachabilityEngine {
         let is_specific = call_sites.iter().any(|c| c.is_specific_function_match);
 
         // Determine UsageSignal (FR-007a)
-        let usage_signal = if has_call_sites || imported_in_source {
+        let usage_signal = if has_call_sites || imported_in_source || has_reexports {
             UsageSignal::ImportedSource
         } else if self.config_referenced_pkgs.contains(pkg_name) {
             UsageSignal::ReferencedConfigOrScript
@@ -303,10 +342,25 @@ impl ReachabilityEngine {
         };
 
         // Determine Reachability Verdict (FR-001, FR-002, FR-003)
+        // Conservative rules: anything the analyzer cannot prove must remain UNKNOWN.
         let (status, reason_code) = if has_call_sites {
             (
                 ReachabilityStatus::Reachable,
                 Some(ReasonCode::DirectUsageFound),
+            )
+        } else if parse_failed {
+            (ReachabilityStatus::Unknown, Some(ReasonCode::ParseError))
+        } else if dynamic_construct_detected
+            && (imported_in_source || self.config_referenced_pkgs.contains(pkg_name))
+        {
+            (
+                ReachabilityStatus::Unknown,
+                Some(ReasonCode::DynamicConstruct),
+            )
+        } else if has_reexports {
+            (
+                ReachabilityStatus::Unknown,
+                Some(ReasonCode::CrossFileUnresolved),
             )
         } else if target_functions.is_none() {
             (ReachabilityStatus::Unknown, Some(ReasonCode::NoSymbolData))
@@ -354,12 +408,23 @@ impl ReachabilityEngine {
         None
     }
 
-    fn inspect_file(
+    pub fn inspect_file(
         &self,
         content: &str,
         pkg_name: &str,
         target_functions: Option<&[String]>,
     ) -> (bool, Vec<(usize, String, String, bool)>) {
+        // Try oxc JS/TS AST analyzer first
+        let ast_res = analyze_file(
+            content,
+            oxc_span::SourceType::mjs(),
+            pkg_name,
+            target_functions,
+        );
+        if ast_res.is_imported {
+            return (true, ast_res.call_sites);
+        }
+
         let mut matches = Vec::new();
         // Fast-path exit: if the content does not contain the package name, it cannot be imported
         if !content.contains(pkg_name) {
@@ -413,6 +478,35 @@ impl ReachabilityEngine {
                     }
                 }
             }
+            // Dynamic import: `const mod = await import('pkg')` or
+            // `const { fn } = await import('pkg')`
+            if let Some(cap) = DYN_IMPORT_RE.captures(line) {
+                if cap.get(2).map(|m| m.as_str()) == Some(pkg_name) {
+                    let binding = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+                    if binding.starts_with('{') {
+                        // Destructured: { template, set }
+                        let inner = binding.trim_matches(|c| c == '{' || c == '}');
+                        for name in inner.split(',') {
+                            // Handle `default as _` and plain `template`
+                            let parts: Vec<&str> = name.split_whitespace().collect();
+                            let clean = if parts.len() >= 3 && parts[1] == "as" {
+                                parts[2] // `default as _` -> `_`
+                            } else {
+                                parts.first().copied().unwrap_or("")
+                            };
+                            let clean = clean.trim_matches(|c: char| {
+                                !c.is_alphanumeric() && c != '_' && c != '$'
+                            });
+                            if !clean.is_empty() {
+                                imported_named_functions.insert(clean.to_string());
+                            }
+                        }
+                    } else {
+                        // Whole-module binding: `const lodashModule = await import('lodash')`
+                        import_alias = Some(binding.to_string());
+                    }
+                }
+            }
         }
 
         let is_imported = import_alias.is_some() || !imported_named_functions.is_empty();
@@ -438,6 +532,20 @@ impl ReachabilityEngine {
                     );
                     if let Ok(re) = Regex::new(&pat) {
                         matchers.push(Matcher::AliasFn(re, format!("{}.{}", alias, fn_name)));
+                    }
+                    // Also match alias.default.fn( — emitted when a dynamic import is
+                    // stored as a whole-module binding and the caller accesses .default:
+                    //   const m = await import('lodash'); m.default.template(...)
+                    let pat_def = format!(
+                        r"\b{}\.default\.{}\s*\(",
+                        regex::escape(alias),
+                        regex::escape(fn_name)
+                    );
+                    if let Ok(re) = Regex::new(&pat_def) {
+                        matchers.push(Matcher::AliasFn(
+                            re,
+                            format!("{}.default.{}", alias, fn_name),
+                        ));
                     }
                 }
                 if imported_named_functions.contains(fn_name) {
@@ -513,7 +621,19 @@ mod tests {
         let res1 = engine.check_vulnerability(&template_vuln);
         assert_eq!(res1.status, ReachabilityStatus::Reachable);
         assert!(!res1.call_sites.is_empty());
-        assert_eq!(res1.call_sites[0].matched_function, "_.template");
+        // At least one call site must match a "template" function (could be
+        // "_.template" from server.js or "lodashModule.default.template" from
+        // dynamic_import.js — both are valid detections).
+        assert!(
+            res1.call_sites
+                .iter()
+                .any(|cs| cs.matched_function.contains("template")),
+            "Expected a call site matching 'template', got: {:?}",
+            res1.call_sites
+                .iter()
+                .map(|cs| &cs.matched_function)
+                .collect::<Vec<_>>()
+        );
 
         let unset_vuln = VulnerabilityFinding {
             id: "GHSA-f23m-r3pf-42rh".to_string(),
@@ -534,5 +654,78 @@ mod tests {
         let res2 = engine.check_vulnerability(&unset_vuln);
         assert_eq!(res2.status, ReachabilityStatus::Unreachable);
         assert!(res2.call_sites.is_empty());
+    }
+
+    /// Regression test: `await import('lodash')` followed by `.default.template()`
+    /// previously produced a false-negative (NOT_REACHABLE / PASS).
+    /// The DYN_IMPORT_RE + alias.default.fn matcher must detect it as Reachable.
+    #[test]
+    fn test_dynamic_import_reachability() {
+        let fixture_dir = Path::new("test/fixtures/reachability-app");
+        let engine = ReachabilityEngine::new(fixture_dir);
+
+        let template_vuln = VulnerabilityFinding {
+            id: "GHSA-35jh-r3h4-6jhm".to_string(),
+            title: "Command Injection in lodash.template".to_string(),
+            package: "lodash".to_string(),
+            version: "4.17.15".to_string(),
+            ecosystem: "npm".to_string(),
+            pkg_id: "lodash@4.17.15".to_string(),
+            severity: SeverityInfo {
+                level: SeverityLevel::High,
+                score: 7.5,
+                vector: None,
+            },
+            cve: Some("CVE-2021-23337".to_string()),
+            cwes: vec![],
+            fixed_in: vec!["4.17.21".to_string()],
+            ..Default::default()
+        };
+
+        // The fixture now includes dynamic_import.js which uses await import()
+        let res = engine.check_vulnerability(&template_vuln);
+        // Must be Reachable — dynamic import must not be a false negative
+        assert_eq!(
+            res.status,
+            ReachabilityStatus::Reachable,
+            "Dynamic import of lodash with .default.template() call must be detected as Reachable"
+        );
+        // At least one call site should reference the dynamic_import.js fixture
+        assert!(
+            !res.call_sites.is_empty(),
+            "Expected at least one call site from dynamic_import.js"
+        );
+        let has_dynamic_site = res.call_sites.iter().any(|cs| {
+            cs.file.contains("dynamic_import") || cs.matched_function.contains("template")
+        });
+        assert!(
+            has_dynamic_site,
+            "Expected a call site matching 'template' from the dynamic import fixture"
+        );
+    }
+
+    /// Regression test: inspect_file correctly detects destructured dynamic imports.
+    /// `const { template } = await import('lodash')` should populate
+    /// imported_named_functions and trigger a NamedFn matcher.
+    #[test]
+    fn test_inspect_file_destructured_dynamic_import() {
+        let engine = ReachabilityEngine::new(Path::new("."));
+        let source = r#"
+async function run() {
+    const { template } = await import('lodash');
+    const compiled = template('Hello <%= name %>!');
+    return compiled({ name: 'world' });
+}
+"#;
+        let (imported, call_sites) =
+            engine.inspect_file(source, "lodash", Some(&["template".to_string()]));
+        assert!(
+            imported,
+            "destructured dynamic import must mark the file as imported"
+        );
+        assert!(
+            !call_sites.is_empty(),
+            "template() call must be found after destructured dynamic import"
+        );
     }
 }

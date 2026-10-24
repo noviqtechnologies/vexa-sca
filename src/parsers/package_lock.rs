@@ -112,11 +112,14 @@ impl PackageLockParser {
                 None => continue,
             };
 
-            let pkg_info = PkgInfo::new(name, version.clone(), "npm");
+            let pkg_info = PkgInfo::new(name.clone(), version.clone(), "npm");
             graph.add_pkg(pkg_info.clone());
 
             let node_id = format!("npm:{}@{}", pkg_path, version);
             path_to_node_id.insert(pkg_path.clone(), node_id.clone());
+            if !pkg_path.starts_with("node_modules/") {
+                path_to_node_id.insert(name, node_id.clone());
+            }
 
             graph.add_node(
                 node_id,
@@ -151,6 +154,20 @@ impl PackageLockParser {
             let top_level_path = format!("node_modules/{}", dep_name);
             if let Some(top_node_id) = path_to_node_id.get(&top_level_path) {
                 let _ = graph.add_edge(&graph.root_node_id.clone(), top_node_id);
+            } else if let Some((_, ws_node_id)) = path_to_node_id.iter().find(|(path, _)| {
+                !path.starts_with("node_modules/")
+                    && (path.ends_with(&format!("/{}", dep_name)) || *path == dep_name)
+            }) {
+                let _ = graph.add_edge(&graph.root_node_id.clone(), ws_node_id);
+            }
+        }
+
+        // Connect all workspace packages directly to root
+        for (pkg_path, _) in packages {
+            if !pkg_path.is_empty() && !pkg_path.starts_with("node_modules/") {
+                if let Some(ws_node_id) = path_to_node_id.get(pkg_path) {
+                    let _ = graph.add_edge(&graph.root_node_id.clone(), ws_node_id);
+                }
             }
         }
 
@@ -179,21 +196,73 @@ impl PackageLockParser {
                 }
             }
 
+            if let Some(pd) = pkg_val.get("peerDependencies").and_then(|v| v.as_object()) {
+                for (k, v) in pd {
+                    req_deps.insert(k.clone(), v.as_str().unwrap_or(""));
+                }
+            }
+
             for req_name in req_deps.keys() {
-                let candidate_child = format!("{}/node_modules/{}", pkg_path, req_name);
-                let top_level = format!("node_modules/{}", req_name);
-
-                let child_node_id = path_to_node_id
-                    .get(&candidate_child)
-                    .or_else(|| path_to_node_id.get(&top_level));
-
-                if let Some(child_id) = child_node_id {
-                    let _ = graph.add_edge(&parent_node_id, child_id);
+                if let Some(child_id) =
+                    Self::resolve_nearest_ancestor(pkg_path, req_name, &path_to_node_id)
+                {
+                    let _ = graph.add_edge(&parent_node_id, &child_id);
                 }
             }
         }
 
         Ok(())
+    }
+
+    /// Resolves child dependency using npm nearest-ancestor node_modules lookup.
+    /// Iteratively walks up directory parents from the requesting package's path
+    /// to find the closest enclosing node_modules directory that contains the
+    /// target package, correctly modeling duplicate-version graphs and workspaces.
+    pub fn resolve_nearest_ancestor(
+        pkg_path: &str,
+        req_name: &str,
+        path_to_node_id: &HashMap<String, String>,
+    ) -> Option<String> {
+        // 1. Direct nested under requesting package: pkg_path/node_modules/req_name
+        let direct = format!("{}/node_modules/{}", pkg_path, req_name);
+        if let Some(id) = path_to_node_id.get(&direct) {
+            return Some(id.clone());
+        }
+
+        // 2. Hierarchical ancestor walk:
+        // Continually strip path segments and check if that ancestor directory has a node_modules/req_name.
+        let mut curr = pkg_path;
+        while let Some(idx) = curr.rfind('/') {
+            curr = &curr[..idx];
+            let candidate = if curr.ends_with("node_modules") {
+                format!("{}/{}", curr, req_name)
+            } else {
+                format!("{}/node_modules/{}", curr, req_name)
+            };
+            if let Some(id) = path_to_node_id.get(&candidate) {
+                return Some(id.clone());
+            }
+        }
+
+        // 3. Fallback to top-level root node_modules/req_name
+        let top_level = format!("node_modules/{}", req_name);
+        if let Some(id) = path_to_node_id.get(&top_level) {
+            return Some(id.clone());
+        }
+
+        // 4. Fallback to workspace package name or path
+        if let Some(id) = path_to_node_id.get(req_name) {
+            return Some(id.clone());
+        }
+        path_to_node_id.iter().find_map(|(path, id)| {
+            if !path.starts_with("node_modules/")
+                && (path.ends_with(&format!("/{}", req_name)) || *path == req_name)
+            {
+                Some(id.clone())
+            } else {
+                None
+            }
+        })
     }
 
     fn parse_v1(
@@ -280,5 +349,43 @@ mod tests {
 
         let lodash = pkgs.iter().find(|p| p.name == "lodash").unwrap();
         assert_eq!(lodash.version, "4.17.15");
+    }
+
+    #[test]
+    fn test_resolve_nearest_ancestor_resolution() {
+        let mut path_map = HashMap::new();
+        // Top level: node_modules/shared@1.0.0
+        path_map.insert(
+            "node_modules/shared".to_string(),
+            "npm:shared@1.0.0".to_string(),
+        );
+        // Nested under pkgA: node_modules/pkgA/node_modules/shared@2.0.0
+        path_map.insert(
+            "node_modules/pkgA/node_modules/shared".to_string(),
+            "npm:pkgA/shared@2.0.0".to_string(),
+        );
+        // Deeply nested under pkgA/pkgB: node_modules/pkgA/node_modules/pkgB
+        path_map.insert(
+            "node_modules/pkgA/node_modules/pkgB".to_string(),
+            "npm:pkgA/pkgB@1.0.0".to_string(),
+        );
+        // Another pkgC at top level: node_modules/pkgC
+        path_map.insert(
+            "node_modules/pkgC".to_string(),
+            "npm:pkgC@1.0.0".to_string(),
+        );
+
+        // 1. pkgB inside pkgA requiring "shared" must resolve to pkgA's nearest ancestor shared (2.0.0), NOT root (1.0.0)
+        let resolved = PackageLockParser::resolve_nearest_ancestor(
+            "node_modules/pkgA/node_modules/pkgB",
+            "shared",
+            &path_map,
+        );
+        assert_eq!(resolved.as_deref(), Some("npm:pkgA/shared@2.0.0"));
+
+        // 2. pkgC at top level requiring "shared" must resolve to root shared (1.0.0)
+        let resolved_top =
+            PackageLockParser::resolve_nearest_ancestor("node_modules/pkgC", "shared", &path_map);
+        assert_eq!(resolved_top.as_deref(), Some("npm:shared@1.0.0"));
     }
 }

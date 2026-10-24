@@ -28,7 +28,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "time"] }
 clap = { version = "4", features = ["derive"] }
 semver = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
@@ -40,3 +40,10 @@ toml = "0.8"
 colored = "2.1"
 tar = "0.4"
 flate2 = "1.0"
+# Real JS/TS AST parser — replaces regex-only reachability analysis for JS/TS/JSX/TSX.
+# All versions pinned to the same oxc monorepo release for API compatibility.
+oxc_allocator = "0.155.0"
+oxc_parser    = "0.155.0"
+oxc_ast       = "0.155.0"
+oxc_span      = "0.155.0"
+oxc_ast_visit = "0.155.0"

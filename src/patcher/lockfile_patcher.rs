@@ -211,6 +211,62 @@ impl LockfilePatcher {
             ov.insert(package.to_string(), Value::String(pinned_to.to_string()));
         }
     }
+
+    /// Regenerates the lockfile by running the appropriate package-manager install
+    /// command after `package.json` has been patched.
+    ///
+    /// Detection order:
+    ///   - `pnpm-lock.yaml` present → `pnpm install --no-frozen-lockfile`
+    ///   - `yarn.lock` present      → `yarn install --no-immutable`
+    ///   - otherwise                → `npm install`
+    ///
+    /// Returns `Ok(cmd_string)` on success, `Err(message)` with captured stderr
+    /// on failure so the caller can present a useful diagnostic.
+    pub fn regenerate_lockfile(project_dir: &Path) -> Result<String, String> {
+        use std::process::Command;
+
+        // Detect which package manager to use based on present lockfile
+        let (program, args): (&str, &[&str]) = if project_dir.join("pnpm-lock.yaml").exists()
+            || project_dir.join("pnpm-lock.yml").exists()
+        {
+            ("pnpm", &["install", "--no-frozen-lockfile"])
+        } else if project_dir.join("yarn.lock").exists() {
+            ("yarn", &["install", "--no-immutable"])
+        } else {
+            ("npm", &["install"])
+        };
+
+        let cmd_display = format!("{} {}", program, args.join(" "));
+
+        let output = Command::new(program)
+            .args(args)
+            .current_dir(project_dir)
+            .output()
+            .map_err(|e| {
+                format!(
+                    "Failed to run '{}': {}. Ensure {} is installed and on PATH.",
+                    cmd_display, e, program
+                )
+            })?;
+
+        if output.status.success() {
+            Ok(cmd_display)
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let diag = if !stderr.trim().is_empty() {
+                stderr.trim().chars().take(800).collect::<String>()
+            } else {
+                stdout.trim().chars().take(800).collect::<String>()
+            };
+            Err(format!(
+                "'{}' exited with status {}.\n{}",
+                cmd_display,
+                output.status.code().unwrap_or(-1),
+                diag
+            ))
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1069,9 +1069,36 @@ pub async fn run() {
                                 crate::parsers::detector::ManifestType::PythonRequirements => {
                                     println!("\nRun \"pip install -r requirements.txt\" to install the updated dependencies.");
                                 }
-                                _ => {
-                                    println!("\nRun \"npm install\", \"yarn\", or \"pnpm install\" to update your lockfile.");
+                                crate::parsers::detector::ManifestType::NpmPackageLock
+                                | crate::parsers::detector::ManifestType::YarnLock
+                                | crate::parsers::detector::ManifestType::PnpmLock => {
+                                    println!("\nRegenerating lockfile…");
+                                    match crate::patcher::LockfilePatcher::regenerate_lockfile(
+                                        &path,
+                                    ) {
+                                        Ok(cmd) => {
+                                            println!(
+                                                "  {} `{}` succeeded — lockfile is up to date.",
+                                                "✔".green(),
+                                                cmd.cyan()
+                                            );
+                                        }
+                                        Err(e) => {
+                                            eprintln!(
+                                                "\n{} Lockfile regeneration failed:\n{}",
+                                                "✘".red().bold(),
+                                                e
+                                            );
+                                            eprintln!(
+                                                "\nThe manifest (package.json) was updated but \
+                                                 the lockfile is now out of sync. Resolve the \
+                                                 error above and re-run the install command manually."
+                                            );
+                                            exit(1);
+                                        }
+                                    }
                                 }
+                                _ => {}
                             }
                         }
                     } else {

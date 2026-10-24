@@ -94,25 +94,42 @@ impl VulnScanner {
         let mut had_network_error = false;
         let mut had_parse_error = false;
 
-        // 2. Query batch for uncached packages
-        if !uncached.is_empty() {
-            match self.fetch_batch(&uncached).await {
+        // 2. Query batch for uncached packages — chunk requests to avoid oversized
+        // payloads (OSV max is not publicly documented but large batches fail in
+        // practice). Each chunk is retried up to MAX_RETRIES times with exponential
+        // back-off before its packages are marked unavailable.
+        const CHUNK_SIZE: usize = 500;
+        const MAX_RETRIES: u32 = 3;
+
+        for chunk in uncached.chunks(CHUNK_SIZE) {
+            let mut last_outcome = BatchFetchOutcome::NetworkError;
+            for attempt in 0..MAX_RETRIES {
+                if attempt > 0 {
+                    let backoff_ms = 250u64 * (1u64 << (attempt - 1)); // 250ms, 500ms
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                }
+                last_outcome = self.fetch_batch(chunk).await;
+                match &last_outcome {
+                    BatchFetchOutcome::Success(_) => break,
+                    BatchFetchOutcome::ParseError => break, // not transient, don't retry
+                    BatchFetchOutcome::NetworkError => {}   // retry
+                }
+            }
+
+            match last_outcome {
                 BatchFetchOutcome::Success(fetched) => {
-                    // Only cache on actual success; never cache empty results from a failed query
-                    for (pkg, raw_vulns) in uncached.iter().zip(fetched) {
+                    for (pkg, raw_vulns) in chunk.iter().zip(fetched) {
                         self.cache.set(pkg, &raw_vulns);
                         results_map.insert(pkg.id.clone(), raw_vulns);
                     }
                 }
                 BatchFetchOutcome::NetworkError => {
                     had_network_error = true;
-                    packages_unavailable = uncached.len();
-                    // Do NOT cache anything; do NOT insert empty entries into results_map
+                    packages_unavailable += chunk.len();
                 }
                 BatchFetchOutcome::ParseError => {
                     had_parse_error = true;
-                    packages_unavailable = uncached.len();
-                    // Do NOT cache anything; do NOT insert empty entries into results_map
+                    packages_unavailable += chunk.len();
                 }
             }
         }

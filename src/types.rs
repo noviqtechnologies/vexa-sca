@@ -197,6 +197,10 @@ pub enum ReasonCode {
     AnalysisCompleteNoUsage,
     #[serde(rename = "DIRECT_USAGE_FOUND")]
     DirectUsageFound,
+    #[serde(rename = "PARSE_ERROR")]
+    ParseError,
+    #[serde(rename = "CROSS_FILE_UNRESOLVED")]
+    CrossFileUnresolved,
 }
 
 impl ReasonCode {
@@ -214,6 +218,8 @@ impl ReasonCode {
             Self::SourceUnavailable => "SOURCE_UNAVAILABLE",
             Self::AnalysisCompleteNoUsage => "ANALYSIS_COMPLETE_NO_USAGE",
             Self::DirectUsageFound => "DIRECT_USAGE_FOUND",
+            Self::ParseError => "PARSE_ERROR",
+            Self::CrossFileUnresolved => "CROSS_FILE_UNRESOLVED",
         }
     }
 }

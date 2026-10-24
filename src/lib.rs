@@ -188,7 +188,23 @@ pub async fn scan_project(
         raw_scan_result.baseline_vulnerabilities_count = 0;
     }
 
-    // Filter to reachable only if requested
+    // Filter to reachable only if requested.
+    // IMPORTANT: track whether any findings have Unknown reachability due to
+    // incomplete analysis (file limit hit, no source available, parse error,
+    // dynamic construct, re-export, or unanalyzed symbols). Dropping
+    // those findings while still emitting PASS would be a false-negative gate.
+    let has_unknown_reachability = active.iter().any(|v| {
+        v.reachability
+            .as_ref()
+            .map(|r| r.status == crate::types::ReachabilityStatus::Unknown)
+            .unwrap_or(true)
+    });
+
+    let reachable_only_has_unanalyzed = options.reachable_only
+        && (reachability_engine.file_limit_hit
+            || reachability_engine.source_files.is_empty()
+            || has_unknown_reachability);
+
     if options.reachable_only {
         active.retain(|v| {
             v.reachability
@@ -220,15 +236,18 @@ pub async fn scan_project(
     raw_scan_result.unreachable_count = unreachable_total;
 
     // Determine ScanStatus (FR-005, FR-010a)
-    let scan_status = if raw_scan_result.advisory_status.has_unreliable_data() {
-        crate::types::ScanStatus::Incomplete
-    } else if raw_scan_result.vulnerabilities.is_empty()
-        || (options.baseline_file.is_some() && raw_scan_result.new_vulnerabilities_count == 0)
-    {
-        crate::types::ScanStatus::Pass
-    } else {
-        crate::types::ScanStatus::Fail
-    };
+    // reachable_only_has_unanalyzed: source was incomplete so we cannot claim
+    // "nothing reachable" — that would be a false PASS.
+    let scan_status =
+        if raw_scan_result.advisory_status.has_unreliable_data() || reachable_only_has_unanalyzed {
+            crate::types::ScanStatus::Incomplete
+        } else if raw_scan_result.vulnerabilities.is_empty()
+            || (options.baseline_file.is_some() && raw_scan_result.new_vulnerabilities_count == 0)
+        {
+            crate::types::ScanStatus::Pass
+        } else {
+            crate::types::ScanStatus::Fail
+        };
     raw_scan_result.scan_status = scan_status;
 
     raw_scan_result.completeness.source_files_discovered = reachability_engine.source_files.len();
@@ -344,6 +363,27 @@ mod tests {
             .as_ref()
             .map(|r| r.status == ReachabilityStatus::Reachable)
             .unwrap_or(false)));
+    }
+
+    #[tokio::test]
+    async fn test_reachable_only_does_not_turn_unknown_into_pass() {
+        let fixture_dir = Path::new("test/fixtures/reachability-app");
+        let filtered = scan_project(
+            fixture_dir,
+            ScanOptions {
+                reachable_only: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        // If any findings were unknown or unproven, status must never be PASS
+        assert_ne!(
+            filtered.scan_result.scan_status,
+            crate::types::ScanStatus::Pass,
+            "--reachable-only must never turn unanalyzed/unknown reachability into PASS"
+        );
     }
 
     #[tokio::test]
