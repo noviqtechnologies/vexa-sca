@@ -366,13 +366,23 @@ pub struct VulnerabilityFinding {
 
 impl VulnerabilityFinding {
     /// Calculate deterministic stable fingerprint per PRD v2.2 FR-006:
-    /// Normalized from ecosystem, package, advisory ID, and scope.
-    pub fn calculate_fingerprint(ecosystem: &str, package: &str, id: &str, scope: &str) -> String {
+    /// Normalized from ecosystem, package, version, advisory ID, and scope.
+    /// Version is included to prevent collisions when the same advisory affects
+    /// multiple distinct installed versions of the same package.
+    pub fn calculate_fingerprint(
+        ecosystem: &str,
+        package: &str,
+        version: &str,
+        id: &str,
+        scope: &str,
+    ) -> String {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(ecosystem.to_lowercase().as_bytes());
         hasher.update(b":");
         hasher.update(package.to_lowercase().as_bytes());
+        hasher.update(b":");
+        hasher.update(version.to_lowercase().as_bytes());
         hasher.update(b":");
         hasher.update(id.to_uppercase().as_bytes());
         hasher.update(b":");

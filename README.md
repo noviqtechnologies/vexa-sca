@@ -605,10 +605,10 @@ vexa-sca ci [PATH] [OPTIONS]
 ---
 
 ### 3. `vexa-sca init`
-Bootstrap a hardened, pinned GitHub Actions workflow for Vexa SCA.
+Bootstrap a hardened, pinned GitHub Actions workflow and `.vexa-sca` policy file for Vexa SCA.
 
 ```bash
-# Generate non-blocking CI workflow in .github/workflows/vexa-sca.yml
+# Generate non-blocking CI workflow in .github/workflows/vexa-sca.yml and .vexa-sca policy template
 vexa-sca init [PATH]
 
 # Generate blocking CI workflow (fails on high/critical vulnerabilities)
@@ -617,7 +617,7 @@ vexa-sca init [PATH] --enforce
 
 ---
 
-### 2. `vexa-sca fix`
+### 4. `vexa-sca fix`
 Automatically remediate vulnerabilities in manifest dependencies and lockfiles.
 
 ```bash
@@ -636,7 +636,7 @@ vexa-sca fix [PATH] [OPTIONS]
 
 ---
 
-### 3. `vexa-sca licenses`
+### 5. `vexa-sca licenses`
 Audit licenses across the entire dependency graph.
 
 ```bash
@@ -649,7 +649,7 @@ vexa-sca licenses [PATH]
 
 ---
 
-### 4. `vexa-sca graph`
+### 6. `vexa-sca graph`
 Inspect and visualize the dependency graph representation.
 
 ```bash
@@ -662,7 +662,7 @@ vexa-sca graph --json
 
 ---
 
-### 5. `vexa-sca test`
+### 7. `vexa-sca test`
 Perform an ad-hoc query on an individual package version without needing a lockfile.
 
 ```bash
@@ -679,7 +679,7 @@ vexa-sca test org.apache.logging.log4j:log4j-core@2.14.1 Maven
 
 ---
 
-### 6. `vexa-sca container`
+### 8. `vexa-sca container`
 Scan container images, exported root filesystems, and Dockerfiles for OS package vulnerabilities.
 
 ```bash

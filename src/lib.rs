@@ -69,32 +69,61 @@ pub struct ProjectScanOutput {
 }
 
 /// Helper to load baseline fingerprints from previous JSON or SARIF report per FR-016.
+/// Handles UTF-8, UTF-8-BOM, and UTF-16 LE (the default encoding produced by PowerShell's
+/// `>` redirect operator on Windows) so that `--baseline` works regardless of how the file
+/// was generated.
 pub fn load_baseline_fingerprints(baseline_path: &Path) -> std::collections::HashSet<String> {
     let mut fingerprints = std::collections::HashSet::new();
-    if let Ok(content) = std::fs::read_to_string(baseline_path) {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(vulns) = val.get("vulnerabilities").and_then(|v| v.as_array()) {
-                for v in vulns {
-                    if let Some(fp) = v.get("fingerprint").and_then(|f| f.as_str()) {
-                        fingerprints.insert(fp.to_string());
-                    } else if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                        fingerprints.insert(id.to_string());
-                    }
+
+    let raw = match std::fs::read(baseline_path) {
+        Ok(b) => b,
+        Err(_) => return fingerprints,
+    };
+
+    // Decode: UTF-16 LE (BOM FF FE), UTF-8 BOM (EF BB BF), or plain UTF-8.
+    let content: String = if raw.starts_with(&[0xFF, 0xFE]) {
+        // UTF-16 LE with BOM
+        let u16_pairs: Vec<u16> = raw[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&u16_pairs).to_string()
+    } else if raw.starts_with(&[0xFE, 0xFF]) {
+        // UTF-16 BE with BOM
+        let u16_pairs: Vec<u16> = raw[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&u16_pairs).to_string()
+    } else if raw.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        // UTF-8 BOM — strip it
+        String::from_utf8_lossy(&raw[3..]).to_string()
+    } else {
+        String::from_utf8_lossy(&raw).to_string()
+    };
+
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+        if let Some(vulns) = val.get("vulnerabilities").and_then(|v| v.as_array()) {
+            for v in vulns {
+                if let Some(fp) = v.get("fingerprint").and_then(|f| f.as_str()) {
+                    fingerprints.insert(fp.to_string());
+                } else if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                    fingerprints.insert(id.to_string());
                 }
             }
-            if let Some(runs) = val.get("runs").and_then(|r| r.as_array()) {
-                for run in runs {
-                    if let Some(results) = run.get("results").and_then(|res| res.as_array()) {
-                        for res in results {
-                            if let Some(fp) = res
-                                .get("partialFingerprints")
-                                .and_then(|p| p.get("vexaFindingFingerprint/v1"))
-                                .and_then(|f| f.as_str())
-                            {
-                                fingerprints.insert(fp.to_string());
-                            } else if let Some(rid) = res.get("ruleId").and_then(|r| r.as_str()) {
-                                fingerprints.insert(rid.to_string());
-                            }
+        }
+        if let Some(runs) = val.get("runs").and_then(|r| r.as_array()) {
+            for run in runs {
+                if let Some(results) = run.get("results").and_then(|res| res.as_array()) {
+                    for res in results {
+                        if let Some(fp) = res
+                            .get("partialFingerprints")
+                            .and_then(|p| p.get("vexaFindingFingerprint/v1"))
+                            .and_then(|f| f.as_str())
+                        {
+                            fingerprints.insert(fp.to_string());
+                        } else if let Some(rid) = res.get("ruleId").and_then(|r| r.as_str()) {
+                            fingerprints.insert(rid.to_string());
                         }
                     }
                 }

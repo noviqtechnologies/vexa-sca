@@ -807,6 +807,7 @@ impl VulnScanner {
         let fingerprint = VulnerabilityFinding::calculate_fingerprint(
             &pkg.ecosystem,
             &pkg.name,
+            &pkg.version,
             &primary_id,
             scope,
         );

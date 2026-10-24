@@ -234,7 +234,7 @@ pub enum Commands {
         baseline: Option<PathBuf>,
 
         /// Path to write GitHub Actions Step Summary markdown (or writes to $GITHUB_STEP_SUMMARY)
-        #[arg(long)]
+        #[arg(long, visible_alias = "github-step-summary")]
         job_summary_file: Option<PathBuf>,
 
         /// Emit GitHub workflow annotations (notice/warning/error) to stdout
@@ -1511,6 +1511,20 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                         );
                     }
 
+                    // Write GitHub Step Summary if env var is set
+                    if let Some(summary_env) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+                        let summary_md =
+                            format_github_step_summary(&output.scan_result, &output.remediations);
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(PathBuf::from(summary_env))
+                        {
+                            let _ = writeln!(f, "{}", summary_md);
+                        }
+                    }
+
                     // 5. CI/CD Quality Gate Evaluation
                     let mut effective_fail_on_reachable = fail_on_reachable;
                     let mut effective_severity = None;
@@ -1928,6 +1942,29 @@ jobs:
                 "✔ Pinned GitHub Actions workflow initialized at {}",
                 workflow_file.display().to_string().green().bold()
             );
+
+            // Also create default .vexa-sca policy file if not present (FR-015)
+            let policy_file = path.join(".vexa-sca");
+            if !policy_file.exists() {
+                let default_policy = r#"# Vexa SCA Policy Configuration (.vexa-sca)
+version: "v1.0.0"
+
+# Vulnerability ignore / suppression rules
+# Each suppression should have a documented reason and expiration date
+ignore:
+  # Example:
+  # GHSA-xxxx-xxxx-xxxx:
+  #   reason: "Compensating control in WAF; mitigation in review"
+  #   expires: "2026-12-31"
+"#;
+                if let Ok(()) = std::fs::write(&policy_file, default_policy) {
+                    println!(
+                        "✔ Security policy template initialized at {}",
+                        policy_file.display().to_string().green().bold()
+                    );
+                }
+            }
+
             println!(
                 "  Policy enforcement: {}",
                 if enforce {
