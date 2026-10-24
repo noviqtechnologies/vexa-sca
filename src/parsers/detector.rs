@@ -97,11 +97,69 @@ fn discover_recursive(dir: &Path, depth: usize, max_depth: usize, results: &mut 
     }
 }
 
+pub fn parse_manifest_at(
+    manifest_path: &Path,
+    include_dev: bool,
+) -> Result<(ManifestType, DepGraph), String> {
+    let file_name = manifest_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let parent_dir = manifest_path.parent().unwrap_or(manifest_path);
+
+    match file_name {
+        "package-lock.json" => {
+            let graph = PackageLockParser::parse(parent_dir, include_dev)?;
+            Ok((ManifestType::NpmPackageLock, graph))
+        }
+        "yarn.lock" => {
+            let graph = YarnLockParser::parse(parent_dir, include_dev)?;
+            Ok((ManifestType::YarnLock, graph))
+        }
+        "pnpm-lock.yaml" | "pnpm-lock.yml" => {
+            let graph = PnpmLockParser::parse(parent_dir, include_dev)?;
+            Ok((ManifestType::PnpmLock, graph))
+        }
+        "requirements.txt" => {
+            let graph = PythonRequirementsParser::parse(manifest_path)?;
+            Ok((ManifestType::PythonRequirements, graph))
+        }
+        "Cargo.lock" => {
+            let graph = CargoLockParser::parse(manifest_path)?;
+            Ok((ManifestType::RustCargoLock, graph))
+        }
+        "go.sum" | "go.mod" => {
+            let graph = GoLockParser::parse(parent_dir)?;
+            Ok((ManifestType::GoModSum, graph))
+        }
+        "pom.xml" => {
+            let graph = PomXmlParser::parse(manifest_path)?;
+            Ok((ManifestType::JavaMavenPom, graph))
+        }
+        _ => Err(format!(
+            "Unsupported manifest file: {}",
+            manifest_path.display()
+        )),
+    }
+}
+
 pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<DetectionResult, String> {
-    let abs_dir = project_dir
+    let abs_path = project_dir
         .canonicalize()
         .unwrap_or_else(|_| project_dir.to_path_buf());
 
+    // If a direct manifest file path is provided, parse it immediately
+    if abs_path.is_file() {
+        let (manifest_type, graph) = parse_manifest_at(&abs_path, include_dev)?;
+        return Ok(DetectionResult {
+            manifest_type,
+            graph,
+            manifest_file: abs_path.clone(),
+            discovered_projects: vec![abs_path],
+        });
+    }
+
+    let abs_dir = abs_path;
     let discovered_projects = discover_manifests(&abs_dir, 4);
 
     let npm_lock = abs_dir.join("package-lock.json");
@@ -189,36 +247,106 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
         });
     }
 
+    // Monorepo / subproject fallback: If root has no lockfile but subprojects exist
+    if !discovered_projects.is_empty() {
+        if discovered_projects.len() == 1 {
+            let manifest_path = &discovered_projects[0];
+            if let Ok((manifest_type, graph)) = parse_manifest_at(manifest_path, include_dev) {
+                return Ok(DetectionResult {
+                    manifest_type,
+                    graph,
+                    manifest_file: manifest_path.clone(),
+                    discovered_projects,
+                });
+            }
+        } else {
+            let mut merged_graph: Option<DepGraph> = None;
+            let mut primary_manifest_type = ManifestType::NpmPackageLock;
+            let mut primary_manifest_file = discovered_projects[0].clone();
+            let mut parsed_any = false;
+
+            for manifest_path in &discovered_projects {
+                if let Ok((mtype, graph)) = parse_manifest_at(manifest_path, include_dev) {
+                    if !parsed_any {
+                        primary_manifest_type = mtype;
+                        primary_manifest_file = manifest_path.clone();
+                        merged_graph = Some(graph);
+                        parsed_any = true;
+                    } else if let Some(ref mut mg) = merged_graph {
+                        mg.merge(&graph);
+                    }
+                }
+            }
+
+            if let Some(graph) = merged_graph {
+                return Ok(DetectionResult {
+                    manifest_type: primary_manifest_type,
+                    graph,
+                    manifest_file: primary_manifest_file,
+                    discovered_projects,
+                });
+            }
+        }
+    }
+
     // Check if subdirectories contain manifests to provide helpful monorepo guidance
     let mut sub_hints = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&abs_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let dirname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if dirname.starts_with('.')
-                    || dirname == "node_modules"
-                    || dirname == "target"
-                    || dirname == "vendor"
-                {
-                    continue;
-                }
-                for manifest in &[
-                    "package.json",
-                    "package-lock.json",
-                    "Cargo.toml",
-                    "requirements.txt",
-                    "go.mod",
-                    "pom.xml",
-                ] {
-                    if path.join(manifest).exists() {
-                        let rel = path.strip_prefix(&abs_dir).unwrap_or(&path);
-                        sub_hints.push(format!("{}/{}", rel.display(), manifest));
+    let unbuilt_manifest_names = [
+        "package.json",
+        "package-lock.json",
+        "Cargo.toml",
+        "requirements.txt",
+        "go.mod",
+        "pom.xml",
+    ];
+
+    fn find_sub_hints(
+        dir: &Path,
+        depth: usize,
+        max_depth: usize,
+        abs_root: &Path,
+        names: &[&str],
+        hints: &mut Vec<String>,
+    ) {
+        if depth > max_depth {
+            return;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let dirname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if dirname.starts_with('.')
+                        || dirname == "node_modules"
+                        || dirname == "target"
+                        || dirname == "vendor"
+                        || dirname == "dist"
+                        || dirname == "build"
+                    {
+                        continue;
                     }
+                    for manifest in names {
+                        if path.join(manifest).exists() {
+                            let rel = path.strip_prefix(abs_root).unwrap_or(&path);
+                            hints.push(format!("{}/{}", rel.display(), manifest));
+                        }
+                    }
+                    find_sub_hints(&path, depth + 1, max_depth, abs_root, names, hints);
                 }
             }
         }
     }
+
+    find_sub_hints(
+        &abs_dir,
+        0,
+        4,
+        &abs_dir,
+        &unbuilt_manifest_names,
+        &mut sub_hints,
+    );
+    sub_hints.sort();
+    sub_hints.dedup();
 
     let mut err_msg = format!(
         "No supported lockfile found in {}. Supported: package-lock.json, yarn.lock, pnpm-lock.yaml, requirements.txt, Cargo.lock, go.sum, pom.xml",

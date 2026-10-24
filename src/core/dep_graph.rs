@@ -116,6 +116,49 @@ impl DepGraph {
         Ok(())
     }
 
+    /// Merges another dependency graph (e.g. from a monorepo subproject) into this graph.
+    pub fn merge(&mut self, other: &DepGraph) {
+        // 1. Merge packages (skipping other's synthetic root package)
+        for (pkg_id, pkg) in &other.pkgs {
+            if pkg_id != &other.root_pkg.id {
+                self.pkgs
+                    .entry(pkg_id.clone())
+                    .or_insert_with(|| pkg.clone());
+            }
+        }
+
+        // 2. Merge nodes (excluding other's root node)
+        for (node_id, node) in &other.nodes {
+            if node_id != &other.root_node_id {
+                self.nodes
+                    .entry(node_id.clone())
+                    .or_insert_with(|| node.clone());
+            }
+        }
+
+        // 3. Connect other's direct dependencies to self's root node
+        if let Some(other_root) = other.nodes.get(&other.root_node_id) {
+            let root_id = self.root_node_id.clone();
+            for dep in &other_root.deps {
+                let _ = self.add_edge(&root_id, dep);
+            }
+        }
+
+        // 4. Merge parent relationships
+        for (node_id, parent_set) in &other.parents {
+            if node_id != &other.root_node_id {
+                let entry = self.parents.entry(node_id.clone()).or_default();
+                for p in parent_set {
+                    if p == &other.root_node_id {
+                        entry.insert(self.root_node_id.clone());
+                    } else {
+                        entry.insert(p.clone());
+                    }
+                }
+            }
+        }
+    }
+
     pub fn get_node(&self, node_id: &str) -> Option<&GraphNode> {
         self.nodes.get(node_id)
     }

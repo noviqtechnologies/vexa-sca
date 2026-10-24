@@ -16,6 +16,21 @@ pub struct ReachabilityEngine {
     pub config_referenced_pkgs: HashSet<String>,
 }
 
+static REQ_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r#"(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*require\(['"]([^'"]+)['"]\)"#).unwrap()
+});
+static ESM_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r#"import\s+(?:\*\s+as\s+)?([a-zA-Z0-9_$]+)\s+from\s+['"]([^'"]+)['"]"#).unwrap()
+});
+static NAMED_ESM_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r#"import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]"#).unwrap()
+});
+static PY_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r#"^import\s+([a-zA-Z0-9_]+)(?:\s+as\s+([a-zA-Z0-9_]+))?"#).unwrap()
+});
+static PY_FROM_RE: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r#"^from\s+([a-zA-Z0-9_]+)\s+import\s+(.+)"#).unwrap());
+
 impl ReachabilityEngine {
     pub fn new(source_dir: &Path) -> Self {
         Self::new_with_limit(source_dir, 1000)
@@ -346,34 +361,29 @@ impl ReachabilityEngine {
         target_functions: Option<&[String]>,
     ) -> (bool, Vec<(usize, String, String, bool)>) {
         let mut matches = Vec::new();
+        // Fast-path exit: if the content does not contain the package name, it cannot be imported
+        if !content.contains(pkg_name) {
+            return (false, matches);
+        }
+
         let lines: Vec<&str> = content.lines().collect();
 
         let mut import_alias: Option<String> = None;
         let mut imported_named_functions: HashSet<String> = HashSet::new();
 
-        // 1. Identify bindings
-        let req_re =
-            Regex::new(r#"(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*require\(['"]([^'"]+)['"]\)"#)
-                .unwrap();
-        let esm_re =
-            Regex::new(r#"import\s+(?:\*\s+as\s+)?([a-zA-Z0-9_$]+)\s+from\s+['"]([^'"]+)['"]"#)
-                .unwrap();
-        let named_esm_re = Regex::new(r#"import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]"#).unwrap();
-        let py_re = Regex::new(r#"^import\s+([a-zA-Z0-9_]+)(?:\s+as\s+([a-zA-Z0-9_]+))?"#).unwrap();
-        let py_from_re = Regex::new(r#"^from\s+([a-zA-Z0-9_]+)\s+import\s+(.+)"#).unwrap();
-
+        // 1. Identify bindings using precompiled static regexes
         for line in &lines {
-            if let Some(cap) = req_re.captures(line) {
+            if let Some(cap) = REQ_RE.captures(line) {
                 if cap.get(2).map(|m| m.as_str()) == Some(pkg_name) {
                     import_alias = cap.get(1).map(|m| m.as_str().to_string());
                 }
             }
-            if let Some(cap) = esm_re.captures(line) {
+            if let Some(cap) = ESM_RE.captures(line) {
                 if cap.get(2).map(|m| m.as_str()) == Some(pkg_name) {
                     import_alias = cap.get(1).map(|m| m.as_str().to_string());
                 }
             }
-            if let Some(cap) = named_esm_re.captures(line) {
+            if let Some(cap) = NAMED_ESM_RE.captures(line) {
                 if cap.get(2).map(|m| m.as_str()) == Some(pkg_name) {
                     if let Some(names_str) = cap.get(1) {
                         for name in names_str.as_str().split(',') {
@@ -385,13 +395,13 @@ impl ReachabilityEngine {
                     }
                 }
             }
-            if let Some(cap) = py_re.captures(line) {
+            if let Some(cap) = PY_RE.captures(line) {
                 if cap.get(1).map(|m| m.as_str()) == Some(pkg_name) {
                     let alias = cap.get(2).or_else(|| cap.get(1)).map(|m| m.as_str());
                     import_alias = alias.map(|s| s.to_string());
                 }
             }
-            if let Some(cap) = py_from_re.captures(line) {
+            if let Some(cap) = PY_FROM_RE.captures(line) {
                 if cap.get(1).map(|m| m.as_str()) == Some(pkg_name) {
                     if let Some(names_str) = cap.get(2) {
                         for name in names_str.as_str().split(',') {
@@ -410,66 +420,60 @@ impl ReachabilityEngine {
             return (false, matches);
         }
 
-        // 2. Search call sites
+        // 2. Search call sites: precompile target matcher regexes ONCE before line iteration
+        enum Matcher {
+            AliasFn(Regex, String),
+            NamedFn(Regex, String),
+            AliasOnly(Regex, String),
+        }
+
+        let mut matchers: Vec<Matcher> = Vec::new();
+        if let Some(targets) = target_functions {
+            for fn_name in targets {
+                if let Some(alias) = &import_alias {
+                    let pat = format!(
+                        r"\b{}\.{}\s*\(",
+                        regex::escape(alias),
+                        regex::escape(fn_name)
+                    );
+                    if let Ok(re) = Regex::new(&pat) {
+                        matchers.push(Matcher::AliasFn(re, format!("{}.{}", alias, fn_name)));
+                    }
+                }
+                if imported_named_functions.contains(fn_name) {
+                    let pat = format!(r"\b{}\s*\(", regex::escape(fn_name));
+                    if let Ok(re) = Regex::new(&pat) {
+                        matchers.push(Matcher::NamedFn(re, fn_name.clone()));
+                    }
+                }
+            }
+        } else if let Some(alias) = &import_alias {
+            let pat = format!(r"\b{}\s*\(", regex::escape(alias));
+            if let Ok(re) = Regex::new(&pat) {
+                matchers.push(Matcher::AliasOnly(re, format!("{}()", alias)));
+            }
+        }
+
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
             if trimmed.starts_with("//") || trimmed.starts_with('#') {
                 continue;
             }
 
-            if let Some(targets) = target_functions {
-                let mut matched = false;
-                for fn_name in targets {
-                    if let Some(alias) = &import_alias {
-                        let pat = format!(
-                            r"\b{}\.{}\s*\(",
-                            regex::escape(alias),
-                            regex::escape(fn_name)
-                        );
-                        if let Ok(re) = Regex::new(&pat) {
-                            if re.is_match(line) {
-                                matches.push((
-                                    idx + 1,
-                                    trimmed.chars().take(80).collect(),
-                                    format!("{}.{}", alias, fn_name),
-                                    true,
-                                ));
-                                matched = true;
-                                break;
-                            }
-                        }
+            for m in &matchers {
+                let (re, desc) = match m {
+                    Matcher::AliasFn(r, d) | Matcher::NamedFn(r, d) | Matcher::AliasOnly(r, d) => {
+                        (r, d)
                     }
-
-                    if imported_named_functions.contains(fn_name) {
-                        let pat = format!(r"\b{}\s*\(", regex::escape(fn_name));
-                        if let Ok(re) = Regex::new(&pat) {
-                            if re.is_match(line) {
-                                matches.push((
-                                    idx + 1,
-                                    trimmed.chars().take(80).collect(),
-                                    fn_name.clone(),
-                                    true,
-                                ));
-                                matched = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if matched {
-                    continue;
-                }
-            } else if let Some(alias) = &import_alias {
-                let pat = format!(r"\b{}\s*\(", regex::escape(alias));
-                if let Ok(re) = Regex::new(&pat) {
-                    if re.is_match(line) {
-                        matches.push((
-                            idx + 1,
-                            trimmed.chars().take(80).collect(),
-                            format!("{}()", alias),
-                            true,
-                        ));
-                    }
+                };
+                if re.is_match(line) {
+                    matches.push((
+                        idx + 1,
+                        trimmed.chars().take(80).collect(),
+                        desc.clone(),
+                        true,
+                    ));
+                    break;
                 }
             }
         }

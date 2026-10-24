@@ -582,23 +582,43 @@ impl LicenseScanner {
         };
 
         // 1. Node.js (package-lock.json)
-        let lock_path = base_dir.join("package-lock.json");
-        if lock_path.exists() {
+        let mut lock_files: Vec<std::path::PathBuf> = Vec::new();
+        let root_lock = base_dir.join("package-lock.json");
+        if root_lock.exists() {
+            lock_files.push(root_lock);
+        } else {
+            // Find in subdirectories if base_dir has no top-level package-lock.json
+            for p in crate::parsers::detector::discover_manifests(base_dir, 4) {
+                if p.file_name().and_then(|n| n.to_str()) == Some("package-lock.json") {
+                    lock_files.push(p);
+                }
+            }
+        }
+
+        for lock_path in lock_files {
             if let Ok(content) = fs::read_to_string(&lock_path) {
                 if let Ok(val) = serde_json::from_str::<Value>(&content) {
                     if let Some(pkgs) = val.get("packages").and_then(|p| p.as_object()) {
-                        for (_path, data) in pkgs {
-                            if let (Some(name), Some(lic)) = (
-                                data.get("name").and_then(|n| n.as_str()),
-                                data.get("license"),
-                            ) {
+                        for (path, data) in pkgs {
+                            let name = data
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .map(|s| s.to_string())
+                                .or_else(|| {
+                                    path.split("node_modules/").last().map(|s| s.to_string())
+                                });
+                            let version = data.get("version").and_then(|v| v.as_str());
+                            if let (Some(n), Some(lic)) = (name, data.get("license")) {
                                 let lic_str = lic.as_str().map(|s| s.to_string()).or_else(|| {
                                     lic.get("type")
                                         .and_then(|t| t.as_str())
                                         .map(|s| s.to_string())
                                 });
                                 if let Some(l) = lic_str {
-                                    map.insert(name.to_string(), l);
+                                    if let Some(v) = version {
+                                        map.insert(format!("{}@{}", n, v), l.clone());
+                                    }
+                                    map.insert(n, l);
                                 }
                             }
                         }

@@ -409,8 +409,12 @@ pub enum Commands {
         target: String,
 
         /// Ecosystem (npm, PyPI, Go, crates.io, Maven)
-        #[arg(default_value = "npm")]
-        ecosystem: String,
+        #[arg(short, long, visible_alias = "eco")]
+        ecosystem: Option<String>,
+
+        /// Positional ecosystem (optional, e.g. npm)
+        #[arg(value_name = "ECOSYSTEM_POSITIONAL")]
+        ecosystem_pos: Option<String>,
 
         /// Output report in JSON format
         #[arg(long)]
@@ -797,7 +801,8 @@ pub async fn run() {
             }
 
             let manifest_type = &output.manifest_type;
-            match patcher::apply_fixes(&path, manifest_type, &output.remediations, dry_run) {
+            let target_dir = output.manifest_file.parent().unwrap_or(&path);
+            match patcher::apply_fixes(target_dir, manifest_type, &output.remediations, dry_run) {
                 Ok(patch_res) => {
                     let target_desc = match manifest_type {
                         crate::parsers::detector::ManifestType::RustCargoLock => {
@@ -1134,9 +1139,13 @@ pub async fn run() {
         Commands::Test {
             target,
             ecosystem,
+            ecosystem_pos,
             json,
             severity_threshold,
         } => {
+            let ecosystem = ecosystem
+                .or(ecosystem_pos)
+                .unwrap_or_else(|| "npm".to_string());
             let parts: Vec<&str> = target.split('@').collect();
             if parts.len() < 2 {
                 eprintln!(
