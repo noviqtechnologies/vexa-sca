@@ -1,24 +1,27 @@
-# Vexa SCA — Compatibility Matrix
+# Vexa SCA — Parser and Fixture Coverage
 
-This document is the canonical, reproducible pass/fail matrix for all lockfile
-formats and features supported by Vexa SCA. Every cell reflects automated unit
-and integration tests that run as part of `cargo test`. Entries marked ✅ are
-verified by at least one test in the test corpus; entries marked ❌ are known
-gaps; entries marked ⚠️ indicate partial support with documented limitations.
+This document outlines the test fixture coverage and parser capabilities across package managers and manifest types supported by Vexa SCA. Every entry reflects automated unit and integration tests executing within `cargo test`. Entries marked ✅ are verified by tests in the fixture suite; entries marked ⚠️ indicate partial or experimental support with documented limitations.
+
+> [!IMPORTANT]
+> **Production Pilot Target vs Ecosystem Fixtures**:
+> - **Production Target (JS/TS Ecosystem)**: Node.js npm (`package-lock.json` v2/v3, `npm-shrinkwrap.json`) and pnpm (`pnpm-lock.yaml` v5/v6/v9) with reachability signals, monorepo workspace extraction, and transactional patching.
+> - **Shrinkwrap Precedence**: When both `npm-shrinkwrap.json` and `package-lock.json` are present in the same directory, `npm-shrinkwrap.json` takes strict precedence as the authoritative lockfile.
+> - **Experimental Parser Coverage**: Parsers for Yarn (`yarn.lock`), Rust (`Cargo.lock`), Python (`requirements.txt`), Go (`go.sum`), and Java (`pom.xml`) are tested against representative fixture samples. They do not constitute complete production ecosystem support.
 
 ---
 
 ## 1. Supported Package Managers & Lockfile Formats
 
-| Package Manager | Lockfile(s) | Parser Module |
-|-----------------|-------------|---------------|
-| **npm** | `package-lock.json` v1 / v2 / v3 | `src/parsers/package_lock.rs` |
-| **pnpm** | `pnpm-lock.yaml` v5 / v6 / v9 | `src/parsers/pnpm_lock.rs` |
-| **Yarn** | `yarn.lock` v1 (Classic) / v2–v4 (Berry) | `src/parsers/yarn_lock.rs` |
-| **Cargo** | `Cargo.lock` v1 / v3 | `src/parsers/cargo_lock.rs` |
-| **pip** | `requirements.txt` | `src/parsers/python_reqs.rs` |
-| **Go** | `go.sum` + `go.mod` | `src/parsers/go_sum.rs` |
-| **Maven** | `pom.xml` | `src/parsers/pom_xml.rs` |
+| Package Manager | Lockfile(s) / Manifest | Parser Module | Support Tier |
+|-----------------|------------------------|---------------|--------------|
+| **npm** | `npm-shrinkwrap.json` | `src/parsers/package_lock.rs` | **Production (Authoritative)** |
+| **npm** | `package-lock.json` v1 / v2 / v3 | `src/parsers/package_lock.rs` | **Production** |
+| **pnpm** | `pnpm-lock.yaml` v5 / v6 / v9 | `src/parsers/pnpm_lock.rs` | **Production** |
+| **Yarn** | `yarn.lock` v1 (Classic) / v2–v4 (Berry) | `src/parsers/yarn_lock.rs` | Experimental |
+| **Cargo** | `Cargo.lock` v1 / v3 | `src/parsers/cargo_lock.rs` | Experimental |
+| **pip** | `requirements.txt` | `src/parsers/python_reqs.rs` | Experimental |
+| **Go** | `go.sum` + `go.mod` | `src/parsers/go_sum.rs` | Experimental |
+| **Maven** | `pom.xml` | `src/parsers/pom_xml.rs` | Experimental |
 
 ---
 

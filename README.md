@@ -3,8 +3,8 @@
 [![Rust Edition](https://img.shields.io/badge/Rust-2021%20Edition-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-brightgreen.svg)](#cross-platform-installation--setup)
-[![Tests](https://img.shields.io/badge/Tests-72%2F72%20Passing-success.svg)](#automated-tests--verification)
-[![Node.js CLI Shim](https://img.shields.io/badge/Node.js%20Wrapper-npx%20vexa--sca%20ready-339933?logo=node.js&logoColor=white)](#option-2-run-via-nodejs--npx-wrapper-all-platforms)
+[![Tests](https://img.shields.io/badge/Tests-120%2B%20Passing-success.svg)](#automated-tests--verification)
+[![Node.js CLI Shim](https://img.shields.io/badge/Node.js%20Wrapper-Pilot%20Ready-339933?logo=node.js&logoColor=white)](#option-2-run-via-nodejs--npx-wrapper-all-platforms)
 [![Docs](https://img.shields.io/badge/Docs-Guides%20%26%20Reference-blueviolet?logo=read-the-docs&logoColor=white)](#-documentation--workflow-guides)
 
 **Vexa SCA** (`vexa-sca`) is an open-source, high-performance Software Composition Analysis engine built in Rust. It is tailored for modern JavaScript and TypeScript development (`npm` `package-lock.json` v2/v3, `pnpm`) in pull request and CI/CD automation workflows with GitHub Actions.
@@ -12,9 +12,9 @@
 Vexa SCA delivers fast, reproducible vulnerability triage by prioritizing actionable findings via **Repository Usage Signals** (direct source imports, `package.json` scripts/bin entries, and config references) without unsafely suppressing unproven risks under positive-proof verdict integrity rules. It provides native PR-differential scanning (`--baseline`), same-major remediation recommendations, CycloneDX v1.5 / SPDX v2.3 SBOM generation, and authoritative CI result surfaces (GitHub Actions Step Summaries, workflow annotations, and standard process exit codes).
 
 > [!NOTE]
-> **Production Status (GA vs Experimental):**
-> - **Production Ready / GA (P0):** Node.js / JavaScript / TypeScript (`package-lock.json` v2 & v3, `pnpm-lock.yaml`), PR-diff mode (`--baseline`), GitHub Actions integration (`vexa-sca ci`, `vexa-sca init`), same-major remediation preference (`vexa-sca fix`), policy engine (`.vexa-sca`), exit code contract (0, 1, 2, 3, 4).
-> - **Experimental / Early Access (P2):** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn v1 (`yarn.lock`), Container OS packages (`vexa-sca container`), Copyleft license audit (`vexa-sca licenses`).
+> **Production Status (Pilot Ready vs Experimental):**
+> - **Production Pilot Target (P0):** Node.js / JavaScript / TypeScript (`package-lock.json` v2 & v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9), Repository Usage Signals (AST single-pass import/call matching), PR-diff mode (`--baseline`), GitHub Actions integration (`vexa-sca ci`, `vexa-sca init`), transactional same-major remediation (`vexa-sca fix`), strict policy engine (`.vexa-sca`), exit code contract (0, 1, 2, 3).
+> - **Experimental / Fixture Coverage (P2):** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn (`yarn.lock`), Container OS packages (`vexa-sca container`), Copyleft license audit (`vexa-sca licenses`). Entries in this tier are verified against single fixture samples, not full production ecosystem suites.
 
 <p align="center">
   <a href="#quick-start"><b>Quick Start</b></a> •
@@ -142,9 +142,9 @@ cargo run -- scan
 
 ---
 
-### Option 2: Run via Node.js / NPX Wrapper (All Platforms)
+### Option 2: Run via Node.js / NPX Launcher (All Platforms)
 
-Vexa SCA provides a cross-platform shim (`bin/vexa-sca.js`, with aliases `bin/vexa.js` and `bin/sca.js`) registered in `package.json`. It automatically resolves the native executable across **Windows**, **macOS**, and **Linux**, falling back to `cargo run` if uncompiled:
+Vexa SCA is built in high-performance Rust. For Node.js environments and JavaScript CI runners, a cross-platform launcher shim (`bin/vexa-sca.js`, with aliases `bin/vexa.js` and `bin/sca.js`) is registered in `package.json`. The shim detects the host OS/architecture and invokes the native compiled engine (`vexa-sca`), falling back to `cargo run` if uncompiled in a development checkout:
 
 ```bash
 # Using Node.js directly
@@ -157,7 +157,7 @@ npm run scan
 node bin/vexa.js scan
 node bin/sca.js scan
 
-# If published or linked globally via npm
+# Zero-install execution via npx (invokes native engine)
 npx vexa-sca scan
 npx vexa scan
 ```
@@ -310,15 +310,14 @@ Automated pipeline execution designed for GitHub Actions, GitLab CI, and Bitbuck
 
 ## 🚦 Process Exit Code Contract
 
-Vexa SCA adheres to a strict, machine-readable process exit code contract:
+Vexa SCA adheres to a strict, deterministic process exit code contract:
 
-| Exit Code | Classification | Description |
-| :--- | :--- | :--- |
-| **`0`** | **Success / Clean** | Quality gate passed. No policy-violating vulnerabilities detected (or report-only mode `--no-fail`). |
-| **`1`** | **Quality Gate Failure** | Active vulnerabilities found at or above policy threshold, or license violations detected. |
-| **`2`** | **Configuration / Invocation Error** | Invalid flags, missing files, malformed policy file, or internal unrecoverable runtime crash. |
-| **`3`** | **Advisory Outage / Incomplete Data** | OSV advisory service unreachable and no cache available, or completeness check failed. (Suppressed only via `--allow-unavailable`). |
-| **`4`** | **Scan Quota Exceeded** | Reserved for commercial tiers; the open-engine CLI **never** emits exit code 4. |
+| Exit Code | Classification | Description & Conditions | Suppressed by `--no-fail`? |
+| :---: | :--- | :--- | :---: |
+| **`0`** | **Success / Clean** | All quality gates passed, no policy-violating vulnerabilities found, or baseline diff clean. | N/A |
+| **`1`** | **Quality Gate Failure** | Vulnerabilities detected that violate active quality gate rules (`--fail-on <severity>`, `--fail-on-reachable`, or license policies). | **Yes** (converted to `0`) |
+| **`2`** | **Configuration / Schema Error** | Invalid command-line arguments, conflicting flags, invalid or expired `.vexa-sca` policy file, missing mandatory audit fields (`reason`, `owner`, `ticket`, `expires`), or unparseable manifests. | **No** (never suppressed) |
+| **`3`** | **Advisory Outage / Incomplete Data** | Upstream OSV database unreachable and no cache available, or completeness limit exceeded during analysis in CI profile. Prevents silent false negatives. Suppress explicitly with `--allow-unavailable`. | **No** (never suppressed) |
 
 ---
 
@@ -384,35 +383,50 @@ vexa-sca fix --create-pr --repo owner/my-repo --token $GITHUB_TOKEN
 
 ### 3. Policy & Suppression Engine (`.vexa-sca`)
 
-Manage false positives, accepted risks, or delayed remediations via YAML or JSON policy files:
-- **Exact & Alias Matching**: Suppress by CVE ID (`CVE-2021-23337`), GHSA ID (`GHSA-35jh-r3h4-6jhm`), or Package ID (`lodash@4.17.15`).
-- **Mandatory Expiration Date**: Set an `expires: YYYY-MM-DD`. Once expired, the suppression is automatically invalidated and the vulnerability re-alerts.
-- **Native Format**: Supports both `.vexa-sca` (YAML) and `.vexa-sca.json` (JSON) policy specifications.
+Manage audited risks, temporary waivers, and grace periods with strict schema enforcement (`deny_unknown_fields`). Misspelled fields, missing audit information, or expired dates cause scans to fail immediately with exit code `2`.
+- **Mandatory Audit Fields**: Every rule requires `id`, `package`, non-empty `reason`, `owner` (email or team handle), `ticket` (issue reference), and `expires` (`YYYY-MM-DD`).
+- **Maximum Waiver Lifetime**: Governed by `max_waiver_days` (default: 90 days; configurable up to organizational limits).
+- **Exact & Alias Matching**: Suppresses findings across matched advisory aliases (CVE, GHSA, or Package ID).
 
 #### Example `.vexa-sca` (YAML):
 ```yaml
-version: v1.0.0
+version: "v1.0.0"
+max_waiver_days: 90
+
 ignore:
-  CVE-2021-23337:
-    - reason: "Command injection vector unreachable; untrusted input is sanitised at ingress"
-      expires: 2026-12-31
-  GHSA-29mw-wpgm-hmr9:
-    - reason: "Internal microservice not exposed to public internet"
-      expires: 2027-01-01
+  - id: "GHSA-35jh-r3h4-6jhm"
+    package: "lodash"
+    reason: "Prototype pollution input vector sanitized by ingress API schema validation"
+    owner: "sec-team@example.com"
+    ticket: "SEC-1042"
+    created: "2026-10-01"
+    expires: "2026-12-15"
+
+  - id: "CVE-2021-23337"
+    package: "lodash"
+    reason: "Internal CLI utility only; service is strictly air-gapped without remote inputs"
+    owner: "platform@example.com"
+    ticket: "INFRA-501"
+    created: "2026-10-15"
+    expires: "2026-11-30"
 ```
 
 #### Example `.vexa-sca.json` (JSON):
 ```json
 {
   "version": "v1.0.0",
-  "ignore": {
-    "CVE-2021-23337": [
-      {
-        "reason": "Untrusted input sanitized at ingress",
-        "expires": "2026-12-31"
-      }
-    ]
-  }
+  "max_waiver_days": 90,
+  "ignore": [
+    {
+      "id": "GHSA-35jh-r3h4-6jhm",
+      "package": "lodash",
+      "reason": "Prototype pollution input vector sanitized by ingress API schema validation",
+      "owner": "sec-team@example.com",
+      "ticket": "SEC-1042",
+      "created": "2026-10-01",
+      "expires": "2026-12-15"
+    }
+  ]
 }
 ```
 

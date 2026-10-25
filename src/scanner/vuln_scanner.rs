@@ -22,6 +22,13 @@ pub enum BatchFetchOutcome {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct AdvisoryFetchResult {
+    pub records: HashMap<String, Value>,
+    pub failed_ids: Vec<String>,
+    pub retry_exhausted_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     pub scanned_packages_count: usize,
     pub vulnerabilities_count: usize,
@@ -165,7 +172,7 @@ impl VulnScanner {
         }
 
         // Determine advisory status
-        let advisory_status = if had_network_error {
+        let mut advisory_status = if had_network_error {
             if cached_count == 0 {
                 AdvisoryStatus::Unavailable
             } else {
@@ -197,6 +204,17 @@ impl VulnScanner {
             .fetch_advisories(unique_vuln_ids.into_iter().collect())
             .await;
 
+        if !full_advisories.failed_ids.is_empty() {
+            advisory_status = AdvisoryStatus::PartialFailure;
+            packages_unavailable += full_advisories.failed_ids.len();
+            for failed_id in &full_advisories.failed_ids {
+                unavailable_packages.push(format!(
+                    "advisory:{} (detail fetch failed after retries)",
+                    failed_id
+                ));
+            }
+        }
+
         // 4. Construct enriched and deduplicated vulnerability findings
         let mut vulnerabilities = Vec::new();
 
@@ -222,7 +240,7 @@ impl VulnScanner {
             for item in raw_list {
                 if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
                     if seen_ids.insert(id) {
-                        if let Some(adv) = full_advisories.get(id) {
+                        if let Some(adv) = full_advisories.records.get(id) {
                             pkg_advisories.push(adv);
                         }
                     }
@@ -257,6 +275,18 @@ impl VulnScanner {
             ScanStatus::Fail
         };
 
+        let mut package_completeness_states = std::collections::HashMap::new();
+        for pkg in &pkgs {
+            if unavailable_packages.iter().any(|u| u.starts_with(&pkg.id)) {
+                package_completeness_states.insert(pkg.id.clone(), "UNAVAILABLE".to_string());
+            } else if uncached.iter().any(|u| u.id == pkg.id) {
+                package_completeness_states
+                    .insert(pkg.id.clone(), "LIVE_QUERY_SUCCESS".to_string());
+            } else {
+                package_completeness_states.insert(pkg.id.clone(), "CACHE_HIT".to_string());
+            }
+        }
+
         let completeness = CompletenessReport {
             manifests_detected: 1,
             manifests_analysed: 1,
@@ -273,6 +303,7 @@ impl VulnScanner {
             advisory_source: "OSV (api.osv.dev)".to_string(),
             advisory_status,
             unavailable_packages: unavailable_packages.clone(),
+            package_completeness_states,
         };
 
         let vulns_count = vulnerabilities.len();
@@ -335,15 +366,53 @@ impl VulnScanner {
             return BatchFetchOutcome::ParseError;
         }
 
-        let fetched = results
-            .iter()
-            .map(|r| {
-                r.get("vulns")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default()
-            })
-            .collect();
+        let mut fetched = Vec::with_capacity(results.len());
+        for (idx, r) in results.iter().enumerate() {
+            let mut vulns = r
+                .get("vulns")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            // P0.3: Follow OSV next_page_token if paginated
+            let mut next_token = r
+                .get("next_page_token")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string());
+
+            while let Some(token) = next_token {
+                if let Some(pkg) = pkgs.get(idx) {
+                    let query_url = batch_api_url.replace("querybatch", "query");
+                    let page_body = serde_json::json!({
+                        "package": {
+                            "name": pkg.name,
+                            "ecosystem": pkg.ecosystem,
+                        },
+                        "version": pkg.version,
+                        "page_token": token,
+                    });
+                    if let Ok(page_resp) = client.post(&query_url).json(&page_body).send().await {
+                        if page_resp.status().is_success() {
+                            if let Ok(page_data) = page_resp.json::<Value>().await {
+                                if let Some(extra_vulns) =
+                                    page_data.get("vulns").and_then(|v| v.as_array())
+                                {
+                                    vulns.extend(extra_vulns.clone());
+                                }
+                                next_token = page_data
+                                    .get("next_page_token")
+                                    .and_then(|t| t.as_str())
+                                    .map(|s| s.to_string());
+                                continue;
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+
+            fetched.push(vulns);
+        }
 
         BatchFetchOutcome::Success(fetched)
     }
@@ -352,13 +421,13 @@ impl VulnScanner {
         Self::fetch_batch_raw(&self.client, &self.batch_api_url, pkgs).await
     }
 
-    pub async fn fetch_advisories(&self, vuln_ids: Vec<String>) -> HashMap<String, Value> {
-        let mut map = HashMap::new();
+    pub async fn fetch_advisories(&self, vuln_ids: Vec<String>) -> AdvisoryFetchResult {
+        let mut result = AdvisoryFetchResult::default();
         let mut to_fetch = Vec::new();
 
         for id in vuln_ids {
             if let Some(cached) = self.cache.get_advisory(&id) {
-                map.insert(id, cached);
+                result.records.insert(id, cached);
             } else {
                 to_fetch.push(id);
             }
@@ -381,23 +450,30 @@ impl VulnScanner {
                     if let Ok(resp) = client.get(&url).send().await {
                         if resp.status().is_success() {
                             if let Ok(data) = resp.json::<Value>().await {
-                                return Some((id.clone(), data));
+                                return Ok((id.clone(), data));
                             }
                         }
                     }
                 }
-                None
+                Err(id)
             });
         }
 
         while let Some(res) = set.join_next().await {
-            if let Ok(Some((id, data))) = res {
-                self.cache.set_advisory(&id, &data);
-                map.insert(id, data);
+            match res {
+                Ok(Ok((id, data))) => {
+                    self.cache.set_advisory(&id, &data);
+                    result.records.insert(id, data);
+                }
+                Ok(Err(failed_id)) => {
+                    result.failed_ids.push(failed_id.clone());
+                    result.retry_exhausted_ids.push(failed_id);
+                }
+                Err(_) => {}
             }
         }
 
-        map
+        result
     }
 
     fn determine_severity(&self, adv: &Value) -> SeverityInfo {

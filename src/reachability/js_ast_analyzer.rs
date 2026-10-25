@@ -6,59 +6,57 @@
 //! - **Static ESM imports**: `import x from 'pkg'`, `import { fn } from 'pkg'`,
 //!   `import * as ns from 'pkg'`, `import 'pkg'` (side-effect only)
 //! - **Dynamic imports**: `await import('pkg')`, `import('pkg').then(...)`,
-//!   including assigned bindings
+//!   including variable and constant-folded imports
 //! - **CommonJS**: `require('pkg')`, `const x = require('pkg')`,
-//!   `const { fn } = require('pkg')`
-//! - **Re-exports**: `export { fn } from 'pkg'`, `export * from 'pkg'`
+//!   `const { fn } = require('pkg')`, `createRequire`
+//! - **Re-exports**: `export { fn } from 'pkg'`, `export * from 'pkg'`, cross-file re-exports
 //! - **Namespace access**: `ns.fn(...)`, `ns.default.fn(...)`
 //! - **Named import call-sites**: `template(...)` after `import { template }`
-//! - **Chained / dynamic property access**: detected conservatively as
-//!   `ReasonCode::DynamicConstruct` -> `Unknown` so they are never
-//!   silently classified as Unreachable.
-//!
-//! # Conservative guarantees
-//!
-//! The analyzer never emits `Unreachable` if:
-//! - The file could not be parsed (syntax error) -> `ParseError`
-//! - A dynamic property access or reflection pattern is detected -> `DynamicConstruct`
-//! - The package is re-exported from the module -> `CrossFileUnresolved`
-//! - The package is imported but no call site is found and target functions are unanalyzed -> `Unknown`
+//! - **Unresolved dynamic constructs & computed property access**: detected conservatively
+//!   so they are never silently classified as Unreachable.
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     AssignmentExpression, BindingPattern, CallExpression, ExportAllDeclaration,
     ExportFromDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier,
-    MemberExpression, PropertyKey, SimpleAssignmentTarget, VariableDeclarator,
+    MemberExpression, NewExpression, PropertyKey, SimpleAssignmentTarget, VariableDeclarator,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::SourceType;
 
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+/// Import resolution classification per P0 requirements.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImportResolutionState {
+    LiteralPackageSpecifier(String),
+    ResolvedConstantSpecifier(String),
+    UnresolvedDynamicSpecifier(String),
+    NonPackageImport(String),
+}
+
 /// The result of analyzing a single JS/TS source file for a specific package.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct FileAnalysis {
-    /// The package was imported in this file (any import form).
+    /// The package was imported in this file (literal, constant-resolved, or subpath).
     pub is_imported: bool,
+    /// Detailed resolution states of all import/require constructs found in file.
+    pub import_states: Vec<ImportResolutionState>,
     /// Specific call sites found: (line, snippet, matched_function_name, is_specific).
     pub call_sites: Vec<(usize, String, String, bool)>,
-    /// A dynamic construct (computed property, Proxy, Reflect, eval) was detected —
-    /// the analyzer cannot guarantee completeness. The caller should emit `Unknown`.
+    /// A dynamic construct (computed property, Proxy, Reflect, eval, createRequire) was detected.
     pub has_dynamic_construct: bool,
-    /// The file re-exports symbols from the package to outside modules.
+    /// An unresolved dynamic import or require expression was found.
+    pub has_unresolved_dynamic: bool,
+    /// The file re-exports symbols from the package or contains external re-exports.
     pub has_reexports: bool,
     /// The file failed to parse (syntax error or unsupported encoding).
     pub parse_failed: bool,
 }
 
 /// Analyzes a single JavaScript or TypeScript source file.
-///
-/// # Arguments
-/// * `source`           - raw file content (UTF-8)
-/// * `source_type`      - the oxc SourceType (detects JS/TS/JSX/TSX/module/script)
-/// * `pkg_name`         - the npm package name to look for (e.g. `"lodash"`)
-/// * `target_functions` - optional list of vulnerable function names (e.g. `["template", "set"]`); `None` means any call counts
 pub fn analyze_file(
     source: &str,
     source_type: SourceType,
@@ -76,26 +74,27 @@ pub fn analyze_file(
     let parse_failed = !ret.diagnostics.is_empty();
     let program = ret.program;
 
-    // ── Pass 1: Collect package bindings ─────────────────────────────────────
+    // ── Pass 0: Collect local constant string declarations ────────────────────
+    let mut const_collector = ConstantCollector {
+        constants: HashMap::new(),
+    };
+    walk::walk_program(&mut const_collector, &program);
+
+    // ── Pass 1: Collect package bindings & import resolution states ───────────
     let mut collector = BindingCollector {
         pkg_name,
+        constants: &const_collector.constants,
         bindings: HashMap::new(),
         named_imports: HashSet::new(),
+        import_states: Vec::new(),
         is_imported: false,
         has_reexports: false,
+        has_unresolved_dynamic: false,
+        has_dynamic_construct: false,
     };
     walk::walk_program(&mut collector, &program);
 
     let is_imported = collector.is_imported || !collector.bindings.is_empty();
-    if !is_imported {
-        return FileAnalysis {
-            is_imported: false,
-            call_sites: Vec::new(),
-            has_dynamic_construct: false,
-            has_reexports: false,
-            parse_failed,
-        };
-    }
 
     // ── Pass 2: Search for call sites & dynamic constructs ───────────────────
     let mut checker = CallSiteChecker {
@@ -105,14 +104,16 @@ pub fn analyze_file(
         target_functions,
         source,
         call_sites: Vec::new(),
-        has_dynamic_construct: false,
+        has_dynamic_construct: collector.has_dynamic_construct,
     };
     walk::walk_program(&mut checker, &program);
 
     FileAnalysis {
         is_imported,
+        import_states: collector.import_states,
         call_sites: checker.call_sites,
         has_dynamic_construct: checker.has_dynamic_construct,
+        has_unresolved_dynamic: collector.has_unresolved_dynamic,
         has_reexports: collector.has_reexports,
         parse_failed,
     }
@@ -121,23 +122,104 @@ pub fn analyze_file(
 /// Normalise package match: import source `'lodash'` matches `"lodash"`;
 /// `'lodash/template'` also matches because it is a sub-path import.
 #[inline]
-fn pkg_matches(src: &str, pkg: &str) -> bool {
-    src == pkg || src.starts_with(&format!("{}/", pkg)) || src.starts_with(&format!("{} ", pkg))
+pub fn pkg_matches(src: &str, pkg: &str) -> bool {
+    let clean = src.trim().trim_matches('\'').trim_matches('"');
+    clean == pkg
+        || clean.starts_with(&format!("{}/", pkg))
+        || clean.starts_with(&format!("{} ", pkg))
+}
+
+fn extract_string_literal(expr: &Expression<'_>) -> Option<String> {
+    match expr {
+        Expression::StringLiteral(s) => s.value.as_str().map(|v| v.to_string()),
+        Expression::TemplateLiteral(t) if t.expressions.is_empty() && t.quasis.len() == 1 => {
+            t.quasis.first().map(|q| q.value.raw.as_str().to_string())
+        }
+        _ => None,
+    }
+}
+
+fn resolve_specifier_state(
+    expr: &Expression<'_>,
+    constants: &HashMap<String, String>,
+) -> ImportResolutionState {
+    if let Some(s) = extract_string_literal(expr) {
+        if s.starts_with('.') || s.starts_with('/') {
+            ImportResolutionState::NonPackageImport(s)
+        } else {
+            ImportResolutionState::LiteralPackageSpecifier(s)
+        }
+    } else if let Expression::Identifier(id) = expr {
+        if let Some(s) = constants.get(id.name.as_str()) {
+            if s.starts_with('.') || s.starts_with('/') {
+                ImportResolutionState::NonPackageImport(s.clone())
+            } else {
+                ImportResolutionState::ResolvedConstantSpecifier(s.clone())
+            }
+        } else {
+            ImportResolutionState::UnresolvedDynamicSpecifier(id.name.to_string())
+        }
+    } else {
+        ImportResolutionState::UnresolvedDynamicSpecifier("<dynamic-expr>".to_string())
+    }
+}
+
+// ── Pass 0: Constant Collector ───────────────────────────────────────────────
+
+struct ConstantCollector {
+    constants: HashMap<String, String>,
+}
+
+impl<'a> Visit<'a> for ConstantCollector {
+    fn visit_variable_declarator(&mut self, decl: &VariableDeclarator<'a>) {
+        if let BindingPattern::BindingIdentifier(id) = &decl.id {
+            if let Some(init) = &decl.init {
+                let unwrapped = unwrap_await(init);
+                if let Some(lit) = extract_string_literal(unwrapped) {
+                    self.constants.insert(id.name.to_string(), lit);
+                }
+            }
+        }
+        walk::walk_variable_declarator(self, decl);
+    }
+
+    fn visit_assignment_expression(&mut self, assign: &AssignmentExpression<'a>) {
+        if let Some(SimpleAssignmentTarget::AssignmentTargetIdentifier(id)) =
+            assign.left.as_simple_assignment_target()
+        {
+            let unwrapped = unwrap_await(&assign.right);
+            if let Some(lit) = extract_string_literal(unwrapped) {
+                self.constants.insert(id.name.to_string(), lit);
+            }
+        }
+        walk::walk_assignment_expression(self, assign);
+    }
 }
 
 // ── Pass 1: Binding Collector ────────────────────────────────────────────────
 
 struct BindingCollector<'a> {
     pkg_name: &'a str,
+    constants: &'a HashMap<String, String>,
     bindings: HashMap<String, String>,
     named_imports: HashSet<String>,
+    import_states: Vec<ImportResolutionState>,
     is_imported: bool,
     has_reexports: bool,
+    has_unresolved_dynamic: bool,
+    has_dynamic_construct: bool,
 }
 
 impl<'a> Visit<'a> for BindingCollector<'a> {
     fn visit_import_declaration(&mut self, imp: &ImportDeclaration<'a>) {
         let src = imp.source.value.as_str().unwrap_or("");
+        let state = if src.starts_with('.') || src.starts_with('/') {
+            ImportResolutionState::NonPackageImport(src.to_string())
+        } else {
+            ImportResolutionState::LiteralPackageSpecifier(src.to_string())
+        };
+        self.import_states.push(state);
+
         if pkg_matches(src, self.pkg_name) {
             self.is_imported = true;
             if let Some(specifiers) = &imp.specifiers {
@@ -162,6 +244,7 @@ impl<'a> Visit<'a> for BindingCollector<'a> {
                 }
             }
         }
+        walk::walk_import_declaration(self, imp);
     }
 
     fn visit_export_from_declaration(&mut self, exp: &ExportFromDeclaration<'a>) {
@@ -169,7 +252,10 @@ impl<'a> Visit<'a> for BindingCollector<'a> {
         if pkg_matches(src, self.pkg_name) {
             self.is_imported = true;
             self.has_reexports = true;
+        } else if src.starts_with('.') || src.starts_with('/') {
+            self.has_reexports = true;
         }
+        walk::walk_export_from_declaration(self, exp);
     }
 
     fn visit_export_all_declaration(&mut self, exp: &ExportAllDeclaration<'a>) {
@@ -177,32 +263,186 @@ impl<'a> Visit<'a> for BindingCollector<'a> {
         if pkg_matches(src, self.pkg_name) {
             self.is_imported = true;
             self.has_reexports = true;
+        } else if src.starts_with('.') || src.starts_with('/') {
+            self.has_reexports = true;
         }
+        walk::walk_export_all_declaration(self, exp);
+    }
+
+    fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        // 1. Check for dynamic import() or require()
+        let callee = &call.callee;
+        let mut is_require = false;
+        let mut is_import = false;
+
+        if let Expression::ImportExpression(imp) = callee {
+            is_import = true;
+            let state = resolve_specifier_state(&imp.source, self.constants);
+            self.handle_import_specifier_state(state, None);
+        } else if let Expression::Identifier(id) = callee {
+            if id.name == "require" {
+                is_require = true;
+                if let Some(arg) = call.arguments.first() {
+                    if let Some(arg_expr) = arg.as_expression() {
+                        let state = resolve_specifier_state(arg_expr, self.constants);
+                        self.handle_import_specifier_state(state, None);
+                    }
+                }
+            } else if id.name == "createRequire" || id.name == "eval" {
+                self.has_dynamic_construct = true;
+            }
+        }
+
+        // Also detect Reflection methods
+        if let Some(mem) = callee.as_member_expression() {
+            if let Expression::Identifier(base_id) = member_object(mem) {
+                if base_id.name == "Reflect" {
+                    self.has_dynamic_construct = true;
+                }
+            }
+        }
+
+        let _ = (is_require, is_import);
+        walk::walk_call_expression(self, call);
     }
 
     fn visit_variable_declarator(&mut self, decl: &VariableDeclarator<'a>) {
-        extract_require_bindings(
-            decl,
-            self.pkg_name,
-            &mut self.bindings,
-            &mut self.named_imports,
-        );
+        if let Some(init) = &decl.init {
+            let unwrapped = unwrap_await(init);
+
+            // Handle `const x = require(...)` or `const x = await import(...)`
+            if let Some((spec_expr, is_member_prop)) = extract_require_or_import_call(unwrapped) {
+                let state = resolve_specifier_state(spec_expr, self.constants);
+                match &state {
+                    ImportResolutionState::LiteralPackageSpecifier(pkg)
+                    | ImportResolutionState::ResolvedConstantSpecifier(pkg) => {
+                        if pkg_matches(pkg, self.pkg_name) {
+                            self.is_imported = true;
+                            if let Some(prop) = is_member_prop {
+                                bind_pattern(
+                                    &decl.id,
+                                    &format!("member:{}", prop),
+                                    &mut self.bindings,
+                                    &mut self.named_imports,
+                                );
+                            } else {
+                                bind_pattern(
+                                    &decl.id,
+                                    "dyn",
+                                    &mut self.bindings,
+                                    &mut self.named_imports,
+                                );
+                            }
+                        }
+                    }
+                    ImportResolutionState::UnresolvedDynamicSpecifier(_) => {
+                        self.has_unresolved_dynamic = true;
+                        self.has_dynamic_construct = true;
+                    }
+                    ImportResolutionState::NonPackageImport(_) => {}
+                }
+                self.import_states.push(state);
+            }
+        }
         walk::walk_variable_declarator(self, decl);
     }
 
     fn visit_assignment_expression(&mut self, assign: &AssignmentExpression<'a>) {
-        let rhs = unwrap_await(&assign.right);
-        if let Some(src) = extract_call_pkg_arg(rhs) {
-            if pkg_matches(&src, self.pkg_name) {
-                if let Some(SimpleAssignmentTarget::AssignmentTargetIdentifier(id)) =
-                    assign.left.as_simple_assignment_target()
-                {
-                    self.bindings.insert(id.name.to_string(), "dyn".to_string());
+        let unwrapped = unwrap_await(&assign.right);
+        if let Some((spec_expr, _)) = extract_require_or_import_call(unwrapped) {
+            let state = resolve_specifier_state(spec_expr, self.constants);
+            match &state {
+                ImportResolutionState::LiteralPackageSpecifier(pkg)
+                | ImportResolutionState::ResolvedConstantSpecifier(pkg) => {
+                    if pkg_matches(pkg, self.pkg_name) {
+                        self.is_imported = true;
+                        if let Some(SimpleAssignmentTarget::AssignmentTargetIdentifier(id)) =
+                            assign.left.as_simple_assignment_target()
+                        {
+                            self.bindings.insert(id.name.to_string(), "dyn".to_string());
+                        }
+                    }
+                }
+                ImportResolutionState::UnresolvedDynamicSpecifier(_) => {
+                    self.has_unresolved_dynamic = true;
+                    self.has_dynamic_construct = true;
+                }
+                ImportResolutionState::NonPackageImport(_) => {}
+            }
+            self.import_states.push(state);
+        }
+        walk::walk_assignment_expression(self, assign);
+    }
+
+    fn visit_member_expression(&mut self, mem: &MemberExpression<'a>) {
+        if matches!(mem, MemberExpression::ComputedMemberExpression(_)) {
+            self.has_dynamic_construct = true;
+        }
+        walk::walk_member_expression(self, mem);
+    }
+
+    fn visit_new_expression(&mut self, new_expr: &NewExpression<'a>) {
+        if let Expression::Identifier(id) = &new_expr.callee {
+            if id.name == "Proxy" {
+                self.has_dynamic_construct = true;
+            }
+        }
+        walk::walk_new_expression(self, new_expr);
+    }
+}
+
+impl<'a> BindingCollector<'a> {
+    fn handle_import_specifier_state(
+        &mut self,
+        state: ImportResolutionState,
+        binding_opt: Option<&BindingPattern<'a>>,
+    ) {
+        match &state {
+            ImportResolutionState::LiteralPackageSpecifier(s)
+            | ImportResolutionState::ResolvedConstantSpecifier(s) => {
+                if pkg_matches(s, self.pkg_name) {
                     self.is_imported = true;
+                    if let Some(pattern) = binding_opt {
+                        bind_pattern(pattern, "dyn", &mut self.bindings, &mut self.named_imports);
+                    }
+                }
+            }
+            ImportResolutionState::UnresolvedDynamicSpecifier(_) => {
+                self.has_unresolved_dynamic = true;
+                self.has_dynamic_construct = true;
+            }
+            ImportResolutionState::NonPackageImport(_) => {}
+        }
+        self.import_states.push(state);
+    }
+}
+
+fn extract_require_or_import_call<'a>(
+    expr: &'a Expression<'a>,
+) -> Option<(&'a Expression<'a>, Option<String>)> {
+    if let Expression::CallExpression(call) = expr {
+        if let Expression::Identifier(id) = &call.callee {
+            if id.name == "require" {
+                if let Some(arg) = call.arguments.first() {
+                    return arg.as_expression().map(|e| (e, None));
                 }
             }
         }
+        if let Expression::ImportExpression(imp) = &call.callee {
+            return Some((&imp.source, None));
+        }
     }
+    if let Expression::ImportExpression(imp) = expr {
+        return Some((&imp.source, None));
+    }
+    if let Some(mem) = expr.as_member_expression() {
+        let prop = member_static_property_name(mem).map(|p| p.to_string());
+        let obj = unwrap_await(member_object(mem));
+        if let Some((spec, _)) = extract_require_or_import_call(obj) {
+            return Some((spec, prop));
+        }
+    }
+    None
 }
 
 // ── Pass 2: Call Site Checker ────────────────────────────────────────────────
@@ -228,6 +468,15 @@ impl<'a, 'p> Visit<'a> for CallSiteChecker<'p> {
             self.has_dynamic_construct = true;
         }
         walk::walk_member_expression(self, mem);
+    }
+
+    fn visit_new_expression(&mut self, new_expr: &NewExpression<'a>) {
+        if let Expression::Identifier(id) = &new_expr.callee {
+            if id.name == "Proxy" {
+                self.has_dynamic_construct = true;
+            }
+        }
+        walk::walk_new_expression(self, new_expr);
     }
 }
 
@@ -269,7 +518,6 @@ impl<'p> CallSiteChecker<'p> {
         // 2. Check direct named import calls: `template(...)`
         if let Expression::Identifier(id) = &call.callee {
             let name = id.name.as_str();
-            // Flag reflection calls
             if name == "eval" {
                 self.has_dynamic_construct = true;
             }
@@ -289,7 +537,7 @@ impl<'p> CallSiteChecker<'p> {
     }
 
     fn match_and_record_member_call(&mut self, base_name: &str, prop: &str, byte_offset: usize) {
-        let Some(import_type) = self.bindings.get(base_name) else {
+        let Some(_) = self.bindings.get(base_name) else {
             return;
         };
 
@@ -304,11 +552,7 @@ impl<'p> CallSiteChecker<'p> {
             return;
         }
 
-        let fn_label = match import_type.as_str() {
-            "default" | "namespace" | "cjs" | "dyn" => format!("{}.{}", base_name, prop),
-            _ => format!("{}.{}", base_name, prop),
-        };
-
+        let fn_label = format!("{}.{}", base_name, prop);
         let (line_idx, snippet) = span_to_line(byte_offset, self.source);
         self.call_sites
             .push((line_idx + 1, snippet, fn_label, true));
@@ -337,70 +581,6 @@ fn unwrap_await<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
         &aw.argument
     } else {
         expr
-    }
-}
-
-fn extract_call_pkg_arg(expr: &Expression<'_>) -> Option<String> {
-    match expr {
-        Expression::CallExpression(call) => {
-            if let Expression::ImportExpression(imp) = &call.callee {
-                if let Expression::StringLiteral(s) = &imp.source {
-                    return s.value.as_str().map(|s| s.to_string());
-                }
-            }
-            if let Expression::Identifier(id) = &call.callee {
-                if id.name == "require" {
-                    if let Some(arg) = call.arguments.first() {
-                        if let Some(Expression::StringLiteral(s)) = arg.as_expression() {
-                            return s.value.as_str().map(|s| s.to_string());
-                        }
-                    }
-                }
-            }
-            None
-        }
-        Expression::ImportExpression(imp) => {
-            if let Expression::StringLiteral(s) = &imp.source {
-                return s.value.as_str().map(|s| s.to_string());
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
-fn extract_require_bindings(
-    decl: &VariableDeclarator<'_>,
-    pkg_name: &str,
-    bindings: &mut HashMap<String, String>,
-    named_imports: &mut HashSet<String>,
-) {
-    let Some(init) = &decl.init else {
-        return;
-    };
-    let inner = unwrap_await(init);
-
-    if let Some(src) = extract_call_pkg_arg(inner) {
-        if pkg_matches(&src, pkg_name) {
-            bind_pattern(&decl.id, "cjs", bindings, named_imports);
-            return;
-        }
-    }
-
-    if let Some(mem) = inner.as_member_expression() {
-        let obj = unwrap_await(member_object(mem));
-        if let Some(src) = extract_call_pkg_arg(obj) {
-            if pkg_matches(&src, pkg_name) {
-                if let Some(prop) = member_static_property_name(mem) {
-                    bind_pattern(
-                        &decl.id,
-                        &format!("member:{}", prop),
-                        bindings,
-                        named_imports,
-                    );
-                }
-            }
-        }
     }
 }
 
@@ -516,6 +696,88 @@ _.template('Hello!');
         let r = analyze_file(src, js(), "lodash", Some(&["template".to_string()]));
         assert!(r.is_imported);
         assert!(!r.call_sites.is_empty());
+    }
+
+    #[test]
+    fn test_constant_foldable_dynamic_import() {
+        let src = r#"
+const pkg = 'lodash';
+async function run() {
+    const mod = await import(pkg);
+    mod.template('Hello!');
+}
+"#;
+        let r = analyze_file(src, js(), "lodash", Some(&["template".to_string()]));
+        assert!(r.is_imported, "constant-folded import must be recognized");
+        assert!(
+            !r.call_sites.is_empty(),
+            "call site on resolved constant import must be found"
+        );
+    }
+
+    #[test]
+    fn test_constant_foldable_require() {
+        let src = r#"
+const name = 'lodash';
+const _ = require(name);
+_.template('Hello!');
+"#;
+        let r = analyze_file(src, js(), "lodash", Some(&["template".to_string()]));
+        assert!(r.is_imported, "constant-folded require must be recognized");
+        assert!(
+            !r.call_sites.is_empty(),
+            "call site on resolved require must be found"
+        );
+    }
+
+    #[test]
+    fn test_unresolved_variable_import_marks_uncertainty() {
+        let src = r#"
+async function run(dynamicModule) {
+    const mod = await import(dynamicModule);
+    return mod;
+}
+"#;
+        let r = analyze_file(src, js(), "lodash", Some(&["template".to_string()]));
+        assert!(
+            r.has_unresolved_dynamic,
+            "unresolved import must mark has_unresolved_dynamic"
+        );
+        assert!(
+            r.has_dynamic_construct,
+            "unresolved import must mark has_dynamic_construct"
+        );
+        assert!(r
+            .import_states
+            .iter()
+            .any(|s| matches!(s, ImportResolutionState::UnresolvedDynamicSpecifier(_))));
+    }
+
+    #[test]
+    fn test_create_require_flags_dynamic_construct() {
+        let src = r#"
+import { createRequire } from 'module';
+const customReq = createRequire(import.meta.url);
+const mod = customReq('lodash');
+"#;
+        let r = analyze_file(src, js(), "lodash", None);
+        assert!(
+            r.has_dynamic_construct,
+            "createRequire must be flagged as dynamic construct"
+        );
+    }
+
+    #[test]
+    fn test_proxy_and_eval_flag_dynamic_construct() {
+        let src = r#"
+const p = new Proxy({}, {});
+eval("console.log('hi')");
+"#;
+        let r = analyze_file(src, js(), "lodash", None);
+        assert!(
+            r.has_dynamic_construct,
+            "Proxy and eval must flag dynamic construct"
+        );
     }
 
     #[test]
@@ -644,5 +906,12 @@ _[fn]('Hello!');
             r.has_dynamic_construct,
             "computed access must set has_dynamic_construct"
         );
+    }
+
+    #[test]
+    fn test_syntax_error_sets_parse_failed() {
+        let src = r#"function badSyntax( { let x = ;"#;
+        let r = analyze_file(src, js(), "lodash", None);
+        assert!(r.parse_failed, "syntax error must set parse_failed");
     }
 }

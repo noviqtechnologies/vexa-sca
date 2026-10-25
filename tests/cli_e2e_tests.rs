@@ -669,3 +669,89 @@ fn test_cli_pr_diff_baseline_mode() {
 
     let _ = fs::remove_file(&temp_baseline);
 }
+
+#[test]
+fn test_cli_policy_schema_error_exits_code_2() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/npm-app");
+
+    let temp_policy =
+        std::env::temp_dir().join(format!("vexa_invalid_policy_{}.yaml", std::process::id()));
+    let invalid_policy = r#"
+version: "v1.0.0"
+ignore:
+  - id: "GHSA-fake-123"
+    # missing reason and owner/ticket/expires
+"#;
+    fs::write(&temp_policy, invalid_policy).unwrap();
+
+    let output = Command::new(&bin)
+        .args([
+            "scan",
+            fixture.to_str().unwrap(),
+            "--policy",
+            temp_policy.to_str().unwrap(),
+        ])
+        .output()
+        .expect("CLI execution failed");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Invalid policy schema must exit with code 2, got: {:?}",
+        output.status.code()
+    );
+
+    let _ = fs::remove_file(&temp_policy);
+}
+
+#[test]
+fn test_cli_conflicting_reachability_flags_exits_code_2() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/npm-app");
+
+    let output = Command::new(&bin)
+        .args([
+            "scan",
+            fixture.to_str().unwrap(),
+            "--fail-on-unknown-reachability",
+            "--allow-unknown-reachability",
+        ])
+        .output()
+        .expect("CLI execution failed");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Conflicting reachability flags must exit with code 2, got: {:?}",
+        output.status.code()
+    );
+}
+
+#[test]
+fn test_cli_no_fail_does_not_suppress_exit_code_3() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/reachability-app");
+
+    // In CI profile with incomplete analysis (file limit hit), scan status is INCOMPLETE.
+    // --no-fail must strictly suppress exit code 1 only; it must never suppress exit code 3.
+    let output = Command::new(&bin)
+        .args([
+            "ci",
+            fixture.to_str().unwrap(),
+            "--max-source-files",
+            "1",
+            "--no-fail",
+        ])
+        .output()
+        .expect("CLI failed to execute");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "--no-fail must not suppress exit code 3 when scan data is incomplete"
+    );
+}

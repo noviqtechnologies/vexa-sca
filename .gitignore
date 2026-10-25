@@ -1,6 +1,49 @@
-/prd
+# Rust & Cargo build artifacts
 /target/
+**/*.rs.bk
+
+# Local work, evaluation, inputs & outputs
+/.work/
+/inputs/
+/outputs/
+/completed/
+/prd/
+
+# Node.js & package manager dependencies
 /node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Vexa SCA runtime cache & backups
 **/.sca-cache/
 *.bak
-/completed
+*.backup
+*.patch
+*.diff
+
+# Generated scan reports & artifacts
+/dist/
+sca-report.*
+vexa-report.*
+*.sarif
+*.cyclonedx.json
+*.spdx.json
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini

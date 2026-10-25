@@ -5,8 +5,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheState<T> {
+    Fresh { data: T, age_secs: u64 },
+    Stale { data: T, age_secs: u64 },
+    Missing,
+}
+
 pub struct VulnCache {
     pub cache_dir: PathBuf,
+    pub allow_stale: bool,
+    pub offline: bool,
 }
 
 impl Default for VulnCache {
@@ -16,11 +25,29 @@ impl Default for VulnCache {
 }
 
 impl VulnCache {
+    pub const SCHEMA_VERSION: u32 = 1;
+    pub const DEFAULT_TTL_SECS: u64 = 86_400; // 24 hours
+
     pub fn new(cache_dir: &Path) -> Self {
         let cache_dir = cache_dir.to_path_buf();
         let _ = fs::create_dir_all(&cache_dir);
         let _ = fs::create_dir_all(cache_dir.join("advisories"));
-        Self { cache_dir }
+        Self {
+            cache_dir,
+            allow_stale: false,
+            offline: false,
+        }
+    }
+
+    pub fn with_options(cache_dir: &Path, allow_stale: bool, offline: bool) -> Self {
+        let cache_dir = cache_dir.to_path_buf();
+        let _ = fs::create_dir_all(&cache_dir);
+        let _ = fs::create_dir_all(cache_dir.join("advisories"));
+        Self {
+            cache_dir,
+            allow_stale,
+            offline,
+        }
     }
 
     fn get_key(&self, pkg_info: &PkgInfo) -> String {
@@ -34,41 +61,72 @@ impl VulnCache {
         hash[..16].to_string()
     }
 
-    pub fn get(&self, pkg_info: &PkgInfo) -> Option<Vec<Value>> {
+    pub fn get_with_status(&self, pkg_info: &PkgInfo) -> CacheState<Vec<Value>> {
         let key = self.get_key(pkg_info);
         let file_path = self.cache_dir.join(format!("{}.json", key));
         if !file_path.exists() {
-            return None;
+            return CacheState::Missing;
         }
 
-        let content = fs::read_to_string(&file_path).ok()?;
-        let item: Value = serde_json::from_str(&content).ok()?;
+        let content = match fs::read_to_string(&file_path) {
+            Ok(c) => c,
+            Err(_) => return CacheState::Missing,
+        };
 
-        let timestamp = item.get("timestamp")?.as_u64()?;
-        let now = SystemTime::now()
+        let item: Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => return CacheState::Missing,
+        };
+
+        let timestamp_ms = match item.get("timestamp").and_then(|t| t.as_u64()) {
+            Some(t) => t,
+            None => return CacheState::Missing,
+        };
+
+        let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .ok()?
-            .as_millis() as u64;
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
 
-        // 24 hours TTL: 24 * 60 * 60 * 1000 = 86_400_000 ms
-        if now.saturating_sub(timestamp) < 86_400_000 {
-            item.get("vulns").and_then(|v| v.as_array()).cloned()
+        let age_secs = now_ms.saturating_sub(timestamp_ms) / 1000;
+        let vulns = match item.get("vulns").and_then(|v| v.as_array()) {
+            Some(v) => v.clone(),
+            None => return CacheState::Missing,
+        };
+
+        if age_secs < Self::DEFAULT_TTL_SECS {
+            CacheState::Fresh {
+                data: vulns,
+                age_secs,
+            }
         } else {
-            None
+            CacheState::Stale {
+                data: vulns,
+                age_secs,
+            }
+        }
+    }
+
+    pub fn get(&self, pkg_info: &PkgInfo) -> Option<Vec<Value>> {
+        match self.get_with_status(pkg_info) {
+            CacheState::Fresh { data, .. } => Some(data),
+            CacheState::Stale { data, .. } if self.allow_stale || self.offline => Some(data),
+            _ => None,
         }
     }
 
     pub fn set(&self, pkg_info: &PkgInfo, vulns: &[Value]) {
         let key = self.get_key(pkg_info);
         let file_path = self.cache_dir.join(format!("{}.json", key));
-        let now = SystemTime::now()
+        let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
         let data = serde_json::json!({
+            "schema_version": Self::SCHEMA_VERSION,
             "pkg": pkg_info.id,
-            "timestamp": now,
+            "timestamp": now_ms,
             "vulns": vulns,
         });
 
@@ -77,16 +135,61 @@ impl VulnCache {
         }
     }
 
-    pub fn get_advisory(&self, id: &str) -> Option<Value> {
+    pub fn get_advisory_with_status(&self, id: &str) -> CacheState<Value> {
         let file_path = self
             .cache_dir
             .join("advisories")
             .join(format!("{}.json", id));
         if !file_path.exists() {
-            return None;
+            return CacheState::Missing;
         }
-        let content = fs::read_to_string(&file_path).ok()?;
-        serde_json::from_str(&content).ok()
+        let content = match fs::read_to_string(&file_path) {
+            Ok(c) => c,
+            Err(_) => return CacheState::Missing,
+        };
+        let item: Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => return CacheState::Missing,
+        };
+
+        let (adv, timestamp_ms) = if let Some(inner) = item.get("advisory") {
+            let ts = item.get("timestamp").and_then(|t| t.as_u64()).unwrap_or(0);
+            (inner.clone(), ts)
+        } else {
+            // Legacy cache format
+            (item, 0)
+        };
+
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        let age_secs = if timestamp_ms > 0 {
+            now_ms.saturating_sub(timestamp_ms) / 1000
+        } else {
+            0
+        };
+
+        if age_secs < Self::DEFAULT_TTL_SECS {
+            CacheState::Fresh {
+                data: adv,
+                age_secs,
+            }
+        } else {
+            CacheState::Stale {
+                data: adv,
+                age_secs,
+            }
+        }
+    }
+
+    pub fn get_advisory(&self, id: &str) -> Option<Value> {
+        match self.get_advisory_with_status(id) {
+            CacheState::Fresh { data, .. } => Some(data),
+            CacheState::Stale { data, .. } if self.allow_stale || self.offline => Some(data),
+            _ => None,
+        }
     }
 
     pub fn set_advisory(&self, id: &str, advisory: &Value) {
@@ -94,7 +197,19 @@ impl VulnCache {
             .cache_dir
             .join("advisories")
             .join(format!("{}.json", id));
-        if let Ok(json_str) = serde_json::to_string(advisory) {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        let wrapper = serde_json::json!({
+            "schema_version": Self::SCHEMA_VERSION,
+            "id": id,
+            "timestamp": now_ms,
+            "advisory": advisory
+        });
+
+        if let Ok(json_str) = serde_json::to_string(&wrapper) {
             let _ = fs::write(file_path, json_str);
         }
     }
@@ -120,22 +235,15 @@ mod tests {
             ]
         });
 
-        // Set and retrieve advisory
         cache.set_advisory(adv_id, &raw_advisory);
         let retrieved = cache
             .get_advisory(adv_id)
             .expect("advisory should be retrieved from cache");
 
-        // Must be semantically and byte-for-byte identical
         assert_eq!(retrieved, raw_advisory);
         assert_eq!(retrieved["id"].as_str().unwrap(), "SNYK-JS-LODASH-567746");
         assert!(retrieved["details"].as_str().unwrap().contains("snyk"));
-        assert!(retrieved["references"][0]["url"]
-            .as_str()
-            .unwrap()
-            .contains("snyk.io"));
 
-        // Clean up
         let _ = fs::remove_dir_all(&temp_dir);
     }
 }

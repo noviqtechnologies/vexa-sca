@@ -1,14 +1,14 @@
 # Vexa SCA CLI Usage Guide
 
 ## Executive Summary
-The Vexa SCA Command-Line Interface (CLI) provides a fast, deterministic Software Composition Analysis engine. Built in pure Rust, it is optimized for modern JavaScript and TypeScript development (`package-lock.json` v2/v3, `pnpm`) in pull request automation workflows and GitHub Actions pipelines.
+The Vexa SCA Command-Line Interface (CLI) provides a fast, deterministic Software Composition Analysis engine. Built in pure Rust, it is optimized for modern JavaScript and TypeScript development (`package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml`) in pull request automation workflows and GitHub Actions pipelines.
 
-Vexa SCA analyzes multi-ecosystem dependency manifests, classifies findings using **Repository Usage Signals** (direct source imports, `package.json` scripts/bin entries, and configs) without unsafe suppression under positive-proof verdict rules, enforces deterministic quality gates, and generates compliant Software Bill of Materials (SBOMs) and automated same-major pull requests.
+Vexa SCA analyzes dependency manifests, classifies findings using **Repository Usage Signals** (direct source imports, dynamic require/imports, and script entries) without unsafe suppression under positive-proof verdict integrity rules, enforces deterministic quality gates, and generates compliant Software Bill of Materials (SBOMs) and automated same-major pull requests.
 
 > [!NOTE]
 > **Ecosystem Maturity Tiers:**
-> - **Production Ready / GA (P0):** Node.js / JavaScript / TypeScript (`package-lock.json` v2 & v3, `pnpm-lock.yaml`), PR-differential scanning (`--baseline`), GitHub Actions integration (`vexa-sca ci`, `vexa-sca init`), same-major remediation (`vexa-sca fix`), policy engine (`.vexa-sca`), process exit code contract (0, 1, 2, 3, 4).
-> - **Experimental / Early Access (P2):** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn v1 (`yarn.lock`), Container OS packages (`vexa-sca container`), Copyleft license audit (`vexa-sca licenses`).
+> - **Production Pilot Ready (P0):** Node.js / JavaScript / TypeScript (`package-lock.json` v2 & v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9), PR-differential scanning (`--baseline`), GitHub Actions integration (`vexa-sca ci`, `vexa-sca init`), transactional remediation (`vexa-sca fix`), strict policy engine (`.vexa-sca`), process exit code contract (0, 1, 2, 3).
+> - **Experimental / Fixture Coverage (P2):** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn (`yarn.lock`), Container OS packages (`vexa-sca container`), Copyleft license audit (`vexa-sca licenses`).
 
 ---
 
@@ -55,7 +55,7 @@ vexa-sca.exe --version
 ---
 
 ### Option B: Node.js / NPX Cross-Platform Wrapper
-If your environment standardizes on npm, Vexa SCA ships with a zero-setup launcher that detects your operating system and invokes the native engine automatically.
+If your environment standardizes on npm, Vexa SCA provides a zero-setup JavaScript launcher (`bin/vexa-sca.js`) that detects your operating system and invokes the native compiled engine:
 
 #### Global npm Installation
 ```bash
@@ -116,7 +116,7 @@ vexa-sca.exe --help
 ## Step-by-Step Implementation Guide
 
 ### 1. Basic Workspace Scan
-Navigate to your application repository containing a supported manifest or lockfile (e.g., `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `requirements.txt`, `Cargo.lock`, `go.sum`, or `pom.xml`):
+Navigate to your application repository containing a supported manifest or lockfile (e.g., `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `requirements.txt`, `Cargo.lock`, `go.sum`, or `pom.xml`):
 
 ```bash
 # Scan the current working directory
@@ -126,16 +126,20 @@ vexa-sca scan
 vexa-sca scan /path/to/[project-root]
 ```
 
-### 2. Eliminating False Positives with Reachability Analysis
-Standard SCA tools notify on every dependency vulnerability, generating alert fatigue. Vexa SCA uses AST static call-graph parsing (`.js`, `.jsx`, `.ts`, `.tsx`, `.py`) to confirm whether the vulnerable code paths are actually reached in your source files:
+### 2. Prioritizing Findings with Repository Usage Signals
+Vexa SCA parses repository source code (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`, `.mts`, `.cts`) to identify syntactic imports and function call sites:
 
 ```bash
-# Isolate only exploitable vulnerabilities with confirmed call sites
+# Display only vulnerabilities with confirmed syntactic call paths
 vexa-sca scan --reachable-only
 
-# Filter only production dependencies (ignoring devDependencies)
+# Filter only production dependencies (excluding devDependencies)
 vexa-sca scan --prod-only --reachable-only
 ```
+
+> [!NOTE]
+> **Usage Signals vs Control-Flow Proof**:
+> Syntactic call-site matching proves that a module or function is referenced in source files. It does **not** evaluate runtime execution paths, input validation, or exploitability. Findings that cannot be proven or resolved are classified as `UNKNOWN` reachability and fail reachable-only gates by default.
 
 ### 3. Actionable-Only Filtering (Ignore Unfixed)
 Avoid backlog churn by focusing solely on vulnerabilities that have a known patch or upgrade available:
@@ -151,7 +155,7 @@ Filter vulnerabilities using FIRST.org Exploit Prediction Scoring System (EPSS) 
 # Isolate vulnerabilities with >= 20% probability of exploitation
 vexa-sca scan --epss-threshold 0.20
 
-# Strict prioritization: Must be reachable in AST call-graph AND have >= 50% exploit likelihood
+# Strict prioritization: Must have confirmed usage AND >= 50% exploit likelihood
 vexa-sca scan --reachable-only --epss-threshold 0.50
 ```
 
@@ -197,14 +201,14 @@ vexa-sca scan --sbom spdx --sbom-file spdx-sbom.json
 
 ---
 
-### 6. Automated Lockfile Remediation (`vexa-sca fix`)
-Vexa SCA does not merely detect vulnerabilities; it resolves them directly in your package manifests and lockfiles.
+### 6. Automated Transactional Remediation (`vexa-sca fix`)
+Vexa SCA applies security remediation recommendations with transactional filesystem guarantees and automatic backup:
 
 ```bash
-# Step A: Perform a dry run to inspect proposed bumps and transitive overrides
+# Step A: Perform a dry run to inspect proposed upgrades (guarantees 0 filesystem writes)
 vexa-sca fix --dry-run
 
-# Step B: Apply direct upgrades and lockfile overrides in-place (creates backup)
+# Step B: Apply direct upgrades and lockfile overrides in-place (creates <manifest>.bak)
 vexa-sca fix
 
 # Step C: Automatically create a git branch, commit fixes, and open a GitHub PR
@@ -216,13 +220,19 @@ vexa-sca fix \
   --base "main"
 ```
 
+- **Manager-Specific Overrides**:
+  - `npm`: Modifies or adds `"overrides"` in `package.json`.
+  - `yarn`: Modifies or adds `"resolutions"` in `package.json`.
+  - `pnpm`: Modifies or adds `"pnpm.overrides"` in `package.json`.
+- **Range Intent Preservation**: Preserves existing version intent (caret `^`, tilde `~`, exact pins).
+
 ---
 
 ### 7. License Compliance Auditing (`vexa-sca licenses`)
-Scan your direct and transitive dependency graph to identify intellectual property legal risks, viral copyleft licenses (GPL/AGPL), and weak copyleft (LGPL/MPL):
+Scan your dependency graph to identify copyleft license risks (GPL, AGPL) and weak copyleft (LGPL, MPL):
 
 ```bash
-# Summarize license distribution and highlight risky licenses
+# Summarize license distribution
 vexa-sca licenses
 
 # Display every evaluated dependency package
@@ -231,7 +241,7 @@ vexa-sca licenses --all
 # Output structured JSON for legal and audit pipelines
 vexa-sca licenses --json > license-inventory.json
 
-# Enforce licensing policy (fails with non-zero exit code on copyleft)
+# Enforce licensing policy (fails on copyleft)
 vexa-sca licenses --fail-on copyleft
 ```
 
@@ -241,7 +251,7 @@ vexa-sca licenses --fail-on copyleft
 Display the directed acyclic graph (DAG) representing all package nodes, depths, and propagation paths:
 
 ```bash
-# Print ASCII dependency tree up to default depth
+# Print ASCII dependency tree
 vexa-sca graph
 
 # Limit tree depth
@@ -279,89 +289,93 @@ Check your active plan tier and monthly scan volume. In the **Free Developer Edi
 # Display formatted quota status box
 vexa-sca usage
 
-# Output structured JSON for automation or monitoring
+# Output structured JSON
 vexa-sca usage --json
-
-# Include quota details directly inside scan output
-vexa-sca scan --usage
 ```
 
 ---
 
-## Advanced Configuration & Edge Cases
+## Process Exit Code Contract
 
-### Policy File Configuration (`.vexa-sca` / `.vexa-sca.json`)
-Manage false positives, accepted risks, and grace periods declaratively. Place a `.vexa-sca` (YAML) or `.vexa-sca.json` (JSON) file at the root of your project:
+Vexa SCA implements a deterministic, automation-grade process exit code contract designed for CI/CD pipelines, pre-commit hooks, and compliance gating:
 
-#### `.vexa-sca` (YAML Specification)
+| Exit Code | Meaning | Triggers & Conditions | Suppressed by `--no-fail`? |
+| :---: | :--- | :--- | :---: |
+| **`0`** | **Pass / Clean** | No vulnerabilities found, all findings below gate thresholds, or all findings suppressed under valid active policy waivers. | N/A |
+| **`1`** | **Quality Gate Failure** | Vulnerabilities detected that violate active quality gate criteria (`--fail-on <severity>`, `--fail-on-reachable`, `--fail-on-licenses`, or unmaintained dependencies). | **Yes** (converted to `0`) |
+| **`2`** | **Configuration / Schema Error** | Invalid CLI arguments, mutually contradictory flags (e.g., `--fail-on-unknown-reachability` with `--allow-unknown-reachability`), invalid/expired `.vexa-sca` policy file, unknown policy fields, malformed dates, or missing required audit fields. | **No** (never suppressed) |
+| **`3`** | **Incomplete Scan Data** | Upstream advisory service (`api.osv.dev`) outage, partial response failures, or source file limit exceeded during analysis in CI profile. Prevents silent false negatives. Suppress explicitly with `--allow-unavailable` if intentional. | **No** (never suppressed) |
+
+> [!WARNING]
+> **`--no-fail` Scope**:
+> The `--no-fail` flag (or `report-only` alias) strictly suppresses exit code `1` (quality gate failure) for non-blocking report generation. It **does NOT suppress** exit code `2` (configuration error) or exit code `3` (incomplete scan data due to network outage). A pipeline with broken arguments or missing advisory data will always fail closed.
+
+---
+
+## Repository Usage Signals & Reachability Gating
+
+Vexa SCA uses a single-pass AST parser (`oxc`) to identify repository usage signals across `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`, `.mts`, and `.cts` source files.
+
+### Syntactic Call-Site Matcher vs Runtime Exploitability
+- **Usage Signals**: Vexa classifies dependency references into `IMPORTED_SOURCE` (direct `import` or `require`), `REFERENCED_CONFIG_OR_SCRIPT` (build tool or script reference), or `NO_REFERENCE_FOUND_WITHIN_SCOPE`.
+- **Not Control-Flow Proof**: Syntactic import/call matching does not evaluate runtime input validation, network barriers, or control-flow branches. A vulnerability marked `NOT_REACHABLE` within the repository source may still be exploitable via indirect entrypoints.
+- **Test File Segregation**: Imports occurring strictly in test files (`*.test.ts`, `__tests__/**`) are classified as `TEST_ONLY_USAGE` and do not satisfy production reachability proof.
+- **Fail-Safe Reachability Gating**:
+  - Gating with `--fail-on reachable` fails on any finding with confirmed `REACHABLE` usage.
+  - Vulnerabilities with `UNKNOWN` reachability (syntax errors, dynamic `eval`/constructs, re-exports `export *`, or unanalyzed modules) **fail the quality gate by default** unless explicitly allowed with `--allow-unknown-reachability`.
+  - To explicitly enforce gate failure on any unproven `UNKNOWN` status, use `--fail-on-unknown-reachability`.
+- **Decoupled Quality Gating**:
+  - `--reachable-only` is a display/report filter, not a gate bypass.
+  - Severity gating rules (`--fail-on high`) evaluate against all unsuppressed findings by default regardless of reachability, ensuring unproven risks are never silently ignored.
+
+---
+
+## Advanced Configuration & Policy Engine
+
+### Strict Policy Engine (`.vexa-sca` / `.vexa-sca.json`)
+Manage audited risks, temporary waivers, and grace periods with strict schema enforcement (`deny_unknown_fields`). Misspelled or unknown fields cause scans to exit immediately with code `2`.
+
+#### `.vexa-sca` (v1.0.0 Specification)
 ```yaml
-version: v1.0.0
+version: "v1.0.0"
+max_waiver_days: 90 # Global ceiling; individual waivers cannot exceed this lifetime
+
 ignore:
-  CVE-2021-23337:
-    - reason: "Command injection payload is sanitized at API gateway ingress"
-      expires: 2026-12-31
-  GHSA-35jh-r3h4-6jhm:
-    - reason: "Development prototype build only; service is strictly internal"
-      expires: 2027-01-15
-  lodash@4.17.15:
-    - reason: "Scheduled for removal in v2.0 refactor"
-      expires: 2026-11-30
+  - id: "GHSA-35jh-r3h4-6jhm"
+    package: "lodash"
+    reason: "Prototype pollution input vector sanitized by ingress API schema validation"
+    owner: "sec-team@example.com"
+    ticket: "SEC-1042"
+    created: "2026-10-01"
+    expires: "2026-12-15"
+
+  - id: "CVE-2021-23337"
+    package: "lodash"
+    reason: "Internal CLI utility only; service is strictly air-gapped without remote inputs"
+    owner: "platform@example.com"
+    ticket: "INFRA-501"
+    created: "2026-10-15"
+    expires: "2026-11-30"
 ```
 
-Execute a scan pointing to a custom policy file location:
-```bash
-vexa-sca scan --policy /path/to/custom-policy.yaml
-```
-
-> [!IMPORTANT]
-> **Enforced Expirations**: When the specified `expires` date is reached or passed, Vexa SCA automatically revokes the suppression rule and flags the vulnerability in subsequent scans.
-
-### Offline & Air-Gapped Scanning (`.sca-cache/`)
-Vexa SCA hashes vulnerability queries with SHA-256 and writes responses to a local `.sca-cache/` directory. 
-- In connected environments, cache entries accelerate scans to sub-second runtimes.
-- In isolated/air-gapped CI or defense networks, pre-populate the `.sca-cache/` directory in your container or filesystem to run comprehensive scans without internet access.
-
-### Monorepo & Multi-Manifest Detection
-When scanning workspaces with multiple ecosystems (e.g., a root `package.json` with nested Python services in `backend/requirements.txt`), point Vexa SCA explicitly to the subfolder:
-```bash
-vexa-sca scan ./services/payment-gateway
-vexa-sca scan ./services/notification-worker
-```
+#### Policy Enforcement Rules:
+1. **Mandatory Non-Empty Fields**: Every rule MUST specify `id`, `package`, `reason`, `owner`, `ticket`, and `expires`.
+2. **Valid ISO Dates**: `created` (optional, defaults to file load time) and `expires` must be valid `YYYY-MM-DD` dates. `created` cannot be after `expires`.
+3. **Maximum Waiver Duration**: Waiver duration (`expires - created`) cannot exceed `max_waiver_days` (default: 90 days).
+4. **Immediate Expiration Diagnostics**: Expired rules are rejected during policy loading, exiting with code `2`.
 
 ---
 
 ## Troubleshooting & FAQs
 
-### 1. `Error: No manifest or supported lockfile found in path`
-- **Cause**: Vexa SCA could not locate any of the supported manifest/lockfile files (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `requirements.txt`, `Cargo.lock`, `go.sum`, `pom.xml`) in the designated folder.
-- **Resolution**:
-  - Run the package manager install command first to generate the lockfile (e.g., `npm install`, `yarn install`, `cargo generate-lockfile`, or `pip freeze > requirements.txt`).
-  - Pass the explicit directory path: `vexa-sca scan [project-root]`.
+### 1. `Error: Policy configuration error in .vexa-sca` (Exit Code 2)
+- **Cause**: A `.vexa-sca` policy file contains unknown fields, an expired waiver, a missing mandatory field (`reason`, `owner`, `ticket`, `expires`), or exceeds `max_waiver_days`.
+- **Resolution**: Check the terminal error message. Update the waiver with a valid future expiration date (`YYYY-MM-DD`), owner email, and ticket reference.
 
-### 2. `'vexa-sca' is not recognized as an internal or external command` (Windows)
-- **Cause**: Cargo's binary directory (`%USERPROFILE%\.cargo\bin`) or your custom binary folder is missing from the Windows `PATH` environment variable.
-- **Resolution**:
-  - Open PowerShell and verify:
-    ```powershell
-    $env:Path -split ";" | Select-String "cargo"
-    ```
-  - If missing, append it permanently:
-    ```powershell
-    [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$HOME\.cargo\bin", "User")
-    ```
-  - Restart your PowerShell or Command Prompt terminal.
+### 2. `Error: Cannot specify both --fail-on-unknown-reachability and --allow-unknown-reachability` (Exit Code 2)
+- **Cause**: Contradictory reachability flags were passed to the scan or CI profile.
+- **Resolution**: Use `--allow-unknown-reachability` if you wish to ignore unanalyzed/dynamic imports, or omit both to maintain the fail-safe default.
 
-### 3. Reachability flags zero vulnerabilities when vulnerable packages are present
-- **Cause**: You ran `vexa-sca scan --reachable-only`. While vulnerable packages exist in your lockfile, none of their exploitable functions are referenced in your application code.
-- **Resolution**:
-  - Run `vexa-sca scan` (without `--reachable-only`) to view all detected dependencies regardless of source code call paths.
-  - Review the terminal output or HTML report to verify the call traces identified by the AST reachability scanner.
-
-### 4. Automated PR creation fails with `401 Unauthorized` or `404 Not Found`
-- **Cause**: The GitHub authentication token is missing or lacks the required write permissions for Git repositories and Pull Requests.
-- **Resolution**:
-  - Set the `GITHUB_TOKEN` or `GH_TOKEN` environment variable with `contents: write` and `pull-requests: write` scopes:
-    ```bash
-    export GITHUB_TOKEN="ghp_YourPersonalAccessTokenWithRepoScope"
-    vexa-sca fix --create-pr --repo owner/repo
-    ```
+### 3. `CI Failure: Advisory database unavailable` (Exit Code 3)
+- **Cause**: The OSV advisory database could not be reached, network requests timed out, or file limits were hit in CI profile.
+- **Resolution**: Verify network access to `api.osv.dev` or populate the local cache (`.sca-cache/`). To explicitly permit execution during advisory downtime, pass `--allow-unavailable`. Note that `--no-fail` does not suppress exit code 3.

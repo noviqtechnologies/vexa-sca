@@ -1,0 +1,13 @@
+---
+lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      minimist:
+        specifier: 1.2.5
+        version: 1.2.5
+packages:
+  minimist@1.2.5:
+    resolution: {integrity: sha512-FM9nNUYrRBAVMZQD3xeUMqzEIgfRJ4lVTr65RY3iUDdpqTW0Rh28IbEgWCw79SFrkGOJMwbWGzED0SUYoKsmw==}
+snapshots:
+  minimist@1.2.5: {}

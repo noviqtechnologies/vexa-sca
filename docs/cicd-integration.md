@@ -263,26 +263,31 @@ steps:
 
 ## Advanced Configuration & Edge Cases
 
-### Quality Gate Exit Codes and Evaluation Flags
-Vexa SCA emits deterministic exit codes for CI orchestration:
+### Process Exit Code Contract for CI Orchestration
+Vexa SCA defines a deterministic, non-ambiguous exit code contract:
 - `0`: Scan passed all quality gate criteria, or no vulnerabilities met the failure threshold.
-- `1`: Quality gate policy violation detected (e.g., threshold reached, reachable vulnerability confirmed, copyleft license found).
-- `2`: Runtime error (e.g., missing manifest, corrupted archive, or network failure).
+- `1`: Quality gate policy violation detected (e.g., threshold reached, reachable vulnerability confirmed, copyleft license found). Suppressed by `--no-fail`.
+- `2`: Configuration or policy schema error (e.g., invalid flags, expired `.vexa-sca` policy, missing mandatory audit fields). Never suppressed by `--no-fail`.
+- `3`: Incomplete scan data (OSV advisory database outage or file limit hit during CI analysis). Fails closed to prevent false negatives. Suppress explicitly with `--allow-unavailable` if intentional. Never suppressed by `--no-fail`.
+
+### Recommended CI/CD Gating Strategy
+For enterprise CI/CD workflows, we recommend gating primarily on **severity** across all dependencies (`--fail-on high` or `--fail-on critical`).
 
 ```bash
-# Fail only if reachable vulnerabilities are High or Critical
-vexa-sca scan --fail-on high --fail-on-reachable
+# Recommended baseline gate: blocks on any High or Critical unsuppressed vulnerability
+vexa-sca ci . --fail-on high
 
-# Enforce licensing standards (blocks viral copyleft licenses like GPL-3.0 and AGPL-3.0)
-vexa-sca scan --fail-on-licenses copyleft
+# Combined with Repository Usage Signals:
+# Note: Fails on confirmed REACHABLE usage AND on UNKNOWN reachability by default.
+vexa-sca ci . --fail-on high --fail-on-reachable
 
-# Combine gates for production compliance
-vexa-sca scan \
-  --fail-on critical \
-  --fail-on-reachable \
-  --fail-on-licenses copyleft \
-  --fail-on-unmaintained
+# Permissive mode (ignores UNKNOWN reachability, only fails on positive proof):
+vexa-sca ci . --fail-on high --fail-on-reachable --allow-unknown-reachability
 ```
+
+> [!IMPORTANT]
+> **Reachability Signals in CI/CD**:
+> `--fail-on-reachable` evaluates repository syntactic call sites and import statements. It does **not** evaluate runtime execution flow or network barriers. If a package cannot be definitively proven unreachable (due to dynamic imports, syntax errors, or re-exports), it is classified as `UNKNOWN`. In automated CI, `UNKNOWN` findings fail reachable-only quality gates by default to prevent silent false negatives.
 
 ### Secure Secret Management
 When utilizing the automated patch engine (`vexa-sca fix --create-pr`), never hardcode API keys or personal access tokens directly into workflow definitions:
@@ -299,7 +304,7 @@ For isolated runners or ephemeral environments that restrict outbound traffic, c
   uses: actions/cache@v4
   with:
     path: .sca-cache
-    key: vexa-cache-${{ hashFiles('**/package-lock.json', '**/Cargo.lock', '**/requirements.txt') }}
+    key: vexa-cache-${{ hashFiles('**/package-lock.json', '**/npm-shrinkwrap.json', '**/pnpm-lock.yaml') }}
     restore-keys: |
       vexa-cache-
 ```
@@ -317,12 +322,9 @@ For isolated runners or ephemeral environments that restrict outbound traffic, c
     security-events: write
   ```
 
-### 2. CI build failed with exit code 1, but vulnerabilities are not exploitable
-- **Cause**: The pipeline is running `vexa-sca scan --fail-on high` without reachability filtering, causing unreachable transitive dependencies to break the build.
-- **Resolution**: Add the `--fail-on-reachable` flag so that only vulnerabilities verified to have active invocation call-paths in your source code will trigger a non-zero exit code:
-  ```bash
-  vexa-sca scan --fail-on high --fail-on-reachable
-  ```
+### 2. CI build failed with exit code 3 (Incomplete Data)
+- **Cause**: The OSV advisory database was unreachable from the CI runner, or the analysis file limit was exceeded.
+- **Resolution**: Verify network connectivity to `api.osv.dev` or restore a pre-seeded `.sca-cache/`. If temporary advisory downtime is acceptable, pass `--allow-unavailable`. Note that `--no-fail` does not suppress exit code 3.
 
 ### 3. Pipeline build duration is prolonged due to Rust compilation
 - **Cause**: The CI runner is building Vexa SCA from source (`cargo build --release`) on every run without caching cargo binaries.

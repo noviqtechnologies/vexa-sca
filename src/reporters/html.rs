@@ -265,7 +265,7 @@ pub fn format_html_report(
                 html_escape(&s.vulnerability.pkg_id),
                 html_escape(&s.vulnerability.id),
                 html_escape(&s.suppression.reason),
-                html_escape(s.suppression.expires.as_deref().unwrap_or("Never"))
+                html_escape(&s.suppression.expires)
             ));
         }
         format!(

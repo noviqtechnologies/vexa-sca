@@ -1,9 +1,16 @@
 # Vexa SCA policy file
 version: v1.0.0
+max_waiver_days: 36500
 ignore:
   CVE-2021-23337:
     - reason: "Not exposed to external untrusted inputs"
       expires: 2099-12-31
+      owner: "security@company.com"
+      ticket: "SEC-101"
+      created: "2026-01-01"
   GHSA-29mw-wpgm-hmr9:
     - reason: "ReDoS is mitigated by input length checks"
       expires: 2099-01-01
+      owner: "appsec@company.com"
+      ticket: "SEC-102"
+      created: "2026-01-01"

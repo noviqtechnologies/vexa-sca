@@ -9,8 +9,13 @@ pub struct PackageLockParser;
 
 impl PackageLockParser {
     pub fn parse(project_dir: &Path, include_dev: bool) -> Result<DepGraph, String> {
-        let manifest_path = project_dir.join("package.json");
         let lockfile_path = project_dir.join("package-lock.json");
+        Self::parse_file(&lockfile_path, include_dev)
+    }
+
+    pub fn parse_file(lockfile_path: &Path, include_dev: bool) -> Result<DepGraph, String> {
+        let project_dir = lockfile_path.parent().unwrap_or(lockfile_path);
+        let manifest_path = project_dir.join("package.json");
 
         if !manifest_path.exists() {
             return Err(format!(
@@ -19,15 +24,12 @@ impl PackageLockParser {
             ));
         }
         if !lockfile_path.exists() {
-            return Err(format!(
-                "package-lock.json not found in {}",
-                project_dir.display()
-            ));
+            return Err(format!("{} not found", lockfile_path.display()));
         }
 
         let manifest_str = fs::read_to_string(&manifest_path)
             .map_err(|e| format!("Failed to read package.json: {}", e))?;
-        let lockfile_str = fs::read_to_string(&lockfile_path)
+        let lockfile_str = fs::read_to_string(lockfile_path)
             .map_err(|e| format!("Failed to read package-lock.json: {}", e))?;
 
         let manifest: Value = serde_json::from_str(&manifest_str)
@@ -387,5 +389,66 @@ mod tests {
         let resolved_top =
             PackageLockParser::resolve_nearest_ancestor("node_modules/pkgC", "shared", &path_map);
         assert_eq!(resolved_top.as_deref(), Some("npm:shared@1.0.0"));
+    }
+
+    #[test]
+    fn test_npm_v1_nested_duplicate_versions() {
+        let temp_dir = std::env::temp_dir().join(format!("vexa_v1_dup_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let pkg_json = r#"{"name":"v1-dup-app","version":"1.0.0"}"#;
+        let lock_json = r#"{
+            "name": "v1-dup-app",
+            "version": "1.0.0",
+            "lockfileVersion": 1,
+            "dependencies": {
+                "parent-a": {
+                    "version": "1.0.0",
+                    "dependencies": {
+                        "shared-transitive": {
+                            "version": "1.0.0"
+                        }
+                    }
+                },
+                "parent-b": {
+                    "version": "1.0.0",
+                    "dependencies": {
+                        "shared-transitive": {
+                            "version": "2.0.0"
+                        }
+                    }
+                }
+            }
+        }"#;
+
+        std::fs::write(temp_dir.join("package.json"), pkg_json).unwrap();
+        let lock_path = temp_dir.join("package-lock.json");
+        std::fs::write(&lock_path, lock_json).unwrap();
+
+        let graph = PackageLockParser::parse_file(&lock_path, true)
+            .expect("v1 lockfile with nested duplicates must parse");
+
+        let node_a = "npm:parent-a > shared-transitive@1.0.0";
+        let node_b = "npm:parent-b > shared-transitive@2.0.0";
+        assert!(
+            graph.nodes.contains_key(node_a),
+            "Node for shared-transitive v1 under parent-a must exist"
+        );
+        assert!(
+            graph.nodes.contains_key(node_b),
+            "Node for shared-transitive v2 under parent-b must exist"
+        );
+
+        // Assert both package versions are registered
+        let pkgs = graph.get_all_pkgs();
+        let versions: Vec<&str> = pkgs
+            .iter()
+            .filter(|p| p.name == "shared-transitive")
+            .map(|p| p.version.as_str())
+            .collect();
+        assert!(versions.contains(&"1.0.0"));
+        assert!(versions.contains(&"2.0.0"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

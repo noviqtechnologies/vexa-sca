@@ -184,6 +184,14 @@ pub enum Commands {
         #[arg(long)]
         fail_on_reachable: bool,
 
+        /// CI/CD Quality Gate: fail when reachability analysis result is UNKNOWN (conservative default for reachable-only gates)
+        #[arg(long)]
+        fail_on_unknown_reachability: bool,
+
+        /// CI/CD Quality Gate: allow UNKNOWN reachability without failing gate (permissive mode, may cause false negatives)
+        #[arg(long)]
+        allow_unknown_reachability: bool,
+
         /// CI/CD Quality Gate: fail on license risk category (e.g. strong-copyleft, weak-copyleft)
         #[arg(long, value_parser = parse_fail_on_licenses)]
         fail_on_licenses: Option<String>,
@@ -305,6 +313,14 @@ pub enum Commands {
         /// CI/CD Quality Gate: fail only if at least one vulnerability has confirmed AST reachability
         #[arg(long)]
         fail_on_reachable: bool,
+
+        /// CI/CD Quality Gate: fail when reachability analysis result is UNKNOWN (conservative default for reachable-only gates)
+        #[arg(long)]
+        fail_on_unknown_reachability: bool,
+
+        /// CI/CD Quality Gate: allow UNKNOWN reachability without failing gate (permissive mode, may cause false negatives)
+        #[arg(long)]
+        allow_unknown_reachability: bool,
 
         /// CI/CD Quality Gate: fail on license risk category (e.g. strong-copyleft, weak-copyleft)
         #[arg(long, value_parser = parse_fail_on_licenses)]
@@ -1282,6 +1298,8 @@ pub async fn run() {
             sbom_file,
             fail_on,
             fail_on_reachable,
+            fail_on_unknown_reachability,
+            allow_unknown_reachability,
             fail_on_licenses,
             fail_on_unmaintained,
             epss_threshold,
@@ -1294,6 +1312,14 @@ pub async fn run() {
             max_source_files,
             timeout_secs,
         } => {
+            if fail_on_unknown_reachability && allow_unknown_reachability {
+                eprintln!(
+                    "{} Cannot specify both --fail-on-unknown-reachability and --allow-unknown-reachability.",
+                    "Error:".red().bold()
+                );
+                exit(2);
+            }
+
             let options = ScanOptions {
                 dev: !prod_only,
                 reachable_only,
@@ -1311,9 +1337,9 @@ pub async fn run() {
             match scan_project(&path, options).await {
                 Ok(mut output) => {
                     // Advisory outage check: fail-safe when OSV could not be reached and no cache was available
+                    // Note: --no-fail does not suppress exit code 3 (incomplete data / outage)
                     if output.scan_result.advisory_status.has_unreliable_data()
                         && !allow_unavailable
-                        && !no_fail
                     {
                         let status_str = output.scan_result.advisory_status.as_str();
                         let unavail_n = output.scan_result.packages_unavailable;
@@ -1598,16 +1624,30 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                         }
                     }
 
+                    if effective_fail_on_reachable {
+                        eprintln!(
+                            "{} --fail-on-reachable evaluates repository syntactic import/require usage, not runtime control-flow exploitability. Vulnerabilities with UNKNOWN reachability fail the gate unless --allow-unknown-reachability is set.",
+                            "Notice:".yellow().bold()
+                        );
+                    }
+
+                    let mut gate_scan_result = output.scan_result.clone();
+                    if !output.all_vulnerabilities.is_empty() {
+                        gate_scan_result.vulnerabilities = output.all_vulnerabilities.clone();
+                    }
+
                     let gate_opts = QualityGateOptions {
                         fail_on_severity: effective_severity,
                         fail_on_reachable: effective_fail_on_reachable,
+                        fail_on_unknown_reachability,
+                        allow_unknown_reachability,
                         fail_on_licenses,
                         fail_on_unmaintained,
                         no_fail,
                         baseline_mode: baseline.is_some(),
                     };
                     let gate_res = QualityGate::evaluate(
-                        &output.scan_result,
+                        &gate_scan_result,
                         output.license_audit.as_ref(),
                         &gate_opts,
                     );
@@ -1645,6 +1685,8 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
             sbom_file,
             fail_on,
             fail_on_reachable,
+            fail_on_unknown_reachability,
+            allow_unknown_reachability,
             fail_on_licenses,
             fail_on_unmaintained,
             epss_threshold,
@@ -1655,6 +1697,14 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
             max_source_files,
             timeout_secs,
         } => {
+            if fail_on_unknown_reachability && allow_unknown_reachability {
+                eprintln!(
+                    "{} Cannot specify both --fail-on-unknown-reachability and --allow-unknown-reachability.",
+                    "Error:".red().bold()
+                );
+                exit(2);
+            }
+
             let options = ScanOptions {
                 dev: !prod_only,
                 reachable_only,
@@ -1672,12 +1722,14 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
             match scan_project(&path, options).await {
                 Ok(mut output) => {
                     // Advisory outage or incomplete analysis check: fail-closed with exit code 3 in CI profile
+                    // Note: --no-fail does not suppress exit code 3 (incomplete data / outage)
                     let has_advisory_outage =
                         output.scan_result.advisory_status.has_unreliable_data();
-                    let is_incomplete =
-                        output.scan_result.scan_status == crate::types::ScanStatus::Incomplete;
+                    let is_incomplete = output.scan_result.scan_status
+                        == crate::types::ScanStatus::Incomplete
+                        || !output.scan_result.completeness.limits_hit.is_empty();
 
-                    if (has_advisory_outage || is_incomplete) && !allow_unavailable && !no_fail {
+                    if (has_advisory_outage || is_incomplete) && !allow_unavailable {
                         let reason = if has_advisory_outage {
                             format!(
                                 "Advisory database {} — {} package(s) could not be checked",
@@ -1908,9 +1960,23 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                         }
                     }
 
+                    if effective_fail_on_reachable {
+                        eprintln!(
+                            "{} --fail-on-reachable evaluates repository syntactic import/require usage, not runtime control-flow exploitability. Vulnerabilities with UNKNOWN reachability fail the gate unless --allow-unknown-reachability is set.",
+                            "Notice:".yellow().bold()
+                        );
+                    }
+
+                    let mut gate_scan_result = output.scan_result.clone();
+                    if !output.all_vulnerabilities.is_empty() {
+                        gate_scan_result.vulnerabilities = output.all_vulnerabilities.clone();
+                    }
+
                     let gate_opts = QualityGateOptions {
                         fail_on_severity: effective_severity,
                         fail_on_reachable: effective_fail_on_reachable,
+                        fail_on_unknown_reachability,
+                        allow_unknown_reachability,
                         fail_on_licenses,
                         fail_on_unmaintained,
                         no_fail,
@@ -1918,7 +1984,7 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                     };
 
                     let gate_res = QualityGate::evaluate(
-                        &output.scan_result,
+                        &gate_scan_result,
                         output.license_audit.as_ref(),
                         &gate_opts,
                     );
@@ -2178,6 +2244,8 @@ ignore:
                     let gate_opts = QualityGateOptions {
                         fail_on_severity: fail_on.as_deref().map(SeverityLevel::from_str_loose),
                         fail_on_reachable: false,
+                        fail_on_unknown_reachability: false,
+                        allow_unknown_reachability: false,
                         fail_on_licenses,
                         fail_on_unmaintained: false,
                         no_fail,

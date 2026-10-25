@@ -59,9 +59,55 @@ pub struct PatchResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageManagerKind {
+    Npm,
+    Yarn,
+    Pnpm,
+}
+
 pub struct LockfilePatcher;
 
 impl LockfilePatcher {
+    pub fn detect_package_manager(project_dir: &Path) -> PackageManagerKind {
+        if project_dir.join("pnpm-lock.yaml").exists() || project_dir.join("pnpm-lock.yml").exists()
+        {
+            PackageManagerKind::Pnpm
+        } else if project_dir.join("yarn.lock").exists() {
+            PackageManagerKind::Yarn
+        } else {
+            PackageManagerKind::Npm
+        }
+    }
+
+    pub fn preserve_version_intent(original_spec: &str, target_version: &str) -> String {
+        let trimmed = original_spec.trim();
+        if trimmed.starts_with('^') {
+            format!("^{}", target_version)
+        } else if trimmed.starts_with('~') {
+            format!("~{}", target_version)
+        } else if trimmed.starts_with(">=") {
+            format!(">={}", target_version)
+        } else if trimmed.starts_with('>') {
+            format!(">{}", target_version)
+        } else if trimmed.starts_with("<=") {
+            format!("<={}", target_version)
+        } else if trimmed.starts_with('<') {
+            format!("<{}", target_version)
+        } else if trimmed.starts_with("workspace:") {
+            format!("workspace:^{}", target_version)
+        } else if !trimmed.is_empty()
+            && trimmed
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == '+')
+        {
+            // Exact pin (e.g. "4.17.15") -> preserve exact pin intent per P1 requirements
+            target_version.to_string()
+        } else {
+            format!("^{}", target_version)
+        }
+    }
+
     pub fn apply_fixes(
         project_dir: &Path,
         remediations: &[RemediationAction],
@@ -80,8 +126,16 @@ impl LockfilePatcher {
         let mut pkg_json: Value = serde_json::from_str(&original_content)
             .map_err(|e| format!("Invalid JSON in package.json: {}", e))?;
 
+        let pm = Self::detect_package_manager(project_dir);
         let mut changes = PatchChanges::default();
         let mut modified = false;
+
+        let dep_sections = [
+            "dependencies",
+            "devDependencies",
+            "optionalDependencies",
+            "peerDependencies",
+        ];
 
         for rem in remediations {
             let target_version = match &rem.target_version {
@@ -95,62 +149,39 @@ impl LockfilePatcher {
                 }
             };
 
-            let new_ver = format!("^{}", target_version);
-
             if !rem.is_transitive {
                 let mut found = false;
 
-                if let Some(deps) = pkg_json
-                    .get_mut("dependencies")
-                    .and_then(|d| d.as_object_mut())
-                {
-                    if let Some(old_val) = deps.get(&rem.package).cloned() {
-                        let old_ver = old_val.as_str().unwrap_or("").to_string();
-                        let (change, is_breaking) =
-                            classify_semver_change(&old_ver, target_version);
-                        deps.insert(rem.package.clone(), Value::String(new_ver.clone()));
-                        changes.direct_upgrades.push(DirectUpgrade {
-                            package: rem.package.clone(),
-                            from: old_ver,
-                            to: new_ver.clone(),
-                            section: "dependencies".to_string(),
-                            vulnerability_ids: rem.vulnerability_ids.clone(),
-                            highest_severity: rem.highest_severity,
-                            is_breaking,
-                            semver_change: change.as_str().to_string(),
-                        });
-                        found = true;
-                        modified = true;
-                    }
-                }
+                for section in &dep_sections {
+                    if let Some(deps) = pkg_json.get_mut(*section).and_then(|d| d.as_object_mut()) {
+                        if let Some(old_val) = deps.get(&rem.package).cloned() {
+                            let old_ver = old_val.as_str().unwrap_or("").to_string();
+                            let new_ver = Self::preserve_version_intent(&old_ver, target_version);
+                            let (change, is_breaking) =
+                                classify_semver_change(&old_ver, target_version);
 
-                if let Some(dev_deps) = pkg_json
-                    .get_mut("devDependencies")
-                    .and_then(|d| d.as_object_mut())
-                {
-                    if let Some(old_val) = dev_deps.get(&rem.package).cloned() {
-                        let old_ver = old_val.as_str().unwrap_or("").to_string();
-                        let (change, is_breaking) =
-                            classify_semver_change(&old_ver, target_version);
-                        dev_deps.insert(rem.package.clone(), Value::String(new_ver.clone()));
-                        changes.direct_upgrades.push(DirectUpgrade {
-                            package: rem.package.clone(),
-                            from: old_ver,
-                            to: new_ver.clone(),
-                            section: "devDependencies".to_string(),
-                            vulnerability_ids: rem.vulnerability_ids.clone(),
-                            highest_severity: rem.highest_severity,
-                            is_breaking,
-                            semver_change: change.as_str().to_string(),
-                        });
-                        found = true;
-                        modified = true;
+                            deps.insert(rem.package.clone(), Value::String(new_ver.clone()));
+                            changes.direct_upgrades.push(DirectUpgrade {
+                                package: rem.package.clone(),
+                                from: old_ver,
+                                to: new_ver,
+                                section: section.to_string(),
+                                vulnerability_ids: rem.vulnerability_ids.clone(),
+                                highest_severity: rem.highest_severity,
+                                is_breaking,
+                                semver_change: change.as_str().to_string(),
+                            });
+                            found = true;
+                            modified = true;
+                            break;
+                        }
                     }
                 }
 
                 if !found {
-                    // Add to overrides
-                    Self::insert_override(&mut pkg_json, &rem.package, &new_ver);
+                    // Manager-specific transitive override
+                    let new_ver = format!("^{}", target_version);
+                    Self::insert_manager_override(&mut pkg_json, pm, &rem.package, &new_ver);
                     let (change, is_breaking) =
                         classify_semver_change(&rem.current_version, target_version);
                     changes.transitive_overrides.push(TransitiveOverride {
@@ -165,7 +196,8 @@ impl LockfilePatcher {
                     modified = true;
                 }
             } else {
-                Self::insert_override(&mut pkg_json, &rem.package, &new_ver);
+                let new_ver = format!("^{}", target_version);
+                Self::insert_manager_override(&mut pkg_json, pm, &rem.package, &new_ver);
                 let (change, is_breaking) =
                     classify_semver_change(&rem.current_version, target_version);
                 changes.transitive_overrides.push(TransitiveOverride {
@@ -182,11 +214,23 @@ impl LockfilePatcher {
         }
 
         let backup_file = if modified && !dry_run {
+            // Transactional update: Stage and validate formatted JSON first
+            let updated_str = serde_json::to_string_pretty(&pkg_json)
+                .map_err(|e| format!("Failed to format updated package.json: {}", e))?;
             let bak_path = project_dir.join("package.json.bak");
-            let _ = fs::write(&bak_path, &original_content);
-            if let Ok(updated_str) = serde_json::to_string_pretty(&pkg_json) {
-                let _ = fs::write(&pkg_json_path, format!("{}\n", updated_str));
+
+            // Write backup first with checked write
+            fs::write(&bak_path, &original_content).map_err(|e| {
+                format!("Failed to write backup file {}: {}", bak_path.display(), e)
+            })?;
+
+            // Write updated package.json atomically
+            if let Err(e) = fs::write(&pkg_json_path, format!("{}\n", updated_str)) {
+                // Rollback on failure
+                let _ = fs::write(&pkg_json_path, &original_content);
+                return Err(format!("Failed to write package.json: {}", e));
             }
+
             Some(bak_path)
         } else {
             None
@@ -200,32 +244,62 @@ impl LockfilePatcher {
         })
     }
 
-    fn insert_override(pkg_json: &mut Value, package: &str, pinned_to: &str) {
-        if pkg_json.get("overrides").is_none() {
-            pkg_json["overrides"] = Value::Object(serde_json::Map::new());
-        }
-        if let Some(ov) = pkg_json
-            .get_mut("overrides")
-            .and_then(|o| o.as_object_mut())
-        {
-            ov.insert(package.to_string(), Value::String(pinned_to.to_string()));
+    fn insert_manager_override(
+        pkg_json: &mut Value,
+        pm: PackageManagerKind,
+        package: &str,
+        pinned_to: &str,
+    ) {
+        match pm {
+            PackageManagerKind::Npm => {
+                if pkg_json.get("overrides").is_none() {
+                    pkg_json["overrides"] = Value::Object(serde_json::Map::new());
+                }
+                if let Some(ov) = pkg_json
+                    .get_mut("overrides")
+                    .and_then(|o| o.as_object_mut())
+                {
+                    ov.insert(package.to_string(), Value::String(pinned_to.to_string()));
+                }
+            }
+            PackageManagerKind::Yarn => {
+                if pkg_json.get("resolutions").is_none() {
+                    pkg_json["resolutions"] = Value::Object(serde_json::Map::new());
+                }
+                if let Some(res) = pkg_json
+                    .get_mut("resolutions")
+                    .and_then(|o| o.as_object_mut())
+                {
+                    res.insert(package.to_string(), Value::String(pinned_to.to_string()));
+                }
+            }
+            PackageManagerKind::Pnpm => {
+                if pkg_json.get("pnpm").is_none() {
+                    pkg_json["pnpm"] = Value::Object(serde_json::Map::new());
+                }
+                if let Some(pnpm_obj) = pkg_json.get_mut("pnpm").and_then(|p| p.as_object_mut()) {
+                    if pnpm_obj.get("overrides").is_none() {
+                        pnpm_obj.insert(
+                            "overrides".to_string(),
+                            Value::Object(serde_json::Map::new()),
+                        );
+                    }
+                    if let Some(ov) = pnpm_obj
+                        .get_mut("overrides")
+                        .and_then(|o| o.as_object_mut())
+                    {
+                        ov.insert(package.to_string(), Value::String(pinned_to.to_string()));
+                    }
+                }
+            }
         }
     }
 
     /// Regenerates the lockfile by running the appropriate package-manager install
     /// command after `package.json` has been patched.
-    ///
-    /// Detection order:
-    ///   - `pnpm-lock.yaml` present → `pnpm install --no-frozen-lockfile`
-    ///   - `yarn.lock` present      → `yarn install --no-immutable`
-    ///   - otherwise                → `npm install`
-    ///
-    /// Returns `Ok(cmd_string)` on success, `Err(message)` with captured stderr
-    /// on failure so the caller can present a useful diagnostic.
     pub fn regenerate_lockfile(project_dir: &Path) -> Result<String, String> {
         use std::process::Command;
 
-        // Detect which package manager to use based on present lockfile
         let (program, args): (&str, &[&str]) = if project_dir.join("pnpm-lock.yaml").exists()
             || project_dir.join("pnpm-lock.yml").exists()
         {
@@ -274,7 +348,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_lockfile_patcher_fixes() {
+    fn test_lockfile_patcher_fixes_and_range_preservation() {
         let temp_dir = std::env::temp_dir().join("vexa-rust-patch-test");
         let _ = fs::create_dir_all(&temp_dir);
 
@@ -283,7 +357,8 @@ mod tests {
             "name": "patch-test",
             "version": "1.0.0",
             "dependencies": {
-                "lodash": "4.17.15"
+                "lodash": "4.17.15",
+                "semver": "^7.3.0"
             }
         });
         fs::write(
@@ -298,6 +373,17 @@ mod tests {
                 current_version: "4.17.15".to_string(),
                 is_transitive: false,
                 target_version: Some("4.17.21".to_string()),
+                action_type: "UPGRADE_DIRECT".to_string(),
+                advice: "".to_string(),
+                resolved_vulnerability_count: 1,
+                vulnerability_ids: vec![],
+                highest_severity: None,
+            },
+            RemediationAction {
+                package: "semver".to_string(),
+                current_version: "7.3.0".to_string(),
+                is_transitive: false,
+                target_version: Some("7.5.4".to_string()),
                 action_type: "UPGRADE_DIRECT".to_string(),
                 advice: "".to_string(),
                 resolved_vulnerability_count: 1,
@@ -323,8 +409,99 @@ mod tests {
 
         let updated_content = fs::read_to_string(&pkg_json_path).unwrap();
         let updated: Value = serde_json::from_str(&updated_content).unwrap();
-        assert_eq!(updated["dependencies"]["lodash"], "^4.17.21");
+        // Exact pin preserved for lodash
+        assert_eq!(updated["dependencies"]["lodash"], "4.17.21");
+        // Caret range preserved for semver
+        assert_eq!(updated["dependencies"]["semver"], "^7.5.4");
+        // Overrides created for transitive minimist
         assert_eq!(updated["overrides"]["minimist"], "^1.2.6");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_lockfile_patcher_manager_specific_pnpm_overrides() {
+        let temp_dir = std::env::temp_dir().join("vexa-pnpm-patch-test");
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let pkg_json_path = temp_dir.join("package.json");
+        let initial = serde_json::json!({
+            "name": "pnpm-test",
+            "version": "1.0.0"
+        });
+        fs::write(
+            &pkg_json_path,
+            serde_json::to_string_pretty(&initial).unwrap(),
+        )
+        .unwrap();
+
+        // Create mock pnpm-lock.yaml so detector identifies pnpm
+        fs::write(temp_dir.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'").unwrap();
+
+        let remediations = vec![RemediationAction {
+            package: "minimist".to_string(),
+            current_version: "0.0.8".to_string(),
+            is_transitive: true,
+            target_version: Some("1.2.6".to_string()),
+            action_type: "UPGRADE_TRANSITIVE".to_string(),
+            advice: "".to_string(),
+            resolved_vulnerability_count: 1,
+            vulnerability_ids: vec![],
+            highest_severity: None,
+        }];
+
+        let res = LockfilePatcher::apply_fixes(&temp_dir, &remediations, false).unwrap();
+        assert!(res.modified);
+
+        let updated_content = fs::read_to_string(&pkg_json_path).unwrap();
+        let updated: Value = serde_json::from_str(&updated_content).unwrap();
+        // Must use pnpm.overrides for pnpm
+        assert_eq!(updated["pnpm"]["overrides"]["minimist"], "^1.2.6");
+        assert!(updated.get("overrides").is_none());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_lockfile_patcher_dry_run_leaves_filesystem_untouched() {
+        let temp_dir = std::env::temp_dir().join("vexa-dry-run-patch-test");
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let pkg_json_path = temp_dir.join("package.json");
+        let initial_str = r#"{
+  "name": "dry-run-test",
+  "version": "1.0.0",
+  "dependencies": {
+    "lodash": "4.17.15"
+  }
+}"#;
+        fs::write(&pkg_json_path, initial_str).unwrap();
+
+        let remediations = vec![RemediationAction {
+            package: "lodash".to_string(),
+            current_version: "4.17.15".to_string(),
+            is_transitive: false,
+            target_version: Some("4.17.21".to_string()),
+            action_type: "UPGRADE_DIRECT".to_string(),
+            advice: "".to_string(),
+            resolved_vulnerability_count: 1,
+            vulnerability_ids: vec![],
+            highest_severity: None,
+        }];
+
+        let res = LockfilePatcher::apply_fixes(&temp_dir, &remediations, true).unwrap();
+        assert!(res.modified);
+        assert!(res.backup_file.is_none());
+
+        let after_content = fs::read_to_string(&pkg_json_path).unwrap();
+        assert_eq!(
+            after_content, initial_str,
+            "Dry-run must not modify file content"
+        );
+        assert!(
+            !temp_dir.join("package.json.bak").exists(),
+            "Dry-run must not create backup file"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

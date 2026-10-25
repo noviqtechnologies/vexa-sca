@@ -196,10 +196,7 @@ pub fn format_markdown_report(
             let v = &s.vulnerability;
             md.push_str(&format!(
                 "| `{}` | {} | {} | {} |\n",
-                v.pkg_id,
-                v.id,
-                s.suppression.reason,
-                s.suppression.expires.as_deref().unwrap_or("None")
+                v.pkg_id, v.id, s.suppression.reason, s.suppression.expires
             ));
         }
         md.push('\n');

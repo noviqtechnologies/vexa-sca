@@ -19,7 +19,7 @@ use crate::policy::policy_engine::{PolicyEngine, SuppressedFinding};
 use crate::reachability::reachability_engine::ReachabilityEngine;
 use crate::scanner::remediator::Remediator;
 use crate::scanner::vuln_scanner::{ScanResult, VulnScanner};
-use crate::types::{ReachabilityStatus, RemediationAction, SeverityLevel};
+use crate::types::{ReachabilityStatus, RemediationAction, SeverityLevel, VulnerabilityFinding};
 
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
@@ -69,6 +69,7 @@ pub struct ProjectScanOutput {
     pub license_audit: Option<LicenseAudit>,
     pub policy_file: Option<PathBuf>,
     pub discovered_projects: Vec<PathBuf>,
+    pub all_vulnerabilities: Vec<VulnerabilityFinding>,
 }
 
 /// Helper to load baseline fingerprints from previous JSON or SARIF report per FR-016.
@@ -155,7 +156,12 @@ pub async fn scan_project(
     let policy_path = options
         .policy_file
         .or_else(|| PolicyEngine::find_policy_file(project_dir));
-    let policy_engine = PolicyEngine::new(policy_path.as_deref());
+    let mut policy_engine = if let Some(ref p) = policy_path {
+        PolicyEngine::load(p, None)
+            .map_err(|e| format!("Policy configuration error in {}: {}", p.display(), e))?
+    } else {
+        PolicyEngine::default()
+    };
 
     let (mut active, suppressed) =
         policy_engine.filter_vulnerabilities(&raw_scan_result.vulnerabilities, None);
@@ -194,6 +200,9 @@ pub async fn scan_project(
         raw_scan_result.new_vulnerabilities_count = count;
         raw_scan_result.baseline_vulnerabilities_count = 0;
     }
+
+    // Preserve all active unsuppressed findings for decoupled quality gating
+    let all_unsuppressed_findings = active.clone();
 
     // Filter to reachable only if requested.
     // IMPORTANT: track whether any findings have Unknown reachability due to
@@ -245,17 +254,32 @@ pub async fn scan_project(
     // Determine ScanStatus (FR-005, FR-010a)
     // reachable_only_has_unanalyzed: source was incomplete so we cannot claim
     // "nothing reachable" — that would be a false PASS.
-    let scan_status =
-        if raw_scan_result.advisory_status.has_unreliable_data() || reachable_only_has_unanalyzed {
-            crate::types::ScanStatus::Incomplete
-        } else if raw_scan_result.vulnerabilities.is_empty()
-            || (options.baseline_file.is_some() && raw_scan_result.new_vulnerabilities_count == 0)
-        {
-            crate::types::ScanStatus::Pass
-        } else {
-            crate::types::ScanStatus::Fail
-        };
+    let scan_status = if raw_scan_result.advisory_status.has_unreliable_data()
+        || reachable_only_has_unanalyzed
+        || reachability_engine.file_limit_hit
+        || !detection.failed_manifests.is_empty()
+    {
+        crate::types::ScanStatus::Incomplete
+    } else if raw_scan_result.vulnerabilities.is_empty()
+        || (options.baseline_file.is_some() && raw_scan_result.new_vulnerabilities_count == 0)
+    {
+        crate::types::ScanStatus::Pass
+    } else {
+        crate::types::ScanStatus::Fail
+    };
     raw_scan_result.scan_status = scan_status;
+
+    raw_scan_result.completeness.manifests_detected = detection.discovered_projects.len().max(1);
+    raw_scan_result.completeness.manifests_analysed = detection.projects.len();
+    raw_scan_result.completeness.manifests_skipped =
+        detection.skipped_manifests.len() + detection.failed_manifests.len();
+    for (failed_path, err) in &detection.failed_manifests {
+        raw_scan_result.completeness.limits_hit.push(format!(
+            "MANIFEST_PARSE_FAILED ({}: {})",
+            failed_path.display(),
+            err
+        ));
+    }
 
     raw_scan_result.completeness.source_files_discovered = reachability_engine.files_discovered;
     raw_scan_result.completeness.source_files_analysed = reachability_engine.source_files.len();
@@ -292,6 +316,7 @@ pub async fn scan_project(
         license_audit,
         policy_file: policy_path,
         discovered_projects: detection.discovered_projects,
+        all_vulnerabilities: all_unsuppressed_findings,
     })
 }
 
@@ -490,5 +515,27 @@ mod tests {
         assert_eq!(output.packages[0].name, "musl");
         assert_eq!(output.packages[1].name, "busybox");
         assert_eq!(output.packages[2].name, "curl");
+    }
+
+    #[tokio::test]
+    async fn test_scan_project_monorepo_root_npm_plus_nested_pnpm() {
+        let fixture_dir = Path::new("test/fixtures/monorepo-root-npm-plus-nested-pnpm");
+        let output = scan_project(fixture_dir, ScanOptions::default())
+            .await
+            .expect("should scan monorepo");
+
+        assert_eq!(output.manifest_type, ManifestType::NpmPackageLock);
+        assert_eq!(output.scan_result.completeness.manifests_detected, 2);
+        assert_eq!(output.scan_result.completeness.manifests_analysed, 2);
+        assert!(output.scan_result.scanned_packages_count >= 2);
+
+        let pkg_names: Vec<&str> = output
+            .scan_result
+            .vulnerabilities
+            .iter()
+            .map(|v| v.package.as_str())
+            .collect();
+        assert!(pkg_names.contains(&"lodash"), "lodash must be found");
+        assert!(pkg_names.contains(&"minimist"), "minimist must be found");
     }
 }

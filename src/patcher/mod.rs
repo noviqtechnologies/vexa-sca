@@ -25,7 +25,10 @@ pub fn apply_fixes(
         ManifestType::RustCargoLock => {
             CargoPatcher::apply_fixes(project_dir, remediations, dry_run)
         }
-        ManifestType::NpmPackageLock | ManifestType::YarnLock | ManifestType::PnpmLock => {
+        ManifestType::NpmPackageLock
+        | ManifestType::NpmShrinkwrap
+        | ManifestType::YarnLock
+        | ManifestType::PnpmLock => {
             LockfilePatcher::apply_fixes(project_dir, remediations, dry_run)
         }
         ManifestType::PythonRequirements => {

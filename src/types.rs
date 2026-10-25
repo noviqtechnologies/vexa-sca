@@ -288,6 +288,8 @@ pub struct CompletenessReport {
     pub advisory_status: AdvisoryStatus,
     #[serde(default)]
     pub unavailable_packages: Vec<String>,
+    #[serde(default)]
+    pub package_completeness_states: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

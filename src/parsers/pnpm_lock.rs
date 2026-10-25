@@ -207,7 +207,8 @@ impl PnpmLockParser {
                     let pkg_info = PkgInfo::new(&pkg_name, &pkg_version, "npm");
                     graph.add_pkg(pkg_info.clone());
 
-                    let node_id = format!("pnpm:{}@{}", pkg_name, pkg_version);
+                    let clean_key = raw_key.trim_start_matches('/');
+                    let node_id = format!("pnpm:{}", clean_key);
 
                     // Resolve integrity: snapshot entry may have it directly, or from
                     // the `packages` map collected in the first pass.
@@ -418,14 +419,35 @@ impl PnpmLockParser {
             }
 
             if let Some(candidates) = pkg_version_map.get(child_name) {
-                // Find best matching version
-                let matched_node = candidates
-                    .iter()
-                    .find(|(v, _)| {
-                        child_spec.is_empty() || child_spec.contains(v) || v == child_spec
-                    })
-                    .map(|(_, id)| id)
-                    .or_else(|| candidates.first().map(|(_, id)| id));
+                // Find best matching version using tiered resolution:
+                // 1. Exact locator or peer context match
+                let matched_node = if !child_spec.is_empty() {
+                    candidates
+                        .iter()
+                        .find(|(_, id)| {
+                            id.ends_with(&format!("@{}", child_spec))
+                                || id.ends_with(&format!(":{}@{}", child_name, child_spec))
+                                || id.ends_with(child_spec)
+                        })
+                        .map(|(_, id)| id)
+                        // 2. Exact version match
+                        .or_else(|| {
+                            candidates
+                                .iter()
+                                .find(|(v, _)| v == child_spec)
+                                .map(|(_, id)| id)
+                        })
+                        // 3. Fallback: spec contains version
+                        .or_else(|| {
+                            candidates
+                                .iter()
+                                .find(|(v, _)| child_spec.contains(v.as_str()))
+                                .map(|(_, id)| id)
+                        })
+                } else {
+                    None
+                }
+                .or_else(|| candidates.first().map(|(_, id)| id));
 
                 if let Some(child_id) = matched_node {
                     let _ = graph.add_edge(parent_node_id, child_id);
@@ -440,11 +462,31 @@ impl PnpmLockParser {
         let mut root_connected = 0;
         for (dep_name, (dep_spec, _)) in &direct_deps {
             if let Some(candidates) = pkg_version_map.get(dep_name) {
-                let matched = candidates
-                    .iter()
-                    .find(|(v, _)| dep_spec.is_empty() || dep_spec.contains(v) || v == dep_spec)
-                    .map(|(_, id)| id)
-                    .or_else(|| candidates.first().map(|(_, id)| id));
+                let matched = if !dep_spec.is_empty() {
+                    candidates
+                        .iter()
+                        .find(|(_, id)| {
+                            id.ends_with(&format!("@{}", dep_spec))
+                                || id.ends_with(&format!(":{}@{}", dep_name, dep_spec))
+                                || id.ends_with(dep_spec)
+                        })
+                        .map(|(_, id)| id)
+                        .or_else(|| {
+                            candidates
+                                .iter()
+                                .find(|(v, _)| v == dep_spec)
+                                .map(|(_, id)| id)
+                        })
+                        .or_else(|| {
+                            candidates
+                                .iter()
+                                .find(|(v, _)| dep_spec.contains(v.as_str()))
+                                .map(|(_, id)| id)
+                        })
+                } else {
+                    None
+                }
+                .or_else(|| candidates.first().map(|(_, id)| id));
 
                 if let Some(child_id) = matched {
                     let _ = graph.add_edge(&graph.root_node_id.clone(), child_id);
@@ -742,7 +784,7 @@ snapshots:
         let react_dom_node = graph
             .nodes
             .values()
-            .find(|n| n.node_id == "pnpm:react-dom@18.2.0");
+            .find(|n| n.node_id.starts_with("pnpm:react-dom@18.2.0"));
         assert!(react_dom_node.is_some(), "react-dom node must exist");
         let react_node_id = "pnpm:react@18.2.0".to_string();
         assert!(
@@ -1231,6 +1273,111 @@ snapshots:
             res.is_err(),
             "Empty pnpm lockfile without packages must return an error"
         );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_pnpm_peer_context_variants_preserve_locators_and_edges() {
+        let tmp = std::env::temp_dir().join(format!(
+            "vexa_pnpm_peers_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let pkg_json = r#"{
+            "name": "peer-context-app",
+            "version": "1.0.0",
+            "dependencies": {
+                "comp-a": "1.0.0",
+                "comp-b": "1.0.0"
+            }
+        }"#;
+        std::fs::write(tmp.join("package.json"), pkg_json).unwrap();
+
+        let lock_yaml = r#"---
+lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      comp-a:
+        specifier: 1.0.0
+        version: 1.0.0
+      comp-b:
+        specifier: 1.0.0
+        version: 1.0.0
+
+packages:
+  comp-a@1.0.0:
+    resolution: {integrity: sha512-aaa==}
+  comp-b@1.0.0:
+    resolution: {integrity: sha512-bbb==}
+  target-lib@2.0.0(peer-x@1.0.0):
+    resolution: {integrity: sha512-target1==}
+  target-lib@2.0.0(peer-y@2.0.0):
+    resolution: {integrity: sha512-target2==}
+  peer-x@1.0.0:
+    resolution: {integrity: sha512-x==}
+  peer-y@2.0.0:
+    resolution: {integrity: sha512-y==}
+
+snapshots:
+  comp-a@1.0.0:
+    dependencies:
+      target-lib: 2.0.0(peer-x@1.0.0)
+  comp-b@1.0.0:
+    dependencies:
+      target-lib: 2.0.0(peer-y@2.0.0)
+  target-lib@2.0.0(peer-x@1.0.0):
+    dependencies:
+      peer-x: 1.0.0
+  target-lib@2.0.0(peer-y@2.0.0):
+    dependencies:
+      peer-y: 2.0.0
+  peer-x@1.0.0: {}
+  peer-y@2.0.0: {}
+"#;
+        std::fs::write(tmp.join("pnpm-lock.yaml"), lock_yaml).unwrap();
+
+        let graph =
+            PnpmLockParser::parse(&tmp, true).expect("should parse pnpm with peer contexts");
+
+        // Assert both distinct peer locators exist as nodes
+        let node_id_1 = "pnpm:target-lib@2.0.0(peer-x@1.0.0)";
+        let node_id_2 = "pnpm:target-lib@2.0.0(peer-y@2.0.0)";
+        assert!(
+            graph.nodes.contains_key(node_id_1),
+            "Node 1 with peer-x must exist"
+        );
+        assert!(
+            graph.nodes.contains_key(node_id_2),
+            "Node 2 with peer-y must exist"
+        );
+
+        // Assert comp-a has edge to target-lib with peer-x
+        let comp_a_node = graph.nodes.get("pnpm:comp-a@1.0.0").expect("comp-a node");
+        assert!(
+            comp_a_node.deps.contains(&node_id_1.to_string()),
+            "comp-a must depend on peer-x target-lib"
+        );
+
+        // Assert comp-b has edge to target-lib with peer-y
+        let comp_b_node = graph.nodes.get("pnpm:comp-b@1.0.0").expect("comp-b node");
+        assert!(
+            comp_b_node.deps.contains(&node_id_2.to_string()),
+            "comp-b must depend on peer-y target-lib"
+        );
+
+        // Assert target-lib maps to standard package coordinates for vuln aggregation
+        let pkg = graph.pkgs.get("target-lib@2.0.0");
+        assert!(
+            pkg.is_some(),
+            "Packages must be aggregated under target-lib@2.0.0"
+        );
+        assert_eq!(pkg.unwrap().ecosystem, "npm");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

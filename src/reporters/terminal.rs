@@ -291,9 +291,7 @@ pub fn render_terminal_report(
                 v.cve.as_deref().unwrap_or("No CVE")
             );
             println!("   ↳ Reason : {}", s.suppression.reason.yellow());
-            if let Some(exp) = &s.suppression.expires {
-                println!("   ↳ Expires: {}", exp);
-            }
+            println!("   ↳ Expires: {}", s.suppression.expires);
         }
     }
 
