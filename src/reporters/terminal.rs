@@ -86,6 +86,34 @@ pub fn render_terminal_report(
         }
     );
 
+    if scan_result.packages_unavailable > 0 {
+        println!(
+            "Advisory Verification: {} ({} package{} could not be checked)",
+            scan_result.advisory_status.as_str().yellow().bold(),
+            scan_result.packages_unavailable.to_string().red().bold(),
+            if scan_result.packages_unavailable == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+        for unavail in scan_result.unavailable_packages.iter().take(3) {
+            println!("  ↳ {}", unavail.dimmed());
+        }
+        if scan_result.unavailable_packages.len() > 3 {
+            println!(
+                "  ↳ ... and {} more unavailable packages",
+                scan_result.unavailable_packages.len() - 3
+            );
+        }
+    }
+    if !scan_result.completeness.limits_hit.is_empty() {
+        println!(
+            "Completeness Limits  : ⚠️  {}",
+            scan_result.completeness.limits_hit.join("; ").yellow()
+        );
+    }
+
     let reachable_count = vulns
         .iter()
         .filter(|v| {

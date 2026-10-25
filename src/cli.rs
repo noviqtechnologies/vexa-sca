@@ -104,7 +104,7 @@ fn parse_fail_on_licenses(s: &str) -> Result<String, String> {
     name = "vexa-sca",
     bin_name = "vexa-sca",
     about = "Vexa SCA - Commercial-Grade Software Composition Analysis & Security Engine",
-    version = "1.0.0"
+    version = env!("CARGO_PKG_VERSION")
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -221,6 +221,14 @@ pub enum Commands {
         /// silent false-negative reports.
         #[arg(long)]
         allow_unavailable: bool,
+
+        /// Maximum number of source files to analyze for AST reachability (default: 10000, 0 for unlimited)
+        #[arg(long, visible_alias = "max-files")]
+        max_source_files: Option<usize>,
+
+        /// Overall scan timeout in seconds (default: 300)
+        #[arg(long, default_value = "300")]
+        timeout_secs: u64,
     },
 
     /// Automated scan profile for CI/CD pipelines (fails closed on incomplete data/advisory outage)
@@ -325,6 +333,14 @@ pub enum Commands {
         /// Allow scan to succeed (exit 0) even when the OSV advisory database is unreachable
         #[arg(long)]
         allow_unavailable: bool,
+
+        /// Maximum number of source files to analyze for AST reachability (default: 10000, 0 for unlimited)
+        #[arg(long, visible_alias = "max-files")]
+        max_source_files: Option<usize>,
+
+        /// Overall scan timeout in seconds (default: 300)
+        #[arg(long, default_value = "300")]
+        timeout_secs: u64,
     },
 
     /// Initialize pinned GitHub Actions workflow for Vexa SCA in .github/workflows/vexa-sca.yml
@@ -1275,6 +1291,8 @@ pub async fn run() {
             baseline,
             no_fail,
             allow_unavailable,
+            max_source_files,
+            timeout_secs,
         } => {
             let options = ScanOptions {
                 dev: !prod_only,
@@ -1282,11 +1300,12 @@ pub async fn run() {
                 severity_threshold,
                 ignore_unfixed,
                 policy_file: policy,
-                timeout_secs: 15,
+                timeout_secs,
                 licenses: true,
                 allow_unavailable,
                 baseline_file: baseline.clone(),
                 is_ci_profile: false,
+                max_source_files,
             };
 
             match scan_project(&path, options).await {
@@ -1633,6 +1652,8 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
             strict_epss,
             no_fail,
             allow_unavailable,
+            max_source_files,
+            timeout_secs,
         } => {
             let options = ScanOptions {
                 dev: !prod_only,
@@ -1640,11 +1661,12 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                 severity_threshold,
                 ignore_unfixed,
                 policy_file: policy,
-                timeout_secs: 15,
+                timeout_secs,
                 licenses: true,
                 allow_unavailable,
                 baseline_file: baseline.clone(),
                 is_ci_profile: true,
+                max_source_files,
             };
 
             match scan_project(&path, options).await {

@@ -37,6 +37,8 @@ pub struct ScanOptions {
     pub baseline_file: Option<PathBuf>,
     /// When true, enforce CI automation profile semantics per PRD v2.2 FR-010a.
     pub is_ci_profile: bool,
+    /// Maximum number of source files to analyze for AST reachability (0 for unlimited).
+    pub max_source_files: Option<usize>,
 }
 
 impl Default for ScanOptions {
@@ -52,6 +54,7 @@ impl Default for ScanOptions {
             allow_unavailable: false,
             baseline_file: None,
             is_ci_profile: false,
+            max_source_files: None,
         }
     }
 }
@@ -158,7 +161,11 @@ pub async fn scan_project(
         policy_engine.filter_vulnerabilities(&raw_scan_result.vulnerabilities, None);
 
     // 4. Run Reachability Analysis & Usage Signals (FR-001, FR-007a)
-    let reachability_engine = ReachabilityEngine::new(project_dir);
+    let reachability_engine = if let Some(max_f) = options.max_source_files {
+        ReachabilityEngine::new_with_limit(project_dir, max_f)
+    } else {
+        ReachabilityEngine::new(project_dir)
+    };
     active = reachability_engine.evaluate_reachability(active);
 
     let unreachable_total = active
@@ -250,13 +257,16 @@ pub async fn scan_project(
         };
     raw_scan_result.scan_status = scan_status;
 
-    raw_scan_result.completeness.source_files_discovered = reachability_engine.source_files.len();
+    raw_scan_result.completeness.source_files_discovered = reachability_engine.files_discovered;
     raw_scan_result.completeness.source_files_analysed = reachability_engine.source_files.len();
+    raw_scan_result.completeness.source_files_skipped = reachability_engine.files_skipped;
     if reachability_engine.file_limit_hit {
-        raw_scan_result
-            .completeness
-            .limits_hit
-            .push("FILE_LIMIT_HIT".to_string());
+        raw_scan_result.completeness.limits_hit.push(format!(
+            "FILE_LIMIT_HIT (analyzed {} of {} discovered source files; {} skipped due to limit)",
+            reachability_engine.source_files.len(),
+            reachability_engine.files_discovered,
+            reachability_engine.files_skipped
+        ));
     }
 
     // 6. Generate remediations

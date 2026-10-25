@@ -17,15 +17,12 @@ fn get_bin_path(name: &str) -> PathBuf {
 
 fn ensure_binaries_built() {
     INIT.call_once(|| {
-        let bin = get_bin_path("vexa-sca");
-        if !bin.exists() {
-            let status = Command::new("cargo")
-                .args(["build", "--bins"])
-                .current_dir(env!("CARGO_MANIFEST_DIR"))
-                .status()
-                .expect("cargo build --bins failed to execute");
-            assert!(status.success(), "Failed to build test binaries");
-        }
+        let status = Command::new("cargo")
+            .args(["build", "--bins"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .status()
+            .expect("cargo build --bins failed to execute");
+        assert!(status.success(), "Failed to build test binaries");
     });
 }
 
@@ -65,9 +62,10 @@ fn test_packaged_binaries_help_and_version() {
         );
         let ver_str = String::from_utf8_lossy(&ver_output.stdout);
         assert!(
-            ver_str.contains("1.0.0"),
-            "{:?} --version should contain 1.0.0",
-            bin_name
+            ver_str.contains(env!("CARGO_PKG_VERSION")),
+            "{:?} --version should contain {}",
+            bin_name,
+            env!("CARGO_PKG_VERSION")
         );
     }
 }

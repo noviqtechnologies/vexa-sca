@@ -39,7 +39,7 @@ pub fn format_json_report(
     let data = serde_json::json!({
         "meta": {
             "scanner": "vexa-sca-rust",
-            "version": "1.0.0",
+            "version": env!("CARGO_PKG_VERSION"),
             "timestamp": Utc::now().to_rfc3339(),
             "policyFile": policy_file.map(|p| p.display().to_string()),
         },

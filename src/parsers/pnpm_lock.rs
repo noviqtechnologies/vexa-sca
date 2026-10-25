@@ -8,28 +8,22 @@ use std::fs;
 use std::path::Path;
 
 /// Parse a pnpm lock file that may contain one or more YAML documents
-/// (pnpm v9 lockfiles start with a bare `---` separator making them
-/// multi-document streams). Returns the *first* non-null document that
-/// contains `lockfileVersion`, falling back to the first document.
-fn parse_pnpm_yaml_multidoc(content: &str) -> Result<YamlValue, String> {
-    // serde_yaml Deserializer is an iterator over documents in a stream.
+/// (e.g. pnpm v9 lockfiles with a bare `---` separator or multi-document
+/// lockfiles containing both environment/config dependencies and project
+/// workspace dependencies). Returns all non-null documents in the stream.
+fn parse_pnpm_yaml_multidocs(content: &str) -> Result<Vec<YamlValue>, String> {
     let mut docs: Vec<YamlValue> = Vec::new();
-    for doc in serde_yaml::Deserializer::from_str(content) {
+    for (idx, doc) in serde_yaml::Deserializer::from_str(content).enumerate() {
         let val = YamlValue::deserialize(doc)
-            .map_err(|e| format!("Failed to parse YAML document: {}", e))?;
-        docs.push(val);
+            .map_err(|e| format!("Failed to parse YAML document {}: {}", idx, e))?;
+        if !val.is_null() {
+            docs.push(val);
+        }
     }
     if docs.is_empty() {
         return Err("pnpm lockfile is empty".to_string());
     }
-    // Prefer the document that has `lockfileVersion` (typically the second
-    // document in v9 files where the first is an empty mapping from `---`).
-    let chosen = docs
-        .iter()
-        .find(|d| d.get("lockfileVersion").is_some())
-        .cloned()
-        .unwrap_or_else(|| docs[0].clone());
-    Ok(chosen)
+    Ok(docs)
 }
 
 /// Peer dependency pair extracted from pnpm snapshot key suffixes.
@@ -52,6 +46,8 @@ pub struct PnpmLockParser;
 
 impl PnpmLockParser {
     /// Parses package.json and pnpm-lock.yaml / pnpm-lock.yml into standard DepGraph schema.
+    /// Fully aggregates all documents in multi-document pnpm v9 lockfiles (such as Vue core
+    /// monorepo lockfiles with separate env/config dependencies and workspace project documents).
     pub fn parse(project_dir: &Path, include_dev: bool) -> Result<DepGraph, String> {
         let manifest_path = project_dir.join("package.json");
         let lock_path_yaml = project_dir.join("pnpm-lock.yaml");
@@ -118,17 +114,19 @@ impl PnpmLockParser {
         let lock_content = fs::read_to_string(&lockfile_path)
             .map_err(|e| format!("Failed to read {}: {}", lockfile_path.display(), e))?;
 
-        let lock_yaml: YamlValue = parse_pnpm_yaml_multidoc(&lock_content)
+        let docs = parse_pnpm_yaml_multidocs(&lock_content)
             .map_err(|e| format!("Failed to parse YAML in {}: {}", lockfile_path.display(), e))?;
 
-        let lockfile_ver = lock_yaml
-            .get("lockfileVersion")
+        // Determine lockfile version across documents
+        let lockfile_ver = docs
+            .iter()
+            .find_map(|d| d.get("lockfileVersion"))
             .map(|v| match v {
                 YamlValue::String(s) => s.clone(),
                 YamlValue::Number(n) => n.to_string(),
-                _ => "6.0".to_string(),
+                _ => "9.0".to_string(),
             })
-            .unwrap_or_else(|| "6.0".to_string());
+            .unwrap_or_else(|| "9.0".to_string());
 
         let root_pkg = PkgInfo::new(&project_name, &project_version, "npm");
         let mut graph = DepGraph::new(
@@ -149,91 +147,122 @@ impl PnpmLockParser {
         // ------------------------------------------------------------------
         // Phase 1: collect integrity from `packages` into a side-map (v9)
         // ------------------------------------------------------------------
+        // ------------------------------------------------------------------
+        // Phase 1: collect integrity from `packages` across ALL documents
+        // ------------------------------------------------------------------
         let mut integrity_map: HashMap<String, String> = HashMap::new();
-        if let Some(packages) = lock_yaml.get("packages").and_then(|p| p.as_mapping()) {
-            for (key_val, entry_val) in packages {
-                if let YamlValue::String(raw_key) = key_val {
-                    if let Some(integ) = entry_val
-                        .get("resolution")
-                        .and_then(|r| r.get("integrity"))
-                        .and_then(|i| i.as_str())
-                    {
-                        integrity_map.insert(raw_key.clone(), integ.to_string());
+        for doc in &docs {
+            if let Some(packages) = doc.get("packages").and_then(|p| p.as_mapping()) {
+                for (key_val, entry_val) in packages {
+                    if let YamlValue::String(raw_key) = key_val {
+                        if let Some(integ) = entry_val
+                            .get("resolution")
+                            .and_then(|r| r.get("integrity"))
+                            .and_then(|i| i.as_str())
+                        {
+                            integrity_map.insert(raw_key.clone(), integ.to_string());
+                        }
                     }
                 }
             }
         }
 
         // ------------------------------------------------------------------
-        // Phase 2: ingest nodes + edges from `snapshots` (v9) or `packages` (v5/v6).
-        // We prefer `snapshots` when present (v9), fall back to `packages`.
+        // Phase 2: ingest nodes + edges from `snapshots` (v9) or `packages` (v5/v6)
+        // across ALL documents in the multi-document stream.
+        // In pnpm v9 multi-document files, document 0 may contain environment/config
+        // dependencies while document 1 contains the main project dependency tree.
+        // Both documents are fully processed to ensure zero coverage loss.
         // ------------------------------------------------------------------
-        let pkg_entries_key = if lock_yaml.get("snapshots").is_some() {
-            "snapshots"
-        } else {
-            "packages"
-        };
+        for doc in &docs {
+            let pkg_entries_key = if doc.get("snapshots").is_some() {
+                "snapshots"
+            } else {
+                "packages"
+            };
 
-        if let Some(entries) = lock_yaml.get(pkg_entries_key).and_then(|p| p.as_mapping()) {
-            for (key_val, entry_val) in entries {
-                let raw_key = match key_val {
-                    YamlValue::String(s) => s.as_str(),
-                    _ => continue,
-                };
-
-                let (pkg_name, pkg_version, peer_deps) =
-                    match Self::parse_package_key_with_peers(raw_key) {
-                        Some(parsed) => parsed,
-                        None => continue,
+            if let Some(entries) = doc.get(pkg_entries_key).and_then(|p| p.as_mapping()) {
+                for (key_val, entry_val) in entries {
+                    let raw_key = match key_val {
+                        YamlValue::String(s) => s.as_str(),
+                        _ => continue,
                     };
 
-                // Dev flag: v5/v6 carry it in `packages`; v9 snapshots do not.
-                let is_dev = entry_val
-                    .get("dev")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                    let (pkg_name, pkg_version, peer_deps) =
+                        match Self::parse_package_key_with_peers(raw_key) {
+                            Some(parsed) => parsed,
+                            None => continue,
+                        };
 
-                if is_dev && !include_dev {
-                    continue;
-                }
+                    // Dev flag: v5/v6 carry it in `packages`; v9 snapshots do not.
+                    let is_dev = entry_val
+                        .get("dev")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
 
-                let pkg_info = PkgInfo::new(&pkg_name, &pkg_version, "npm");
-                graph.add_pkg(pkg_info.clone());
+                    if is_dev && !include_dev {
+                        continue;
+                    }
 
-                let node_id = format!("pnpm:{}@{}", pkg_name, pkg_version);
+                    let pkg_info = PkgInfo::new(&pkg_name, &pkg_version, "npm");
+                    graph.add_pkg(pkg_info.clone());
 
-                // Resolve integrity: snapshot entry may have it directly, or from
-                // the `packages` map collected in the first pass.
-                let integrity = entry_val
-                    .get("resolution")
-                    .and_then(|r| r.get("integrity"))
-                    .and_then(|i| i.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| integrity_map.get(raw_key).cloned());
+                    let node_id = format!("pnpm:{}@{}", pkg_name, pkg_version);
 
-                graph.add_node(
-                    node_id.clone(),
-                    pkg_info.id.clone(),
-                    NodeInfo {
-                        scope: if is_dev {
-                            "dev".to_string()
-                        } else {
-                            "prod".to_string()
+                    // Resolve integrity: snapshot entry may have it directly, or from
+                    // the `packages` map collected in the first pass.
+                    let integrity = entry_val
+                        .get("resolution")
+                        .and_then(|r| r.get("integrity"))
+                        .and_then(|i| i.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| integrity_map.get(raw_key).cloned());
+
+                    graph.add_node(
+                        node_id.clone(),
+                        pkg_info.id.clone(),
+                        NodeInfo {
+                            scope: if is_dev {
+                                "dev".to_string()
+                            } else {
+                                "prod".to_string()
+                            },
+                            path: None,
+                            integrity,
                         },
-                        path: None,
-                        integrity,
-                    },
-                );
+                    );
 
-                pkg_version_map
-                    .entry(pkg_name.clone())
-                    .or_default()
-                    .push((pkg_version.clone(), node_id.clone()));
+                    let list = pkg_version_map.entry(pkg_name.clone()).or_default();
+                    if !list
+                        .iter()
+                        .any(|(v, id)| v == &pkg_version && id == &node_id)
+                    {
+                        list.push((pkg_version.clone(), node_id.clone()));
+                    }
 
-                // --- Collect regular dependency edges ---
-                for dep_section in &["dependencies", "optionalDependencies"] {
-                    if let Some(deps) = entry_val.get(dep_section).and_then(|d| d.as_mapping()) {
-                        for (dep_k, dep_v) in deps {
+                    // --- Collect regular dependency edges ---
+                    for dep_section in &["dependencies", "optionalDependencies"] {
+                        if let Some(deps) = entry_val.get(dep_section).and_then(|d| d.as_mapping())
+                        {
+                            for (dep_k, dep_v) in deps {
+                                if let Some(dep_name) = dep_k.as_str() {
+                                    let dep_spec = dep_v.as_str().unwrap_or("");
+                                    pending_edges.push((
+                                        node_id.clone(),
+                                        dep_name.to_string(),
+                                        dep_spec.to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+
+                    // --- peerDependencies section (declared in snapshots/packages entry) ---
+                    if let Some(peer_deps_map) = entry_val
+                        .get("peerDependencies")
+                        .and_then(|d| d.as_mapping())
+                    {
+                        for (dep_k, dep_v) in peer_deps_map {
                             if let Some(dep_name) = dep_k.as_str() {
                                 let dep_spec = dep_v.as_str().unwrap_or("");
                                 pending_edges.push((
@@ -244,130 +273,133 @@ impl PnpmLockParser {
                             }
                         }
                     }
-                }
 
-                // --- peerDependencies section (declared in snapshots/packages entry) ---
-                if let Some(peer_deps_map) = entry_val
-                    .get("peerDependencies")
-                    .and_then(|d| d.as_mapping())
-                {
-                    for (dep_k, dep_v) in peer_deps_map {
-                        if let Some(dep_name) = dep_k.as_str() {
-                            let dep_spec = dep_v.as_str().unwrap_or("");
-                            pending_edges.push((
-                                node_id.clone(),
-                                dep_name.to_string(),
-                                dep_spec.to_string(),
-                            ));
-                        }
+                    // --- Peer deps extracted from snapshot key suffix, e.g.
+                    //     react-dom@18.2.0(react@18.2.0) -> edge from react-dom to react@18.2.0 ---
+                    for (peer_name, peer_ver) in peer_deps {
+                        pending_edges.push((node_id.clone(), peer_name, peer_ver));
                     }
-                }
-
-                // --- Peer deps extracted from snapshot key suffix, e.g.
-                //     react-dom@18.2.0(react@18.2.0) -> edge from react-dom to react@18.2.0 ---
-                for (peer_name, peer_ver) in peer_deps {
-                    pending_edges.push((node_id.clone(), peer_name, peer_ver));
                 }
             }
         }
 
         // ------------------------------------------------------------------
         // Phase 3: wire workspace sub-packages from ALL `importers` entries
+        // across ALL documents in the multi-document stream.
         // ------------------------------------------------------------------
-        if let Some(importers) = lock_yaml.get("importers").and_then(|i| i.as_mapping()) {
-            for (imp_key, imp_val) in importers {
-                let imp_path = match imp_key.as_str() {
-                    Some(p) => p,
-                    None => continue,
-                };
-
-                // Determine the node that owns this importer's deps
-                let importer_node_id = if imp_path == "." {
-                    graph.root_node_id.clone()
-                } else {
-                    // Register a synthetic workspace package node
-                    let ws_name = imp_path.to_string();
-                    let ws_node_id = format!("pnpm:{}@0.0.0", ws_name);
-                    if !graph.nodes.contains_key(&ws_node_id) {
-                        let ws_pkg = PkgInfo::new(&ws_name, "0.0.0", "npm");
-                        graph.add_pkg(ws_pkg.clone());
-                        graph.add_node(
-                            ws_node_id.clone(),
-                            ws_pkg.id.clone(),
-                            NodeInfo {
-                                scope: "prod".to_string(),
-                                path: Some(imp_path.to_string()),
-                                integrity: None,
-                            },
-                        );
-                        // Connect workspace sub-package to root
-                        let _ = graph.add_edge(&graph.root_node_id.clone(), &ws_node_id);
-                    }
-                    workspace_node_ids.insert(imp_path.to_string(), ws_node_id.clone());
-                    ws_node_id
-                };
-
-                // Process each dep section in this importer
-                for dep_section in &["dependencies", "devDependencies", "optionalDependencies"] {
-                    if *dep_section == "devDependencies" && !include_dev {
-                        continue;
-                    }
-                    let Some(deps) = imp_val.get(dep_section).and_then(|d| d.as_mapping()) else {
-                        continue;
+        for (doc_idx, doc) in docs.iter().enumerate() {
+            if let Some(importers) = doc.get("importers").and_then(|i| i.as_mapping()) {
+                for (imp_key, imp_val) in importers {
+                    let imp_path = match imp_key.as_str() {
+                        Some(p) => p,
+                        None => {
+                            return Err(format!(
+                                "Invalid non-string importer key in pnpm lockfile document {}",
+                                doc_idx
+                            ));
+                        }
                     };
-                    for (dep_k, dep_v) in deps {
-                        let dep_name = match dep_k.as_str() {
-                            Some(n) => n,
-                            None => continue,
+
+                    // Determine the node that owns this importer's deps
+                    let importer_node_id = if imp_path == "." {
+                        graph.root_node_id.clone()
+                    } else {
+                        // Register a synthetic workspace package node
+                        let ws_name = imp_path.to_string();
+                        let ws_node_id = format!("pnpm:{}@0.0.0", ws_name);
+                        if !graph.nodes.contains_key(&ws_node_id) {
+                            let ws_pkg = PkgInfo::new(&ws_name, "0.0.0", "npm");
+                            graph.add_pkg(ws_pkg.clone());
+                            graph.add_node(
+                                ws_node_id.clone(),
+                                ws_pkg.id.clone(),
+                                NodeInfo {
+                                    scope: "prod".to_string(),
+                                    path: Some(imp_path.to_string()),
+                                    integrity: None,
+                                },
+                            );
+                            // Connect workspace sub-package to root
+                            let _ = graph.add_edge(&graph.root_node_id.clone(), &ws_node_id);
+                        }
+                        workspace_node_ids.insert(imp_path.to_string(), ws_node_id.clone());
+                        ws_node_id
+                    };
+
+                    // Process each dep section in this importer
+                    for dep_section in &["dependencies", "devDependencies", "optionalDependencies"]
+                    {
+                        if *dep_section == "devDependencies" && !include_dev {
+                            continue;
+                        }
+                        let Some(deps) = imp_val.get(dep_section).and_then(|d| d.as_mapping())
+                        else {
+                            continue;
                         };
-                        let spec = importer_dep_version(dep_v);
-
-                        // Detect link: / workspace: references
-                        if spec.starts_with("link:") || spec.starts_with("workspace:") {
-                            // Resolve target path relative to the importer
-                            let link_target = spec
-                                .trim_start_matches("link:")
-                                .trim_start_matches("workspace:");
-                            let target_path = if link_target == "*"
-                                || link_target == "^"
-                                || link_target == "~"
-                                || link_target.is_empty()
-                            {
-                                // workspace:* means "this package by name"; look it up by dep_name in workspace_node_ids
-                                dep_name.to_string()
-                            } else {
-                                // Normalise path: strip leading "./"
-                                let link_target = link_target.trim_start_matches("./");
-                                if imp_path == "." {
-                                    link_target.to_string()
-                                } else {
-                                    // resolve relative to importer dir
-                                    format!("{}/{}", imp_path, link_target)
-                                }
+                        for (dep_k, dep_v) in deps {
+                            let dep_name = match dep_k.as_str() {
+                                Some(n) => n,
+                                None => continue,
                             };
+                            let spec = importer_dep_version(dep_v);
 
-                            // Try to find the workspace node for this path
-                            if let Some(ws_id) = workspace_node_ids.get(&target_path) {
-                                let _ = graph.add_edge(&importer_node_id, ws_id);
+                            // Detect link: / workspace: references
+                            if spec.starts_with("link:") || spec.starts_with("workspace:") {
+                                // Resolve target path relative to the importer
+                                let link_target = spec
+                                    .trim_start_matches("link:")
+                                    .trim_start_matches("workspace:");
+                                let target_path = if link_target == "*"
+                                    || link_target == "^"
+                                    || link_target == "~"
+                                    || link_target.is_empty()
+                                {
+                                    // workspace:* means "this package by name"; look it up by dep_name in workspace_node_ids
+                                    dep_name.to_string()
+                                } else {
+                                    // Normalise path: strip leading "./"
+                                    let link_target = link_target.trim_start_matches("./");
+                                    if imp_path == "." {
+                                        link_target.to_string()
+                                    } else {
+                                        // resolve relative to importer dir
+                                        format!("{}/{}", imp_path, link_target)
+                                    }
+                                };
+
+                                // Try to find the workspace node for this path
+                                if let Some(ws_id) = workspace_node_ids.get(&target_path) {
+                                    let _ = graph.add_edge(&importer_node_id, ws_id);
+                                } else {
+                                    // Queue for later resolution (workspace node may not be registered yet)
+                                    pending_edges.push((
+                                        importer_node_id.clone(),
+                                        dep_name.to_string(),
+                                        format!("ws:{}", target_path),
+                                    ));
+                                }
                             } else {
-                                // Queue for later resolution (workspace node may not be registered yet)
+                                // Regular dep: resolve against pkg_version_map
                                 pending_edges.push((
                                     importer_node_id.clone(),
                                     dep_name.to_string(),
-                                    format!("ws:{}", target_path),
+                                    spec.to_string(),
                                 ));
                             }
-                        } else {
-                            // Regular dep: resolve against pkg_version_map
-                            pending_edges.push((
-                                importer_node_id.clone(),
-                                dep_name.to_string(),
-                                spec.to_string(),
-                            ));
                         }
                     }
                 }
             }
+        }
+
+        // If the lockfile produced no dependency nodes at all, fail explicitly
+        // to prevent false PASS on incomplete or unparsable lockfiles.
+        if graph.nodes.len() <= 1 && pending_edges.is_empty() {
+            return Err(format!(
+                "pnpm lockfile {} parsed 0 packages across {} YAML document(s); incomplete or malformed lockfile",
+                lockfile_path.display(),
+                docs.len()
+            ));
         }
 
         // ------------------------------------------------------------------
@@ -423,18 +455,21 @@ impl PnpmLockParser {
 
         // If no manifest or nothing was connected yet, check pnpm-lock top-level
         // dependencies or importers['.'] (handled above in phase 3 already, but
-        // also check legacy top-level deps for v5/v6 without importers)
+        // also check legacy top-level deps for v5/v6 without importers across all docs)
         if root_connected == 0 {
             let mut top_deps: Vec<(String, String)> = Vec::new();
 
-            for dep_section in &["dependencies", "devDependencies"] {
-                if *dep_section == "devDependencies" && !include_dev {
-                    continue;
-                }
-                if let Some(deps) = lock_yaml.get(dep_section).and_then(|d| d.as_mapping()) {
-                    for (k, v) in deps {
-                        if let Some(name) = k.as_str() {
-                            top_deps.push((name.to_string(), importer_dep_version(v).to_string()));
+            for doc in &docs {
+                for dep_section in &["dependencies", "devDependencies"] {
+                    if *dep_section == "devDependencies" && !include_dev {
+                        continue;
+                    }
+                    if let Some(deps) = doc.get(dep_section).and_then(|d| d.as_mapping()) {
+                        for (k, v) in deps {
+                            if let Some(name) = k.as_str() {
+                                top_deps
+                                    .push((name.to_string(), importer_dep_version(v).to_string()));
+                            }
                         }
                     }
                 }
@@ -729,20 +764,20 @@ snapshots:
         let v9_content = "\
 ---\nlockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      lodash:\n        specifier: ^4.17.21\n        version: 4.17.21\n\npackages:\n\n  lodash@4.17.21:\n    resolution: {integrity: sha512-abc123}\n\nsnapshots:\n\n  lodash@4.17.21: {}\n";
 
-        let result = parse_pnpm_yaml_multidoc(v9_content);
+        let result = parse_pnpm_yaml_multidocs(v9_content);
         assert!(
             result.is_ok(),
             "pnpm v9 multi-document YAML must parse without error: {:?}",
             result.err()
         );
-        let doc = result.unwrap();
+        let docs = result.unwrap();
         assert!(
-            doc.get("lockfileVersion").is_some(),
-            "Parsed document must contain 'lockfileVersion'"
+            docs.iter().any(|d| d.get("lockfileVersion").is_some()),
+            "Parsed documents must contain 'lockfileVersion'"
         );
         assert!(
-            doc.get("snapshots").is_some(),
-            "Parsed document must contain 'snapshots' key for v9"
+            docs.iter().any(|d| d.get("snapshots").is_some()),
+            "Parsed documents must contain 'snapshots' key for v9"
         );
     }
 
@@ -885,6 +920,317 @@ snapshots:
         let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
         assert!(names.contains(&"lodash"));
         assert!(names.contains(&"minimist"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_pnpm_v9_vue_core_multidoc_layout_reconciles_all_packages_and_importers() {
+        // Models official Vue core pnpm-lock.yaml layout:
+        // Doc 0: environment/config lock with tools/config packages
+        // Doc 1: project lock with root + 18 workspace importers and project dependencies
+        let tmp = std::env::temp_dir().join(format!(
+            "vexa_pnpm_vue_multidoc_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let pkg_json = r#"{
+  "name": "@vue/core",
+  "version": "3.5.0",
+  "private": true
+}"#;
+        std::fs::write(tmp.join("package.json"), pkg_json).unwrap();
+
+        // 2 distinct documents separated by "---"
+        let lock = "---
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+  .:
+    dependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.14.0
+      turbo:
+        specifier: ^1.13.0
+        version: 1.13.0
+
+packages:
+  '@types/node@20.14.0':
+    resolution: {integrity: sha512-env1}
+  turbo@1.13.0:
+    resolution: {integrity: sha512-env2}
+
+snapshots:
+  '@types/node@20.14.0': {}
+  turbo@1.13.0: {}
+
+---
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      lodash-es:
+        specifier: ^4.17.21
+        version: 4.17.21
+    devDependencies:
+      typescript:
+        specifier: ^5.4.5
+        version: 5.4.5
+
+  packages/compiler-core:
+    dependencies:
+      '@babel/parser':
+        specifier: ^7.24.5
+        version: 7.24.5
+      '@vue/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/compiler-dom:
+    dependencies:
+      '@vue/compiler-core':
+        specifier: workspace:*
+        version: link:../compiler-core
+      '@vue/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/compiler-sfc:
+    dependencies:
+      '@vue/compiler-core':
+        specifier: workspace:*
+        version: link:../compiler-core
+      postcss:
+        specifier: ^8.4.38
+        version: 8.4.38
+
+  packages/compiler-ssr:
+    dependencies:
+      '@vue/compiler-dom':
+        specifier: workspace:*
+        version: link:../compiler-dom
+
+  packages/reactivity:
+    dependencies:
+      '@vue/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/runtime-core:
+    dependencies:
+      '@vue/reactivity':
+        specifier: workspace:*
+        version: link:../reactivity
+      '@vue/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/runtime-dom:
+    dependencies:
+      '@vue/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      '@vue/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/server-renderer:
+    dependencies:
+      '@vue/compiler-ssr':
+        specifier: workspace:*
+        version: link:../compiler-ssr
+      '@vue/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/shared:
+    dependencies: {}
+
+  packages/vue:
+    dependencies:
+      '@vue/compiler-dom':
+        specifier: workspace:*
+        version: link:../compiler-dom
+      '@vue/runtime-dom':
+        specifier: workspace:*
+        version: link:../runtime-dom
+
+  packages/vue-compat:
+    dependencies:
+      '@vue/compiler-sfc':
+        specifier: workspace:*
+        version: link:../compiler-sfc
+
+  packages/dts-test:
+    dependencies:
+      vue:
+        specifier: workspace:*
+        version: link:../vue
+
+  packages/custom-element:
+    dependencies:
+      '@vue/runtime-dom':
+        specifier: workspace:*
+        version: link:../runtime-dom
+
+  packages/template-explorer:
+    dependencies:
+      '@vue/compiler-dom':
+        specifier: workspace:*
+        version: link:../compiler-dom
+
+  packages/size-check:
+    dependencies:
+      vue:
+        specifier: workspace:*
+        version: link:../vue
+
+  packages/sfc-playground:
+    dependencies:
+      '@vue/compiler-sfc':
+        specifier: workspace:*
+        version: link:../compiler-sfc
+
+  packages/runtime-test:
+    dependencies:
+      '@vue/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+
+  packages/compiler-vapor:
+    dependencies:
+      '@vue/compiler-core':
+        specifier: workspace:*
+        version: link:../compiler-core
+
+packages:
+  '@babel/parser@7.24.5':
+    resolution: {integrity: sha512-babel}
+  lodash-es@4.17.21:
+    resolution: {integrity: sha512-lodash}
+  postcss@8.4.38:
+    resolution: {integrity: sha512-postcss}
+  typescript@5.4.5:
+    resolution: {integrity: sha512-ts}
+
+snapshots:
+  '@babel/parser@7.24.5': {}
+  lodash-es@4.17.21: {}
+  postcss@8.4.38: {}
+  typescript@5.4.5: {}
+";
+        std::fs::write(tmp.join("pnpm-lock.yaml"), lock).unwrap();
+
+        let graph = PnpmLockParser::parse(&tmp, true)
+            .expect("Vue-like multi-document pnpm lockfile must parse cleanly");
+
+        let pkgs = graph.get_all_pkgs();
+        let pkg_names: std::collections::HashSet<String> =
+            pkgs.iter().map(|p| p.name.clone()).collect();
+
+        // 1. Doc 0 environment/config dependencies MUST be present
+        assert!(
+            pkg_names.contains("@types/node"),
+            "Document 0 '@types/node' must be discovered; found: {:?}",
+            pkg_names
+        );
+        assert!(
+            pkg_names.contains("turbo"),
+            "Document 0 'turbo' must be discovered; found: {:?}",
+            pkg_names
+        );
+
+        // 2. Doc 1 project dependencies MUST be present
+        assert!(
+            pkg_names.contains("lodash-es"),
+            "Document 1 'lodash-es' must be discovered"
+        );
+        assert!(
+            pkg_names.contains("typescript"),
+            "Document 1 'typescript' must be discovered"
+        );
+        assert!(
+            pkg_names.contains("@babel/parser"),
+            "Document 1 '@babel/parser' must be discovered"
+        );
+        assert!(
+            pkg_names.contains("postcss"),
+            "Document 1 'postcss' must be discovered"
+        );
+
+        // 3. ALL 18 workspace sub-packages must be registered as nodes connected to root
+        let expected_importers = [
+            "packages/compiler-core",
+            "packages/compiler-dom",
+            "packages/compiler-sfc",
+            "packages/compiler-ssr",
+            "packages/reactivity",
+            "packages/runtime-core",
+            "packages/runtime-dom",
+            "packages/server-renderer",
+            "packages/shared",
+            "packages/vue",
+            "packages/vue-compat",
+            "packages/dts-test",
+            "packages/custom-element",
+            "packages/template-explorer",
+            "packages/size-check",
+            "packages/sfc-playground",
+            "packages/runtime-test",
+            "packages/compiler-vapor",
+        ];
+        assert_eq!(expected_importers.len(), 18);
+
+        let root_node = graph.nodes.get(&graph.root_node_id).unwrap();
+        for imp in expected_importers {
+            let ws_node_id = format!("pnpm:{}@0.0.0", imp);
+            assert!(
+                graph.nodes.contains_key(&ws_node_id),
+                "Workspace node {} must exist in graph",
+                ws_node_id
+            );
+            assert!(
+                root_node.deps.contains(&ws_node_id),
+                "Root must connect to workspace node {}",
+                ws_node_id
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_pnpm_empty_lockfile_returns_error() {
+        let tmp = std::env::temp_dir().join(format!(
+            "vexa_pnpm_empty_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("pnpm-lock.yaml"), "--- \n # comment only\n").unwrap();
+
+        let res = PnpmLockParser::parse(&tmp, true);
+        assert!(
+            res.is_err(),
+            "Empty pnpm lockfile without packages must return an error"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

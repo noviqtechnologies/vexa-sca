@@ -286,6 +286,8 @@ pub struct CompletenessReport {
     pub limits_hit: Vec<String>,
     pub advisory_source: String,
     pub advisory_status: AdvisoryStatus,
+    #[serde(default)]
+    pub unavailable_packages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -321,7 +323,7 @@ pub struct ReachabilityResult {
 }
 
 fn default_analyzer_version() -> String {
-    "1.0.0".to_string()
+    env!("CARGO_PKG_VERSION").to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

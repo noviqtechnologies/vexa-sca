@@ -457,7 +457,7 @@ pub fn format_spdx_sbom(
         "creationInfo": {
             "created": timestamp,
             "creators": [
-                "Tool: vexa-sca-1.0.0",
+                concat!("Tool: vexa-sca-", env!("CARGO_PKG_VERSION")),
                 "Organization: Vexa"
             ]
         },

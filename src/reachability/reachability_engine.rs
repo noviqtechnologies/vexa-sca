@@ -13,6 +13,8 @@ pub struct ReachabilityEngine {
     pub source_files: Vec<PathBuf>,
     pub known_functions: HashMap<&'static str, Vec<&'static str>>,
     pub max_files: usize,
+    pub files_discovered: usize,
+    pub files_skipped: usize,
     pub file_limit_hit: bool,
     pub config_referenced_pkgs: HashSet<String>,
 }
@@ -41,11 +43,16 @@ static PY_FROM_RE: std::sync::LazyLock<Regex> =
 
 impl ReachabilityEngine {
     pub fn new(source_dir: &Path) -> Self {
-        Self::new_with_limit(source_dir, 1000)
+        let max_files = std::env::var("VEXA_MAX_SOURCE_FILES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(10_000);
+        Self::new_with_limit(source_dir, max_files)
     }
 
     pub fn new_with_limit(source_dir: &Path, max_files: usize) -> Self {
-        let (source_files, file_limit_hit) = Self::find_source_files(source_dir, max_files);
+        let (source_files, files_discovered, files_skipped, file_limit_hit) =
+            Self::find_source_files(source_dir, max_files);
         let config_referenced_pkgs = Self::find_config_referenced_pkgs(source_dir);
 
         let mut known = HashMap::new();
@@ -91,6 +98,8 @@ impl ReachabilityEngine {
             source_files,
             known_functions: known,
             max_files,
+            files_discovered,
+            files_skipped,
             file_limit_hit,
             config_referenced_pkgs,
         }
@@ -164,7 +173,7 @@ impl ReachabilityEngine {
         referenced
     }
 
-    fn find_source_files(dir: &Path, max_files: usize) -> (Vec<PathBuf>, bool) {
+    fn find_source_files(dir: &Path, max_files: usize) -> (Vec<PathBuf>, usize, usize, bool) {
         let valid_exts: HashSet<&str> =
             ["js", "ts", "mjs", "cjs", "jsx", "tsx", "py", "java", "go"]
                 .iter()
@@ -185,7 +194,7 @@ impl ReachabilityEngine {
         .collect();
 
         let mut files = Vec::new();
-        let mut hit_limit = false;
+        let mut discovered_count: usize = 0;
 
         for entry in WalkDir::new(dir)
             .into_iter()
@@ -199,20 +208,22 @@ impl ReachabilityEngine {
             })
             .filter_map(|e| e.ok())
         {
-            if files.len() >= max_files {
-                hit_limit = true;
-                break;
-            }
             if entry.file_type().is_file() {
                 if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
                     if valid_exts.contains(ext) {
-                        files.push(entry.path().to_path_buf());
+                        discovered_count += 1;
+                        if max_files == 0 || files.len() < max_files {
+                            files.push(entry.path().to_path_buf());
+                        }
                     }
                 }
             }
         }
 
-        (files, hit_limit)
+        let files_skipped = discovered_count.saturating_sub(files.len());
+        let hit_limit = files_skipped > 0;
+
+        (files, discovered_count, files_skipped, hit_limit)
     }
 
     pub fn evaluate_reachability(
@@ -390,7 +401,7 @@ impl ReachabilityEngine {
             call_sites: call_sites.into_iter().take(5).collect(),
             target_functions: target_functions.unwrap_or_else(|| vec!["*".to_string()]),
             reason_code,
-            analyzer_version: "1.0.0".to_string(),
+            analyzer_version: env!("CARGO_PKG_VERSION").to_string(),
         };
 
         (result, usage_signal)

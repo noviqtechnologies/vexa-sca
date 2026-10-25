@@ -200,7 +200,7 @@ pub fn format_sarif_report(
                 "tool": {
                     "driver": {
                         "name": "vexa-sca",
-                        "semanticVersion": "1.0.0",
+                        "semanticVersion": env!("CARGO_PKG_VERSION"),
                         "informationUri": "https://github.com/vexa-sca/vexa-sca",
                         "rules": rules
                     }

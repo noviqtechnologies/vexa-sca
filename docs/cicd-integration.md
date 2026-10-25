@@ -114,7 +114,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: vexa-security-reports
+          name: vexa-sca-reports
           path: |
             vexa-dashboard.html
             cyclonedx-sbom.json

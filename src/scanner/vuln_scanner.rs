@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 /// Internal result of a single OSV batch query attempt.
-enum BatchFetchOutcome {
+pub enum BatchFetchOutcome {
     /// Successfully retrieved advisory IDs (may be empty if no vulns).
     Success(Vec<Vec<Value>>),
     /// The HTTP request failed or returned a non-2xx status.
@@ -42,6 +42,8 @@ pub struct ScanResult {
     pub new_vulnerabilities_count: usize,
     /// Number of baseline findings.
     pub baseline_vulnerabilities_count: usize,
+    /// Detailed diagnostic list of packages that were unavailable.
+    pub unavailable_packages: Vec<String>,
 }
 
 pub struct VulnScanner {
@@ -93,43 +95,71 @@ impl VulnScanner {
         let mut packages_unavailable: usize = 0;
         let mut had_network_error = false;
         let mut had_parse_error = false;
+        let mut unavailable_packages: Vec<String> = Vec::new();
 
-        // 2. Query batch for uncached packages — chunk requests to avoid oversized
-        // payloads (OSV max is not publicly documented but large batches fail in
-        // practice). Each chunk is retried up to MAX_RETRIES times with exponential
-        // back-off before its packages are marked unavailable.
-        const CHUNK_SIZE: usize = 500;
+        // 2. Query batch for uncached packages — chunk requests into bounded batches of 100
+        // (optimal for api.osv.dev) and run with bounded concurrency (up to 4 concurrent batches).
+        // Each chunk is retried up to MAX_RETRIES times with exponential backoff before its
+        // packages are marked unavailable with explicit diagnostics.
+        const CHUNK_SIZE: usize = 100;
+        const MAX_CONCURRENT_BATCHES: usize = 4;
         const MAX_RETRIES: u32 = 3;
 
-        for chunk in uncached.chunks(CHUNK_SIZE) {
-            let mut last_outcome = BatchFetchOutcome::NetworkError;
-            for attempt in 0..MAX_RETRIES {
-                if attempt > 0 {
-                    let backoff_ms = 250u64 * (1u64 << (attempt - 1)); // 250ms, 500ms
-                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-                }
-                last_outcome = self.fetch_batch(chunk).await;
-                match &last_outcome {
-                    BatchFetchOutcome::Success(_) => break,
-                    BatchFetchOutcome::ParseError => break, // not transient, don't retry
-                    BatchFetchOutcome::NetworkError => {}   // retry
-                }
-            }
+        let chunks: Vec<Vec<PkgInfo>> = uncached.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
 
-            match last_outcome {
-                BatchFetchOutcome::Success(fetched) => {
-                    for (pkg, raw_vulns) in chunk.iter().zip(fetched) {
-                        self.cache.set(pkg, &raw_vulns);
-                        results_map.insert(pkg.id.clone(), raw_vulns);
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_BATCHES));
+        let mut join_set = tokio::task::JoinSet::new();
+
+        for chunk in chunks {
+            let sem_clone = sem.clone();
+            let client = self.client.clone();
+            let batch_api_url = self.batch_api_url.clone();
+            join_set.spawn(async move {
+                let _permit = sem_clone.acquire().await.ok();
+                let mut last_outcome = BatchFetchOutcome::NetworkError;
+                for attempt in 0..MAX_RETRIES {
+                    if attempt > 0 {
+                        let backoff_ms = 250u64 * (1u64 << (attempt - 1)); // 250ms, 500ms
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                    }
+                    last_outcome = Self::fetch_batch_raw(&client, &batch_api_url, &chunk).await;
+                    match &last_outcome {
+                        BatchFetchOutcome::Success(_) => break,
+                        BatchFetchOutcome::ParseError => break, // not transient, don't retry
+                        BatchFetchOutcome::NetworkError => {}   // retry
                     }
                 }
-                BatchFetchOutcome::NetworkError => {
-                    had_network_error = true;
-                    packages_unavailable += chunk.len();
-                }
-                BatchFetchOutcome::ParseError => {
-                    had_parse_error = true;
-                    packages_unavailable += chunk.len();
+                (chunk, last_outcome)
+            });
+        }
+
+        while let Some(res) = join_set.join_next().await {
+            if let Ok((chunk, outcome)) = res {
+                match outcome {
+                    BatchFetchOutcome::Success(fetched) => {
+                        for (pkg, raw_vulns) in chunk.iter().zip(fetched) {
+                            self.cache.set(pkg, &raw_vulns);
+                            results_map.insert(pkg.id.clone(), raw_vulns);
+                        }
+                    }
+                    BatchFetchOutcome::NetworkError => {
+                        had_network_error = true;
+                        packages_unavailable += chunk.len();
+                        for pkg in &chunk {
+                            unavailable_packages.push(format!(
+                                "{} (network timeout/failure after {} retries)",
+                                pkg.id, MAX_RETRIES
+                            ));
+                        }
+                    }
+                    BatchFetchOutcome::ParseError => {
+                        had_parse_error = true;
+                        packages_unavailable += chunk.len();
+                        for pkg in &chunk {
+                            unavailable_packages
+                                .push(format!("{} (malformed upstream OSV response)", pkg.id));
+                        }
+                    }
                 }
             }
         }
@@ -242,6 +272,7 @@ impl VulnScanner {
             limits_hit: Vec::new(),
             advisory_source: "OSV (api.osv.dev)".to_string(),
             advisory_status,
+            unavailable_packages: unavailable_packages.clone(),
         };
 
         let vulns_count = vulnerabilities.len();
@@ -258,10 +289,15 @@ impl VulnScanner {
             completeness,
             new_vulnerabilities_count: vulns_count,
             baseline_vulnerabilities_count: 0,
+            unavailable_packages,
         })
     }
 
-    async fn fetch_batch(&self, pkgs: &[PkgInfo]) -> BatchFetchOutcome {
+    pub async fn fetch_batch_raw(
+        client: &Client,
+        batch_api_url: &str,
+        pkgs: &[PkgInfo],
+    ) -> BatchFetchOutcome {
         let queries: Vec<Value> = pkgs
             .iter()
             .map(|p| {
@@ -277,13 +313,7 @@ impl VulnScanner {
 
         let body = serde_json::json!({ "queries": queries });
 
-        let resp = match self
-            .client
-            .post(&self.batch_api_url)
-            .json(&body)
-            .send()
-            .await
-        {
+        let resp = match client.post(batch_api_url).json(&body).send().await {
             Ok(r) if r.status().is_success() => r,
             Ok(_) | Err(_) => {
                 return BatchFetchOutcome::NetworkError;
@@ -318,7 +348,11 @@ impl VulnScanner {
         BatchFetchOutcome::Success(fetched)
     }
 
-    async fn fetch_advisories(&self, vuln_ids: Vec<String>) -> HashMap<String, Value> {
+    pub async fn fetch_batch(&self, pkgs: &[PkgInfo]) -> BatchFetchOutcome {
+        Self::fetch_batch_raw(&self.client, &self.batch_api_url, pkgs).await
+    }
+
+    pub async fn fetch_advisories(&self, vuln_ids: Vec<String>) -> HashMap<String, Value> {
         let mut map = HashMap::new();
         let mut to_fetch = Vec::new();
 
@@ -330,29 +364,36 @@ impl VulnScanner {
             }
         }
 
-        for chunk in to_fetch.chunks(10) {
-            let mut set = tokio::task::JoinSet::new();
-            for id in chunk {
-                let id = id.clone();
-                let client = self.client.clone();
-                let url = format!("{}/{}", self.vuln_api_url, id);
-                set.spawn(async move {
+        const ADVISORY_CONCURRENCY: usize = 16;
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(ADVISORY_CONCURRENCY));
+        let mut set = tokio::task::JoinSet::new();
+
+        for id in to_fetch {
+            let sem_clone = sem.clone();
+            let client = self.client.clone();
+            let url = format!("{}/{}", self.vuln_api_url, id);
+            set.spawn(async move {
+                let _permit = sem_clone.acquire().await.ok();
+                for attempt in 0..2 {
+                    if attempt > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    }
                     if let Ok(resp) = client.get(&url).send().await {
                         if resp.status().is_success() {
                             if let Ok(data) = resp.json::<Value>().await {
-                                return Some((id, data));
+                                return Some((id.clone(), data));
                             }
                         }
                     }
-                    None
-                });
-            }
-
-            while let Some(res) = set.join_next().await {
-                if let Ok(Some((id, data))) = res {
-                    self.cache.set_advisory(&id, &data);
-                    map.insert(id, data);
                 }
+                None
+            });
+        }
+
+        while let Some(res) = set.join_next().await {
+            if let Ok(Some((id, data))) = res {
+                self.cache.set_advisory(&id, &data);
+                map.insert(id, data);
             }
         }
 
