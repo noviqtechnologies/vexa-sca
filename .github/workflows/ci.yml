@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@a54c7fe93642104db64bc871236a994b728ec616 # stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.85.0"
 
