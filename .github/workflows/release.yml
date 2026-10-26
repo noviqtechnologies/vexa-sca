@@ -55,6 +55,9 @@ jobs:
           GITHUB_STEP_SUMMARY: ""
         run: npm run validate:schemas
 
+      - name: Dogfood Vexa SCA (Self-Scan Quality Gate)
+        run: cargo run --locked --release -- ci . --fail-on high
+
       - name: Emit Release Validation Step Summary
         if: matrix.os == 'ubuntu-latest'
         shell: bash

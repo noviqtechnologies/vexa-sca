@@ -104,6 +104,12 @@ fn discover_recursive(dir: &Path, depth: usize, max_depth: usize, results: &mut 
                     || name == "vendor"
                     || name == "dist"
                     || name == "build"
+                    || name == "inputs"
+                    || name == "outputs"
+                    || name == "completed"
+                    || name == "fixtures"
+                    || name == "test-fixtures"
+                    || name == ".work"
                 {
                     continue;
                 }

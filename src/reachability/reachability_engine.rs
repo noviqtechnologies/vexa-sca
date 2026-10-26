@@ -297,6 +297,12 @@ impl ReachabilityEngine {
             ".nuxt",
             ".cache",
             "coverage",
+            "inputs",
+            "outputs",
+            "completed",
+            "fixtures",
+            "test-fixtures",
+            ".work",
         ]
         .iter()
         .cloned()
