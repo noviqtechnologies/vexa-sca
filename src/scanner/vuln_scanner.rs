@@ -1444,7 +1444,10 @@ mod tests {
                     .collect();
                 assert_eq!(ids, vec!["OSV-1", "OSV-2", "OSV-3"]);
             }
-            other => panic!("all pages should produce a complete success, got: {:?}", other),
+            other => panic!(
+                "all pages should produce a complete success, got: {:?}",
+                other
+            ),
         }
     }
 
