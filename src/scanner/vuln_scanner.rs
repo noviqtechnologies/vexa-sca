@@ -404,11 +404,26 @@ impl VulnScanner {
 
         let body = serde_json::json!({ "queries": queries });
 
-        let resp = match client.post(batch_api_url).json(&body).send().await {
-            Ok(r) if r.status().is_success() => r,
-            Ok(_) | Err(_) => {
-                return BatchFetchOutcome::NetworkError;
+        let mut resp_opt = None;
+        for attempt in 0..3 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
             }
+            match client.post(batch_api_url).json(&body).send().await {
+                Ok(r) if r.status().is_success() => {
+                    resp_opt = Some(r);
+                    break;
+                }
+                Ok(r) if r.status().is_client_error() && r.status().as_u16() != 429 => {
+                    return BatchFetchOutcome::NetworkError;
+                }
+                _ => {}
+            }
+        }
+
+        let resp = match resp_opt {
+            Some(r) => r,
+            None => return BatchFetchOutcome::NetworkError,
         };
 
         let data = match resp.json::<Value>().await {
@@ -1391,9 +1406,19 @@ mod tests {
                 let Some(mut stream) = accept_with_timeout(&listener) else {
                     return;
                 };
+                let _ = stream.set_nonblocking(false);
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-                let mut request = [0u8; 4096];
-                let _ = stream.read(&mut request);
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                while let Ok(n) = stream.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                    if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
                 let reason = if status == 200 {
                     "OK"
                 } else if status == 503 {
