@@ -172,7 +172,11 @@ for (const tc of testCases) {
   
   let exitCode = 0;
   try {
-    execFileSync(bin, tc.args, { cwd: rootDir, stdio: 'pipe' });
+    execFileSync(bin, tc.args, {
+      cwd: rootDir,
+      stdio: 'pipe',
+      env: { ...process.env, GITHUB_STEP_SUMMARY: '' }
+    });
   } catch (err) {
     exitCode = err.status || -1;
   }

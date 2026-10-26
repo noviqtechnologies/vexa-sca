@@ -1734,20 +1734,22 @@ pub async fn run() {
                         );
                     }
 
-                    // Write GitHub Step Summary if env var is set
+                    // Write GitHub Step Summary if env var is set and non-empty
                     if let Some(summary_env) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-                        let summary_md = format_github_step_summary(
-                            &output.scan_result,
-                            &output.remediations,
-                            Some(&gate_res),
-                        );
-                        use std::io::Write;
-                        if let Ok(mut f) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(PathBuf::from(summary_env))
-                        {
-                            let _ = writeln!(f, "{}", summary_md);
+                        if !summary_env.is_empty() {
+                            let summary_md = format_github_step_summary(
+                                &output.scan_result,
+                                &output.remediations,
+                                Some(&gate_res),
+                            );
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(PathBuf::from(summary_env))
+                            {
+                                let _ = writeln!(f, "{}", summary_md);
+                            }
                         }
                     }
 
@@ -2031,8 +2033,11 @@ pub async fn run() {
                         Some(&gate_res),
                     );
 
-                    let summary_target = job_summary_file
-                        .or_else(|| std::env::var_os("GITHUB_STEP_SUMMARY").map(PathBuf::from));
+                    let summary_target = job_summary_file.or_else(|| {
+                        std::env::var_os("GITHUB_STEP_SUMMARY")
+                            .filter(|s| !s.is_empty())
+                            .map(PathBuf::from)
+                    });
 
                     if let Some(summary_path) = summary_target {
                         use std::io::Write;

@@ -61,10 +61,14 @@ jobs:
         run: cargo check --locked --all-targets
 
       - name: Run test suite (with real pnpm & npm rollback verification)
+        env:
+          GITHUB_STEP_SUMMARY: ""
         run: cargo test --locked --all-targets --verbose
 
       - name: Build release binary
         run: cargo build --locked --release
 
       - name: Validate generated reports against pinned schemas (SARIF 2.1.0, CycloneDX 1.5, SPDX 2.3)
+        env:
+          GITHUB_STEP_SUMMARY: ""
         run: npm run validate:schemas
