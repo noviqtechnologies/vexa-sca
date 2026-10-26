@@ -4,7 +4,7 @@ pub use crate::reporters::html::format_html_report;
 pub use crate::reporters::sarif::format_sarif_report;
 pub use crate::reporters::sbom::{format_cyclonedx_sbom, format_spdx_sbom, SbomFormat};
 use crate::scanner::vuln_scanner::ScanResult;
-use crate::types::{ReachabilityStatus, RemediationAction};
+use crate::types::{ReachabilityStatus, RemediationAction, UsageSignal};
 use chrono::Utc;
 use std::path::Path;
 
@@ -36,10 +36,39 @@ pub fn format_json_report(
         })
         .count();
 
+    let signal_matched_count = scan_result
+        .vulnerabilities
+        .iter()
+        .filter(|v| {
+            v.usage_signal == UsageSignal::ImportedSource
+                || v.usage_signal == UsageSignal::ReferencedConfigOrScript
+                || v.reachability
+                    .as_ref()
+                    .map(|r| r.status == ReachabilityStatus::Reachable)
+                    .unwrap_or(false)
+        })
+        .count();
+    let no_signal_count = scan_result
+        .vulnerabilities
+        .iter()
+        .filter(|v| {
+            v.usage_signal == UsageSignal::NoReferenceFoundWithinScope
+                || v.reachability
+                    .as_ref()
+                    .map(|r| r.status == ReachabilityStatus::Unreachable)
+                    .unwrap_or(false)
+        })
+        .count();
+    let unknown_signal_count = scan_result
+        .vulnerabilities
+        .len()
+        .saturating_sub(signal_matched_count + no_signal_count);
+
     let data = serde_json::json!({
         "meta": {
             "scanner": "vexa-sca-rust",
             "version": env!("CARGO_PKG_VERSION"),
+            "schemaVersion": "1.0.0",
             "timestamp": Utc::now().to_rfc3339(),
             "policyFile": policy_file.map(|p| p.display().to_string()),
         },
@@ -49,6 +78,11 @@ pub fn format_json_report(
             "reachabilitySummary": {
                 "reachable": reachable_count,
                 "unreachable": unreachable_count,
+            },
+            "usageSignalsSummary": {
+                "signalMatched": signal_matched_count,
+                "noSignalObserved": no_signal_count,
+                "unknown": unknown_signal_count,
             },
             "suppressedCount": suppressed.len(),
             "hasCycles": scan_result.has_cycles,
@@ -87,31 +121,39 @@ pub fn format_markdown_report(
         scan_result.vulnerabilities.len()
     ));
 
-    let reachable_count = scan_result
+    let signal_matched_count = scan_result
         .vulnerabilities
         .iter()
         .filter(|v| {
-            v.reachability
-                .as_ref()
-                .map(|r| r.status == ReachabilityStatus::Reachable)
-                .unwrap_or(false)
+            v.usage_signal == UsageSignal::ImportedSource
+                || v.usage_signal == UsageSignal::ReferencedConfigOrScript
+                || v.reachability
+                    .as_ref()
+                    .map(|r| r.status == ReachabilityStatus::Reachable)
+                    .unwrap_or(false)
         })
         .count();
-    let unreachable_count = scan_result
+    let no_signal_count = scan_result
         .vulnerabilities
         .iter()
         .filter(|v| {
-            v.reachability
-                .as_ref()
-                .map(|r| r.status == ReachabilityStatus::Unreachable)
-                .unwrap_or(false)
+            v.usage_signal == UsageSignal::NoReferenceFoundWithinScope
+                || v.reachability
+                    .as_ref()
+                    .map(|r| r.status == ReachabilityStatus::Unreachable)
+                    .unwrap_or(false)
         })
         .count();
+    let unknown_signal_count = scan_result
+        .vulnerabilities
+        .len()
+        .saturating_sub(signal_matched_count + no_signal_count);
 
     md.push_str(&format!(
-        "- **Reachability Analysis (Deep SCA)**: 🚨 {} Reachable | 🛡️ {} Unreachable (Low Risk)\n",
-        reachable_count, unreachable_count
+        "- **Repository Usage Signals (heuristic)**: {} signal matched | {} no signal observed | {} unknown/unresolved\n",
+        signal_matched_count, no_signal_count, unknown_signal_count
     ));
+    md.push_str("- A matched signal is not proof of runtime reachability; no observed signal is not evidence of safety.\n");
 
     if !suppressed.is_empty() {
         md.push_str(&format!(
@@ -148,7 +190,7 @@ pub fn format_markdown_report(
         md.push_str("## Vulnerabilities\n\nNo active vulnerabilities detected!\n\n");
     } else {
         md.push_str("## Active Vulnerabilities\n\n");
-        md.push_str("| Severity | Reachability | Package | Vulnerability ID | CVE | Fixed In |\n");
+        md.push_str("| Severity | Usage Signal | Package | Vulnerability ID | CVE | Fixed In |\n");
         md.push_str("| :--- | :--- | :--- | :--- | :--- | :--- |\n");
 
         for v in &scan_result.vulnerabilities {
@@ -158,14 +200,14 @@ pub fn format_markdown_report(
             } else {
                 "No fix".to_string()
             };
-            let reach = if let Some(r) = &v.reachability {
-                if r.status == ReachabilityStatus::Reachable {
-                    "🚨 **REACHABLE**".to_string()
-                } else {
-                    "🛡️ Unreachable".to_string()
+            let usage_signal = match v.reachability.as_ref() {
+                Some(r) if r.status == ReachabilityStatus::Reachable => {
+                    "Signal matched (heuristic)"
                 }
-            } else {
-                "-".to_string()
+                Some(r) if r.status == ReachabilityStatus::Unreachable => {
+                    "No signal observed (not safety evidence)"
+                }
+                _ => "Unknown",
             };
 
             let ref_link = v
@@ -177,7 +219,7 @@ pub fn format_markdown_report(
                 "| **{}** ({:.1}) | {} | `{}` | [{}]({}) | {} | {} |\n",
                 v.severity.level.as_str(),
                 v.severity.score,
-                reach,
+                usage_signal,
                 v.pkg_id,
                 v.id,
                 ref_link,
@@ -322,5 +364,29 @@ pub fn emit_github_annotations(vulns: &[crate::types::VulnerabilityFinding]) {
             "::{} file={},line={},title=Vulnerability in {} ({})::{} in {}@{}.{}",
             level, file, line, v.package, v.id, v.title, v.package, v.version, fix
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_markdown_report;
+    use crate::scanner::vuln_scanner::ScanResult;
+    use crate::types::VulnerabilityFinding;
+
+    #[test]
+    fn markdown_uses_usage_signal_terminology_and_keeps_unknown_explicit() {
+        let mut scan_result = ScanResult::default();
+        scan_result.vulnerabilities.push(VulnerabilityFinding {
+            id: "TEST-UNKNOWN".to_string(),
+            package: "example".to_string(),
+            ..Default::default()
+        });
+
+        let report = format_markdown_report(&scan_result, &[], &[], None, None);
+
+        assert!(report.contains("Repository Usage Signals (heuristic)"));
+        assert!(report.contains("| Severity | Usage Signal |"));
+        assert!(report.contains("Unknown"));
+        assert!(!report.contains("Unreachable (Low Risk)"));
     }
 }

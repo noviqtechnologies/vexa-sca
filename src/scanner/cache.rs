@@ -246,4 +246,116 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_cache_hit_and_miss_lifecycle() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("vexa_cache_lifecycle_{}", unique));
+        let cache = VulnCache::new(&temp_dir);
+        let pkg = PkgInfo::new("demo-pkg", "1.0.0", "npm");
+
+        // 1. Initial state: missing
+        assert_eq!(cache.get_with_status(&pkg), CacheState::Missing);
+        assert!(cache.get(&pkg).is_none());
+
+        // 2. Set cache entry
+        let vulns = vec![serde_json::json!({"id": "GHSA-test-123", "summary": "test vuln"})];
+        cache.set(&pkg, &vulns);
+
+        // 3. Cache hit: fresh
+        match cache.get_with_status(&pkg) {
+            CacheState::Fresh { data, age_secs } => {
+                assert_eq!(data.len(), 1);
+                assert_eq!(data[0]["id"], "GHSA-test-123");
+                assert!(age_secs < 60);
+            }
+            other => panic!("expected Fresh, got {:?}", other),
+        }
+        assert!(cache.get(&pkg).is_some());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_cache_stale_detection_and_allow_stale_policy() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("vexa_cache_stale_{}", unique));
+        let cache = VulnCache::new(&temp_dir);
+        let pkg = PkgInfo::new("stale-pkg", "2.0.0", "npm");
+
+        // Write an expired cache entry (timestamp from 48 hours ago)
+        let key = cache.get_key(&pkg);
+        let file_path = temp_dir.join(format!("{}.json", key));
+        let forty_eight_hours_ago = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+            - (48 * 3600 * 1000);
+
+        let stale_json = serde_json::json!({
+            "schema_version": VulnCache::SCHEMA_VERSION,
+            "pkg": pkg.id,
+            "timestamp": forty_eight_hours_ago,
+            "vulns": [{"id": "GHSA-stale-entry"}]
+        });
+        fs::write(&file_path, stale_json.to_string()).unwrap();
+
+        // Fresh check fails: returns Stale
+        match cache.get_with_status(&pkg) {
+            CacheState::Stale { data, age_secs } => {
+                assert_eq!(data.len(), 1);
+                assert!(age_secs >= 48 * 3600);
+            }
+            other => panic!("expected Stale, got {:?}", other),
+        }
+
+        // Standard get() ignores stale entry by default (cache miss for online scan)
+        assert!(cache.get(&pkg).is_none());
+
+        // Cache with allow_stale accepts stale data
+        let stale_tolerant_cache = VulnCache::with_options(&temp_dir, true, false);
+        assert!(stale_tolerant_cache.get(&pkg).is_some());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_cache_corrupt_data_treated_as_missing_without_crash() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("vexa_cache_corrupt_{}", unique));
+        let cache = VulnCache::new(&temp_dir);
+        let pkg = PkgInfo::new("corrupt-pkg", "1.0.0", "npm");
+
+        let key = cache.get_key(&pkg);
+        let file_path = temp_dir.join(format!("{}.json", key));
+
+        // 1. Truncated / malformed JSON
+        fs::write(&file_path, b"{ truncated json: ").unwrap();
+        assert_eq!(cache.get_with_status(&pkg), CacheState::Missing);
+        assert!(cache.get(&pkg).is_none());
+
+        // 2. Corrupt schema (missing timestamp or vulns)
+        fs::write(&file_path, b"{\"schema_version\": 1, \"other\": 123}").unwrap();
+        assert_eq!(cache.get_with_status(&pkg), CacheState::Missing);
+
+        // 3. Corrupt advisory detail
+        let adv_path = temp_dir.join("advisories").join("GHSA-corrupt.json");
+        fs::write(&adv_path, b"NOT_JSON").unwrap();
+        assert_eq!(
+            cache.get_advisory_with_status("GHSA-corrupt"),
+            CacheState::Missing
+        );
+        assert!(cache.get_advisory("GHSA-corrupt").is_none());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }

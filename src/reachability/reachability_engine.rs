@@ -31,6 +31,7 @@ pub struct ReachabilityEngine {
     pub max_files: usize,
     pub files_discovered: usize,
     pub files_skipped: usize,
+    pub files_failed: usize,
     pub file_limit_hit: bool,
     pub has_any_parse_failure: bool,
     pub has_any_unresolved_dynamic: bool,
@@ -83,8 +84,8 @@ impl ReachabilityEngine {
     }
 
     pub fn new_with_limit(source_dir: &Path, max_files: usize) -> Self {
-        let (source_files, files_discovered, files_skipped, file_limit_hit) =
-            Self::find_source_files(source_dir, max_files);
+        let (source_files, files_discovered, files_skipped, file_limit_hit, mut files_failed) =
+            Self::find_source_files_detailed(source_dir, max_files);
         let config_referenced_pkgs = Self::find_config_referenced_pkgs(source_dir);
 
         let mut known = HashMap::new();
@@ -133,7 +134,10 @@ impl ReachabilityEngine {
         for file_path in &source_files {
             let content = match fs::read_to_string(file_path) {
                 Ok(c) => c,
-                Err(_) => continue,
+                Err(_) => {
+                    files_failed += 1;
+                    continue;
+                }
             };
 
             let relative_path = file_path
@@ -188,6 +192,7 @@ impl ReachabilityEngine {
             max_files,
             files_discovered,
             files_skipped,
+            files_failed,
             file_limit_hit,
             has_any_parse_failure,
             has_any_unresolved_dynamic,
@@ -269,6 +274,15 @@ impl ReachabilityEngine {
         source_dir: &Path,
         max_files: usize,
     ) -> (Vec<PathBuf>, usize, usize, bool) {
+        let (files, discovered, skipped, hit_limit, _) =
+            Self::find_source_files_detailed(source_dir, max_files);
+        (files, discovered, skipped, hit_limit)
+    }
+
+    fn find_source_files_detailed(
+        source_dir: &Path,
+        max_files: usize,
+    ) -> (Vec<PathBuf>, usize, usize, bool, usize) {
         let valid_exts = [
             "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "py", "go", "java",
         ];
@@ -290,19 +304,23 @@ impl ReachabilityEngine {
 
         let mut files = Vec::new();
         let mut discovered_count: usize = 0;
+        let mut traversal_errors: usize = 0;
 
-        for entry in WalkDir::new(source_dir)
-            .into_iter()
-            .filter_entry(|e| {
-                if e.file_type().is_dir() {
-                    let name = e.file_name().to_str().unwrap_or("");
-                    !ignore_dirs.contains(name)
-                } else {
-                    true
+        for entry in WalkDir::new(source_dir).into_iter().filter_entry(|e| {
+            if e.file_type().is_dir() {
+                let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+                !ignore_dirs.contains(name.as_str())
+            } else {
+                true
+            }
+        }) {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    traversal_errors += 1;
+                    continue;
                 }
-            })
-            .filter_map(|e| e.ok())
-        {
+            };
             if entry.file_type().is_file() {
                 if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
                     let lower_ext = ext.to_lowercase();
@@ -319,7 +337,13 @@ impl ReachabilityEngine {
         let files_skipped = discovered_count.saturating_sub(files.len());
         let hit_limit = files_skipped > 0;
 
-        (files, discovered_count, files_skipped, hit_limit)
+        (
+            files,
+            discovered_count,
+            files_skipped,
+            hit_limit,
+            traversal_errors,
+        )
     }
 
     pub fn evaluate_reachability(
@@ -476,6 +500,8 @@ impl ReachabilityEngine {
                 ReachabilityStatus::Reachable,
                 Some(ReasonCode::DirectUsageFound),
             )
+        } else if self.files_failed > 0 {
+            (ReachabilityStatus::Unknown, Some(ReasonCode::AnalysisError))
         } else if parse_failed {
             // Syntax error prevented complete verification
             (ReachabilityStatus::Unknown, Some(ReasonCode::ParseError))
@@ -514,10 +540,11 @@ impl ReachabilityEngine {
                 Some(ReasonCode::SourceUnavailable),
             )
         } else {
-            // Proven negative: known target functions, direct dep, all files in scope parsed cleanly,
-            // no unresolved dynamic constructs or re-exports, zero call sites in production or test.
+            // No syntactic usage signal is not proof of runtime unreachability. The analyzer does
+            // not model lexical scopes, cross-file dataflow, module-resolution rules, or all dynamic
+            // loading forms; conservatively preserve the finding as UNKNOWN.
             (
-                ReachabilityStatus::Unreachable,
+                ReachabilityStatus::Unknown,
                 Some(ReasonCode::AnalysisCompleteNoUsage),
             )
         };
@@ -750,7 +777,7 @@ mod tests {
         };
 
         let res2 = engine.check_vulnerability(&unset_vuln);
-        assert_eq!(res2.status, ReachabilityStatus::Unreachable);
+        assert_eq!(res2.status, ReachabilityStatus::Unknown);
         assert!(res2.call_sites.is_empty());
     }
 
@@ -784,7 +811,9 @@ mod tests {
 
     #[test]
     fn test_inspect_file_destructured_dynamic_import() {
-        let engine = ReachabilityEngine::new(Path::new("."));
+        let temp = temp_project("", "destructured-dynamic");
+        let engine = ReachabilityEngine::new(&temp);
+        let _ = std::fs::remove_dir_all(&temp);
         let source = r#"
 async function run() {
     const { template } = await import('lodash');
@@ -796,5 +825,154 @@ async function run() {
             engine.inspect_file(source, "lodash", Some(&["template".to_string()]));
         assert!(imported);
         assert!(!call_sites.is_empty());
+    }
+
+    fn temp_project(source: &str, label: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vexa-reachability-{}-{}-{}",
+            label,
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.js"), source).unwrap();
+        dir
+    }
+
+    fn lodash_template_finding() -> VulnerabilityFinding {
+        VulnerabilityFinding {
+            id: "GHSA-35jh-r3h4-6jhm".to_string(),
+            title: "Command Injection in lodash.template".to_string(),
+            package: "lodash".to_string(),
+            version: "4.17.15".to_string(),
+            ecosystem: "npm".to_string(),
+            pkg_id: "lodash@4.17.15".to_string(),
+            severity: SeverityInfo {
+                level: SeverityLevel::High,
+                score: 7.5,
+                vector: None,
+            },
+            cve: Some("CVE-2021-23337".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn chained_dynamic_import_without_binding_is_not_declared_unreachable() {
+        let dir = temp_project(
+            "import('lodash').then(({ template }) => template('Hello <%= name %>!'));",
+            "chained-dynamic",
+        );
+        let engine = ReachabilityEngine::new_with_limit(&dir, 100);
+        let result = engine.check_vulnerability(&lodash_template_finding());
+        assert_ne!(result.status, ReachabilityStatus::Unreachable);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn shadowed_dynamic_import_binding_is_not_declared_unreachable() {
+        let dir = temp_project(
+            "const moduleName = 'lodash';\nasync function run() { const mod = await import(moduleName); mod.template('Hello'); function unrelated() { const moduleName = 'not-lodash'; return import(moduleName); } }",
+            "shadowed-dynamic",
+        );
+        let engine = ReachabilityEngine::new_with_limit(&dir, 100);
+        let result = engine.check_vulnerability(&lodash_template_finding());
+        assert_ne!(result.status, ReachabilityStatus::Unreachable);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reexports_star_and_named_is_not_declared_unreachable() {
+        let dir = temp_project(
+            "export * from 'lodash'; export { template } from 'lodash';",
+            "reexports",
+        );
+        let engine = ReachabilityEngine::new_with_limit(&dir, 100);
+        let result = engine.check_vulnerability(&lodash_template_finding());
+        assert_ne!(result.status, ReachabilityStatus::Unreachable);
+        assert_eq!(result.status, ReachabilityStatus::Unknown);
+        assert_eq!(
+            result.reason_code,
+            Some(crate::types::ReasonCode::CrossFileUnresolved)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn syntax_error_in_source_is_not_declared_unreachable() {
+        let dir = temp_project(
+            "function broken() { if (true) { return 1; // missing closing braces",
+            "syntax-error",
+        );
+        let engine = ReachabilityEngine::new_with_limit(&dir, 100);
+        let result = engine.check_vulnerability(&lodash_template_finding());
+        assert_ne!(result.status, ReachabilityStatus::Unreachable);
+        assert_eq!(result.status, ReachabilityStatus::Unknown);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_syntactic_match_yields_unknown_never_unreachable() {
+        // Safe app with no lodash references
+        let dir = temp_project(
+            "console.log('completely unrelated application code');",
+            "no-match",
+        );
+        let engine = ReachabilityEngine::new_with_limit(&dir, 100);
+        let (result, usage) = engine.check_vulnerability_and_usage(&lodash_template_finding());
+        // Absence of evidence is NOT evidence of unreachability or safety
+        assert_ne!(result.status, ReachabilityStatus::Unreachable);
+        assert_eq!(result.status, ReachabilityStatus::Unknown);
+        assert_eq!(
+            result.reason_code,
+            Some(crate::types::ReasonCode::AnalysisCompleteNoUsage)
+        );
+        assert_eq!(
+            usage,
+            crate::types::UsageSignal::NoReferenceFoundWithinScope
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bundler_plugin_dynamic_require_pattern_is_not_declared_unreachable() {
+        let dir = temp_project(
+            "const ctx = require.context('./plugins', true, /\\.js$/); const req = eval('require'); req('lodash');",
+            "bundler-plugins",
+        );
+        let engine = ReachabilityEngine::new_with_limit(&dir, 100);
+        let result = engine.check_vulnerability(&lodash_template_finding());
+        assert_ne!(result.status, ReachabilityStatus::Unreachable);
+        assert_eq!(result.status, ReachabilityStatus::Unknown);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn source_file_limit_hit_is_not_declared_unreachable() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("vexa-limit-hit-{}", unique));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.js"), "console.log(1);").unwrap();
+        std::fs::write(dir.join("b.js"), "console.log(2);").unwrap();
+        std::fs::write(dir.join("c.js"), "console.log(3);").unwrap();
+
+        // Limit to 1 file so files_skipped > 0 and file_limit_hit is true
+        let engine = ReachabilityEngine::new_with_limit(&dir, 1);
+        assert!(engine.file_limit_hit);
+        let result = engine.check_vulnerability(&lodash_template_finding());
+        assert_ne!(result.status, ReachabilityStatus::Unreachable);
+        assert_eq!(result.status, ReachabilityStatus::Unknown);
+        assert_eq!(
+            result.reason_code,
+            Some(crate::types::ReasonCode::FileLimitHit)
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

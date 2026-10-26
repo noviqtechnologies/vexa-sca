@@ -225,9 +225,8 @@ impl LockfilePatcher {
             })?;
 
             // Write updated package.json atomically
-            if let Err(e) = fs::write(&pkg_json_path, format!("{}\n", updated_str)) {
-                // Rollback on failure
-                let _ = fs::write(&pkg_json_path, &original_content);
+            let updated_content = format!("{}\n", updated_str);
+            if let Err(e) = atomic_replace_bytes(&pkg_json_path, updated_content.as_bytes()) {
                 return Err(format!("Failed to write package.json: {}", e));
             }
 
@@ -303,15 +302,46 @@ impl LockfilePatcher {
         let (program, args): (&str, &[&str]) = if project_dir.join("pnpm-lock.yaml").exists()
             || project_dir.join("pnpm-lock.yml").exists()
         {
-            ("pnpm", &["install", "--no-frozen-lockfile"])
+            (
+                "pnpm",
+                &["install", "--no-frozen-lockfile", "--ignore-scripts"],
+            )
         } else if project_dir.join("yarn.lock").exists() {
-            ("yarn", &["install", "--no-immutable"])
+            let is_classic = fs::read_to_string(project_dir.join("yarn.lock"))
+                .map(|contents| contents.contains("yarn lockfile v1"))
+                .unwrap_or(false);
+            if is_classic {
+                ("yarn", &["install", "--ignore-scripts"])
+            } else {
+                ("yarn", &["install", "--no-immutable", "--mode=skip-builds"])
+            }
         } else {
-            ("npm", &["install"])
+            ("npm", &["install", "--ignore-scripts"])
         };
 
         let cmd_display = format!("{} {}", program, args.join(" "));
 
+        #[cfg(windows)]
+        let output = {
+            // npm, pnpm, and Corepack commonly install Windows .cmd shims rather than .exe files.
+            // The command and arguments above are fixed by this function, not user-supplied text.
+            let mut command = Command::new("cmd.exe");
+            command
+                .arg("/d")
+                .arg("/s")
+                .arg("/c")
+                .arg(&cmd_display)
+                .current_dir(project_dir);
+            command.output()
+        }
+        .map_err(|e| {
+            format!(
+                "Failed to run '{}': {}. Ensure {} is installed and on PATH.",
+                cmd_display, e, program
+            )
+        })?;
+
+        #[cfg(not(windows))]
         let output = Command::new(program)
             .args(args)
             .current_dir(project_dir)
@@ -504,5 +534,248 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+}
+#[derive(Debug)]
+struct SnapshotFile {
+    path: PathBuf,
+    contents: Option<Vec<u8>>,
+}
+
+/// Captured package manifest and lockfile state used to roll back a failed install.
+#[derive(Debug)]
+pub struct LockfileProjectState {
+    files: Vec<SnapshotFile>,
+}
+
+fn atomic_replace_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let sequence = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("manifest");
+    let temp_path = path.with_file_name(format!(
+        ".{}.vexa-{}-{}-{}.tmp",
+        file_name,
+        std::process::id(),
+        sequence,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+
+    let write_result = (|| {
+        let mut temp = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        temp.write_all(bytes)?;
+        temp.sync_all()?;
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            #[link(name = "kernel32")]
+            extern "system" {
+                fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+            }
+            const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+            const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+            let existing: Vec<u16> = temp_path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let new: Vec<u16> = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let ok = unsafe {
+                MoveFileExW(
+                    existing.as_ptr(),
+                    new.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            };
+            if ok == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+
+        #[cfg(not(windows))]
+        std::fs::rename(&temp_path, path)?;
+
+        Ok(())
+    })();
+
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    write_result
+}
+
+impl LockfilePatcher {
+    /// Snapshot the files that `npm`, `pnpm`, or `yarn install` can rewrite.
+    pub fn snapshot_project_state(project_dir: &Path) -> Result<LockfileProjectState, String> {
+        let names = [
+            "package.json",
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            "pnpm-lock.yaml",
+            "pnpm-lock.yml",
+            "yarn.lock",
+        ];
+        let mut files = Vec::with_capacity(names.len());
+        for name in names {
+            let path = project_dir.join(name);
+            let contents = match fs::read(&path) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => {
+                    return Err(format!("Failed to snapshot {}: {}", path.display(), error))
+                }
+            };
+            files.push(SnapshotFile { path, contents });
+        }
+        Ok(LockfileProjectState { files })
+    }
+
+    /// Restore the captured manifest and lockfiles after a failed package-manager install.
+    pub fn restore_project_state(snapshot: &LockfileProjectState) -> Result<(), String> {
+        let mut errors = Vec::new();
+        for file in &snapshot.files {
+            let result = match &file.contents {
+                Some(bytes) => atomic_replace_bytes(&file.path, bytes),
+                None => match fs::remove_file(&file.path) {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(error) => Err(error),
+                },
+            };
+            if let Err(error) = result {
+                errors.push(format!("{}: {}", file.path.display(), error));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("Rollback failed for: {}", errors.join("; ")))
+        }
+    }
+}
+
+#[cfg(test)]
+mod rollback_tests {
+    use super::*;
+
+    #[test]
+    fn project_state_snapshot_restores_manifest_and_lockfiles() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vexa-lockfile-rollback-{}-{}",
+            std::process::id(),
+            unique
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let package_json = dir.join("package.json");
+        let package_lock = dir.join("package-lock.json");
+        fs::write(&package_json, br#"{"dependencies":{"left-pad":"1.3.0"}}"#).unwrap();
+        fs::write(&package_lock, b"original lockfile").unwrap();
+
+        let snapshot = LockfilePatcher::snapshot_project_state(&dir).unwrap();
+        fs::write(&package_json, b"mutated manifest").unwrap();
+        fs::write(&package_lock, b"mutated lockfile").unwrap();
+        fs::write(dir.join("pnpm-lock.yaml"), b"created during failed install").unwrap();
+
+        LockfilePatcher::restore_project_state(&snapshot).unwrap();
+        assert_eq!(
+            fs::read(&package_json).unwrap(),
+            br#"{"dependencies":{"left-pad":"1.3.0"}}"#
+        );
+        assert_eq!(fs::read(&package_lock).unwrap(), b"original lockfile");
+        assert!(!dir.join("pnpm-lock.yaml").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dry_run_performs_zero_disk_writes_and_no_backups() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("vexa-dry-run-{}", unique));
+        fs::create_dir_all(&dir).unwrap();
+        let pkg_path = dir.join("package.json");
+        let initial_bytes = br#"{"name":"dry-run-app","dependencies":{"lodash":"4.17.15"}}"#;
+        fs::write(&pkg_path, initial_bytes).unwrap();
+
+        let rems = vec![RemediationAction {
+            package: "lodash".to_string(),
+            current_version: "4.17.15".to_string(),
+            is_transitive: false,
+            target_version: Some("4.17.21".to_string()),
+            action_type: "UPGRADE_DIRECT".to_string(),
+            advice: "Upgrade".to_string(),
+            resolved_vulnerability_count: 1,
+            vulnerability_ids: vec!["GHSA-35jh-r3h4-6jhm".to_string()],
+            highest_severity: None,
+        }];
+
+        let result = LockfilePatcher::apply_fixes(&dir, &rems, true).unwrap();
+        assert!(result.modified);
+        assert!(result.backup_file.is_none());
+
+        // Zero disk modifications
+        assert_eq!(fs::read(&pkg_path).unwrap(), initial_bytes);
+        assert!(!dir.join("package.json.bak").exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rollback_succeeds_in_path_with_spaces_and_special_chars() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vexa test path with spaces and #special {}",
+            unique
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let pkg_json = dir.join("package.json");
+        let pkg_lock = dir.join("package-lock.json");
+
+        let original_json = br#"{"name":"spaced-app","version":"1.0.0"}"#;
+        let original_lock = b"lockfile-initial-bytes-12345";
+        fs::write(&pkg_json, original_json).unwrap();
+        fs::write(&pkg_lock, original_lock).unwrap();
+
+        let snapshot = LockfilePatcher::snapshot_project_state(&dir).unwrap();
+
+        // Mutate files as a failing install would
+        fs::write(&pkg_json, b"corrupted json").unwrap();
+        fs::write(&pkg_lock, b"corrupted lockfile").unwrap();
+        let extraneous = dir.join("pnpm-lock.yaml");
+        fs::write(&extraneous, b"stray lockfile").unwrap();
+
+        // Rollback
+        LockfilePatcher::restore_project_state(&snapshot).unwrap();
+
+        assert_eq!(fs::read(&pkg_json).unwrap(), original_json);
+        assert_eq!(fs::read(&pkg_lock).unwrap(), original_lock);
+        assert!(!extraneous.exists());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

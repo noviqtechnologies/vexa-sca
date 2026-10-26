@@ -147,6 +147,7 @@ pub async fn scan_project(
 ) -> Result<ProjectScanOutput, String> {
     // 1. Detect and parse manifest into DepGraph
     let detection = detect_and_parse(project_dir, options.dev)?;
+    let multiple_project_scopes = detection.discovered_projects.len() > 1;
 
     // 2. Scan graph for vulnerabilities
     let scanner = VulnScanner::new(None);
@@ -173,6 +174,26 @@ pub async fn scan_project(
         ReachabilityEngine::new(project_dir)
     };
     active = reachability_engine.evaluate_reachability(active);
+
+    // The current graph merger does not retain enough project identity to bind an
+    // imported source file to the exact lockfile scope that contributed a finding.
+    // Keep the import evidence, but do not present it as a package-scoped proof.
+    if multiple_project_scopes {
+        for finding in &mut active {
+            if let Some(reachability) = finding.reachability.as_mut() {
+                if reachability.status == ReachabilityStatus::Reachable {
+                    reachability.status = ReachabilityStatus::Unknown;
+                    reachability.reason_code = Some(crate::types::ReasonCode::CrossFileUnresolved);
+                }
+            }
+            if finding.reachability.as_ref().is_some_and(|r| {
+                r.status == ReachabilityStatus::Unknown
+                    && r.reason_code == Some(crate::types::ReasonCode::CrossFileUnresolved)
+            }) {
+                finding.reason_code = Some(crate::types::ReasonCode::CrossFileUnresolved);
+            }
+        }
+    }
 
     let unreachable_total = active
         .iter()
@@ -257,6 +278,9 @@ pub async fn scan_project(
     let scan_status = if raw_scan_result.advisory_status.has_unreliable_data()
         || reachable_only_has_unanalyzed
         || reachability_engine.file_limit_hit
+        || reachability_engine.files_failed > 0
+        || (multiple_project_scopes && !all_unsuppressed_findings.is_empty())
+        || !detection.skipped_manifests.is_empty()
         || !detection.failed_manifests.is_empty()
     {
         crate::types::ScanStatus::Incomplete
@@ -282,14 +306,33 @@ pub async fn scan_project(
     }
 
     raw_scan_result.completeness.source_files_discovered = reachability_engine.files_discovered;
-    raw_scan_result.completeness.source_files_analysed = reachability_engine.source_files.len();
+    raw_scan_result.completeness.source_files_analysed = reachability_engine.indexed_files.len();
     raw_scan_result.completeness.source_files_skipped = reachability_engine.files_skipped;
+    raw_scan_result.completeness.source_files_failed = reachability_engine.files_failed;
+    if multiple_project_scopes && !all_unsuppressed_findings.is_empty() {
+        raw_scan_result
+            .completeness
+            .limits_hit
+            .push("MONOREPO_REACHABILITY_SCOPE_UNRESOLVED".to_string());
+    }
+    if reachable_only_has_unanalyzed {
+        raw_scan_result
+            .completeness
+            .limits_hit
+            .push("REACHABLE_ONLY_ANALYSIS_UNKNOWN".to_string());
+    }
     if reachability_engine.file_limit_hit {
         raw_scan_result.completeness.limits_hit.push(format!(
             "FILE_LIMIT_HIT (analyzed {} of {} discovered source files; {} skipped due to limit)",
             reachability_engine.source_files.len(),
             reachability_engine.files_discovered,
             reachability_engine.files_skipped
+        ));
+    }
+    if reachability_engine.files_failed > 0 {
+        raw_scan_result.completeness.limits_hit.push(format!(
+            "SOURCE_DISCOVERY_OR_READ_FAILURE ({} traversal or file-read errors)",
+            reachability_engine.files_failed
         ));
     }
 
@@ -367,20 +410,20 @@ mod tests {
                     .unwrap_or(false)
             })
             .count();
-        let unreachable_count = normal
+        let unknown_count = normal
             .scan_result
             .vulnerabilities
             .iter()
             .filter(|v| {
                 v.reachability
                     .as_ref()
-                    .map(|r| r.status == ReachabilityStatus::Unreachable)
+                    .map(|r| r.status == ReachabilityStatus::Unknown)
                     .unwrap_or(false)
             })
             .count();
 
         assert!(reachable_count > 0);
-        assert!(unreachable_count > 0);
+        assert!(unknown_count > 0);
 
         let filtered = scan_project(
             fixture_dir,

@@ -451,4 +451,102 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_npm_v3_workspace_subpackages_and_peer_deps() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("vexa_v3_ws_{}", unique));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let pkg_json = r#"{
+            "name": "monorepo-root",
+            "version": "1.0.0",
+            "workspaces": ["packages/*"],
+            "dependencies": {
+                "@my-org/shared": "*"
+            }
+        }"#;
+
+        let lock_json = r#"{
+            "name": "monorepo-root",
+            "version": "1.0.0",
+            "lockfileVersion": 3,
+            "packages": {
+                "": {
+                    "name": "monorepo-root",
+                    "dependencies": {
+                        "@my-org/shared": "*"
+                    }
+                },
+                "packages/shared": {
+                    "name": "@my-org/shared",
+                    "version": "1.2.0",
+                    "dependencies": {
+                        "lodash": "^4.17.21"
+                    },
+                    "peerDependencies": {
+                        "react": ">=18.0.0"
+                    }
+                },
+                "packages/app": {
+                    "name": "@my-org/app",
+                    "version": "1.0.0",
+                    "dependencies": {
+                        "@my-org/shared": "*"
+                    }
+                },
+                "node_modules/lodash": {
+                    "version": "4.17.21",
+                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
+                },
+                "node_modules/react": {
+                    "version": "18.2.0",
+                    "resolved": "https://registry.npmjs.org/react/-/react-18.2.0.tgz"
+                }
+            }
+        }"#;
+
+        fs::write(temp_dir.join("package.json"), pkg_json).unwrap();
+        let lock_path = temp_dir.join("package-lock.json");
+        fs::write(&lock_path, lock_json).unwrap();
+
+        let graph = PackageLockParser::parse_file(&lock_path, true)
+            .expect("npm v3 monorepo with workspaces must parse cleanly");
+
+        let pkgs = graph.get_all_pkgs();
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+
+        assert!(names.contains(&"@my-org/shared"));
+        assert!(names.contains(&"@my-org/app"));
+        assert!(names.contains(&"lodash"));
+        assert!(names.contains(&"react"));
+
+        // Both workspaces must be registered as nodes and connected
+        assert!(graph.nodes.contains_key("npm:packages/shared@1.2.0"));
+        assert!(graph.nodes.contains_key("npm:packages/app@1.0.0"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_npm_negative_corrupt_manifest_returns_err() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("vexa_neg_npm_{}", unique));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        fs::write(temp_dir.join("package.json"), b"{ invalid json").unwrap();
+        let lock_path = temp_dir.join("package-lock.json");
+        fs::write(&lock_path, b"{}").unwrap();
+
+        let err = PackageLockParser::parse_file(&lock_path, true);
+        assert!(err.is_err(), "Corrupt package.json must return Err");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }

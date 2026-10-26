@@ -19,6 +19,12 @@ pub enum BatchFetchOutcome {
     NetworkError,
     /// The response body could not be parsed as expected JSON.
     ParseError,
+    /// Some first-page data was retained, but one or more package pages were incomplete.
+    PartialFailure {
+        results: Vec<Vec<Value>>,
+        failed_indices: Vec<usize>,
+        diagnostic: String,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -99,9 +105,10 @@ impl VulnScanner {
         }
 
         let cached_count = total_pkgs - uncached.len();
-        let mut packages_unavailable: usize = 0;
+        let mut unavailable_package_ids: HashSet<String> = HashSet::new();
         let mut had_network_error = false;
         let mut had_parse_error = false;
+        let mut had_pagination_error = false;
         let mut unavailable_packages: Vec<String> = Vec::new();
 
         // 2. Query batch for uncached packages — chunk requests into bounded batches of 100
@@ -133,7 +140,8 @@ impl VulnScanner {
                     match &last_outcome {
                         BatchFetchOutcome::Success(_) => break,
                         BatchFetchOutcome::ParseError => break, // not transient, don't retry
-                        BatchFetchOutcome::NetworkError => {}   // retry
+                        BatchFetchOutcome::PartialFailure { .. } => break,
+                        BatchFetchOutcome::NetworkError => {} // retry
                     }
                 }
                 (chunk, last_outcome)
@@ -151,8 +159,8 @@ impl VulnScanner {
                     }
                     BatchFetchOutcome::NetworkError => {
                         had_network_error = true;
-                        packages_unavailable += chunk.len();
                         for pkg in &chunk {
+                            unavailable_package_ids.insert(pkg.id.clone());
                             unavailable_packages.push(format!(
                                 "{} (network timeout/failure after {} retries)",
                                 pkg.id, MAX_RETRIES
@@ -161,18 +169,52 @@ impl VulnScanner {
                     }
                     BatchFetchOutcome::ParseError => {
                         had_parse_error = true;
-                        packages_unavailable += chunk.len();
                         for pkg in &chunk {
+                            unavailable_package_ids.insert(pkg.id.clone());
                             unavailable_packages
                                 .push(format!("{} (malformed upstream OSV response)", pkg.id));
+                        }
+                    }
+                    BatchFetchOutcome::PartialFailure {
+                        results,
+                        failed_indices,
+                        diagnostic,
+                    } => {
+                        had_pagination_error = true;
+                        let failed: HashSet<usize> = failed_indices.into_iter().collect();
+                        for (idx, (pkg, raw_vulns)) in chunk.iter().zip(results).enumerate() {
+                            results_map.insert(pkg.id.clone(), raw_vulns.clone());
+                            if failed.contains(&idx) {
+                                unavailable_package_ids.insert(pkg.id.clone());
+                                unavailable_packages.push(format!(
+                                    "{} (OSV pagination incomplete: {})",
+                                    pkg.id, diagnostic
+                                ));
+                            } else {
+                                self.cache.set(pkg, &raw_vulns);
+                            }
                         }
                     }
                 }
             }
         }
 
+        // A panicked or cancelled batch task must never disappear as an apparent clean result.
+        for pkg in &uncached {
+            if !results_map.contains_key(&pkg.id) && !unavailable_package_ids.contains(&pkg.id) {
+                had_network_error = true;
+                unavailable_package_ids.insert(pkg.id.clone());
+                unavailable_packages.push(format!(
+                    "{} (batch task terminated before a complete result)",
+                    pkg.id
+                ));
+            }
+        }
+
         // Determine advisory status
-        let mut advisory_status = if had_network_error {
+        let mut advisory_status = if had_pagination_error {
+            AdvisoryStatus::PartialFailure
+        } else if had_network_error {
             if cached_count == 0 {
                 AdvisoryStatus::Unavailable
             } else {
@@ -186,15 +228,18 @@ impl VulnScanner {
             AdvisoryStatus::Success
         };
 
-        let packages_checked = total_pkgs - packages_unavailable;
-
         // 3. Collect unique vuln IDs to fetch full advisory records
         let mut unique_vuln_ids = HashSet::new();
+        let mut advisory_packages: HashMap<String, HashSet<String>> = HashMap::new();
         for pkg in &pkgs {
             if let Some(raw_list) = results_map.get(&pkg.id) {
                 for item in raw_list {
                     if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
                         unique_vuln_ids.insert(id.to_string());
+                        advisory_packages
+                            .entry(id.to_string())
+                            .or_default()
+                            .insert(pkg.id.clone());
                     }
                 }
             }
@@ -206,14 +251,28 @@ impl VulnScanner {
 
         if !full_advisories.failed_ids.is_empty() {
             advisory_status = AdvisoryStatus::PartialFailure;
-            packages_unavailable += full_advisories.failed_ids.len();
             for failed_id in &full_advisories.failed_ids {
-                unavailable_packages.push(format!(
-                    "advisory:{} (detail fetch failed after retries)",
-                    failed_id
-                ));
+                if let Some(pkg_ids) = advisory_packages.get(failed_id) {
+                    for pkg_id in pkg_ids {
+                        unavailable_package_ids.insert(pkg_id.clone());
+                        unavailable_packages.push(format!(
+                            "{} (advisory detail {} unavailable after retries)",
+                            pkg_id, failed_id
+                        ));
+                    }
+                } else {
+                    unavailable_packages.push(format!(
+                        "advisory:{} (detail fetch failed after retries)",
+                        failed_id
+                    ));
+                }
             }
         }
+
+        unavailable_packages.sort();
+        unavailable_packages.dedup();
+        let packages_unavailable = unavailable_package_ids.len();
+        let packages_checked = total_pkgs.saturating_sub(packages_unavailable);
 
         // 4. Construct enriched and deduplicated vulnerability findings
         let mut vulnerabilities = Vec::new();
@@ -277,7 +336,7 @@ impl VulnScanner {
 
         let mut package_completeness_states = std::collections::HashMap::new();
         for pkg in &pkgs {
-            if unavailable_packages.iter().any(|u| u.starts_with(&pkg.id)) {
+            if unavailable_package_ids.contains(&pkg.id) {
                 package_completeness_states.insert(pkg.id.clone(), "UNAVAILABLE".to_string());
             } else if uncached.iter().any(|u| u.id == pkg.id) {
                 package_completeness_states
@@ -367,54 +426,172 @@ impl VulnScanner {
         }
 
         let mut fetched = Vec::with_capacity(results.len());
-        for (idx, r) in results.iter().enumerate() {
-            let mut vulns = r
-                .get("vulns")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
+        let mut failed_indices = Vec::new();
+        let mut failure_notes = Vec::new();
+        const MAX_PAGINATION_PAGES: usize = 100;
+        const PAGE_RETRIES: usize = 3;
 
-            // P0.3: Follow OSV next_page_token if paginated
+        for (idx, r) in results.iter().enumerate() {
+            if !r.is_object() {
+                failed_indices.push(idx);
+                failure_notes.push(format!(
+                    "{}: batch result was not a JSON object",
+                    pkgs[idx].id
+                ));
+                fetched.push(Vec::new());
+                continue;
+            }
+            let mut vulns = match r.get("vulns") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(items)) => items.clone(),
+                Some(_) => {
+                    failed_indices.push(idx);
+                    failure_notes.push(format!(
+                        "{}: batch result 'vulns' field was not an array",
+                        pkgs[idx].id
+                    ));
+                    fetched.push(Vec::new());
+                    continue;
+                }
+            };
+
             let mut next_token = r
                 .get("next_page_token")
                 .and_then(|t| t.as_str())
+                .filter(|s| !s.is_empty())
                 .map(|s| s.to_string());
+            let mut seen_tokens = HashSet::new();
+            let mut pages_fetched = 0usize;
+            let mut page_failure: Option<String> = None;
 
-            while let Some(token) = next_token {
-                if let Some(pkg) = pkgs.get(idx) {
-                    let query_url = batch_api_url.replace("querybatch", "query");
-                    let page_body = serde_json::json!({
-                        "package": {
-                            "name": pkg.name,
-                            "ecosystem": pkg.ecosystem,
-                        },
-                        "version": pkg.version,
-                        "page_token": token,
-                    });
-                    if let Ok(page_resp) = client.post(&query_url).json(&page_body).send().await {
-                        if page_resp.status().is_success() {
-                            if let Ok(page_data) = page_resp.json::<Value>().await {
-                                if let Some(extra_vulns) =
-                                    page_data.get("vulns").and_then(|v| v.as_array())
-                                {
-                                    vulns.extend(extra_vulns.clone());
+            if matches!(r.get("next_page_token"), Some(token) if !token.is_null() && !token.is_string())
+            {
+                page_failure =
+                    Some("batch result 'next_page_token' field was not a string".to_string());
+            }
+
+            while page_failure.is_none() {
+                let Some(token) = next_token.take() else {
+                    break;
+                };
+                if !seen_tokens.insert(token.clone()) {
+                    page_failure = Some("upstream repeated a pagination token".to_string());
+                    break;
+                }
+                if pages_fetched >= MAX_PAGINATION_PAGES {
+                    page_failure = Some(format!(
+                        "pagination exceeded the {} page safety limit",
+                        MAX_PAGINATION_PAGES
+                    ));
+                    break;
+                }
+                pages_fetched += 1;
+
+                let Some(query_prefix) = batch_api_url.strip_suffix("querybatch") else {
+                    page_failure = Some(
+                        "cannot derive the OSV single-query endpoint from querybatch URL"
+                            .to_string(),
+                    );
+                    break;
+                };
+                let Some(pkg) = pkgs.get(idx) else {
+                    page_failure = Some("query result did not map to an input package".to_string());
+                    break;
+                };
+                let query_url = format!("{}query", query_prefix);
+                let page_body = serde_json::json!({
+                    "package": {
+                        "name": pkg.name,
+                        "ecosystem": pkg.ecosystem,
+                    },
+                    "version": pkg.version,
+                    "page_token": token,
+                });
+
+                let mut page_data: Option<Value> = None;
+                let mut last_error = "page request failed".to_string();
+                for attempt in 0..PAGE_RETRIES {
+                    if attempt > 0 {
+                        tokio::time::sleep(Duration::from_millis(150 * attempt as u64)).await;
+                    }
+                    match client.post(&query_url).json(&page_body).send().await {
+                        Ok(response) if response.status().is_success() => {
+                            match response.json::<Value>().await {
+                                Ok(data) if data.is_object() => {
+                                    page_data = Some(data);
+                                    break;
                                 }
-                                next_token = page_data
-                                    .get("next_page_token")
-                                    .and_then(|t| t.as_str())
-                                    .map(|s| s.to_string());
-                                continue;
+                                Ok(_) => {
+                                    last_error = "page response was not a JSON object".to_string();
+                                    break;
+                                }
+                                Err(_) => {
+                                    last_error = "page response contained invalid JSON".to_string();
+                                    break;
+                                }
                             }
+                        }
+                        Ok(response) => {
+                            let status = response.status();
+                            last_error = format!("page request returned HTTP {}", status);
+                            if status.is_client_error() && status.as_u16() != 429 {
+                                break;
+                            }
+                        }
+                        Err(_) => {
+                            last_error = "page request failed due to a network error".to_string();
                         }
                     }
                 }
-                break;
+
+                let Some(page_data) = page_data else {
+                    page_failure = Some(last_error);
+                    break;
+                };
+
+                let extra_vulns = match page_data.get("vulns") {
+                    None => Vec::new(),
+                    Some(Value::Array(items)) => items.clone(),
+                    Some(_) => {
+                        page_failure =
+                            Some("page response 'vulns' field was not an array".to_string());
+                        break;
+                    }
+                };
+                vulns.extend(extra_vulns);
+
+                next_token = match page_data.get("next_page_token") {
+                    None | Some(Value::Null) | Some(Value::String(_)) => page_data
+                        .get("next_page_token")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string),
+                    Some(_) => {
+                        page_failure = Some(
+                            "page response 'next_page_token' field was not a string".to_string(),
+                        );
+                        break;
+                    }
+                };
+            }
+
+            if let Some(reason) = page_failure {
+                failed_indices.push(idx);
+                failure_notes.push(format!("{}: {}", pkgs[idx].id, reason));
             }
 
             fetched.push(vulns);
         }
 
-        BatchFetchOutcome::Success(fetched)
+        if failed_indices.is_empty() {
+            BatchFetchOutcome::Success(fetched)
+        } else {
+            BatchFetchOutcome::PartialFailure {
+                results: fetched,
+                failed_indices,
+                diagnostic: failure_notes.join("; "),
+            }
+        }
     }
 
     pub async fn fetch_batch(&self, pkgs: &[PkgInfo]) -> BatchFetchOutcome {
@@ -436,6 +613,7 @@ impl VulnScanner {
         const ADVISORY_CONCURRENCY: usize = 16;
         let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(ADVISORY_CONCURRENCY));
         let mut set = tokio::task::JoinSet::new();
+        let expected_ids: HashSet<String> = to_fetch.iter().cloned().collect();
 
         for id in to_fetch {
             let sem_clone = sem.clone();
@@ -469,9 +647,23 @@ impl VulnScanner {
                     result.failed_ids.push(failed_id.clone());
                     result.retry_exhausted_ids.push(failed_id);
                 }
-                Err(_) => {}
+                Err(_) => {
+                    // The failed task's advisory ID is not exposed by JoinError. Reconcile
+                    // expected IDs below so task panics/cancellation cannot silently disappear.
+                }
             }
         }
+
+        for id in expected_ids {
+            if !result.records.contains_key(&id) && !result.failed_ids.contains(&id) {
+                result.failed_ids.push(id.clone());
+                result.retry_exhausted_ids.push(id);
+            }
+        }
+        result.failed_ids.sort();
+        result.failed_ids.dedup();
+        result.retry_exhausted_ids.sort();
+        result.retry_exhausted_ids.dedup();
 
         result
     }
@@ -1170,5 +1362,298 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    fn spawn_osv_mock(responses: Vec<(u16, String)>) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        use std::time::Instant;
+
+        fn accept_with_timeout(listener: &TcpListener) -> Option<TcpStream> {
+            let started = Instant::now();
+            loop {
+                match listener.accept() {
+                    Ok((stream, _)) => return Some(stream),
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && started.elapsed() < Duration::from_secs(15) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => return None,
+                }
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            for (status, body) in responses {
+                let Some(mut stream) = accept_with_timeout(&listener) else {
+                    return;
+                };
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request);
+                let reason = if status == 200 {
+                    "OK"
+                } else if status == 503 {
+                    "Service Unavailable"
+                } else {
+                    "Error"
+                };
+                let response = format!(
+                    "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status,
+                    reason,
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+                let _ = stream.shutdown(std::net::Shutdown::Write);
+            }
+        });
+        (format!("http://{}/v1/querybatch", address), worker)
+    }
+
+    #[tokio::test]
+    async fn osv_batch_pagination_collects_every_page() {
+        let first = serde_json::json!({
+            "results": [{"vulns": [{"id": "OSV-1"}], "next_page_token": "page-2"}]
+        })
+        .to_string();
+        let second = serde_json::json!({
+            "vulns": [{"id": "OSV-2"}], "next_page_token": "page-3"
+        })
+        .to_string();
+        let third = serde_json::json!({"vulns": [{"id": "OSV-3"}]}).to_string();
+        let (url, worker) = spawn_osv_mock(vec![(200, first), (200, second), (200, third)]);
+        let client = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap();
+        let packages = vec![PkgInfo::new("pagination-test", "1.0.0", "npm")];
+
+        let outcome = VulnScanner::fetch_batch_raw(&client, &url, &packages).await;
+        worker.join().unwrap();
+        match outcome {
+            BatchFetchOutcome::Success(results) => {
+                let ids: Vec<&str> = results[0]
+                    .iter()
+                    .map(|v| v.get("id").and_then(Value::as_str).unwrap())
+                    .collect();
+                assert_eq!(ids, vec!["OSV-1", "OSV-2", "OSV-3"]);
+            }
+            _ => panic!("all pages should produce a complete success"),
+        }
+    }
+
+    #[tokio::test]
+    async fn osv_batch_result_count_mismatch_is_not_clean_success() {
+        let response = serde_json::json!({ "results": [] }).to_string();
+        let (url, worker) = spawn_osv_mock(vec![(200, response)]);
+        let client = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap();
+        let packages = vec![PkgInfo::new("cardinality-test", "1.0.0", "npm")];
+
+        let outcome = VulnScanner::fetch_batch_raw(&client, &url, &packages).await;
+        worker.join().unwrap();
+        assert!(
+            matches!(outcome, BatchFetchOutcome::ParseError),
+            "a response omitting a requested package must not be accepted as a clean empty result"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_osv_page_token_marks_package_incomplete() {
+        use crate::core::dep_graph::{DepGraph, PkgManagerInfo};
+        use crate::scanner::cache::VulnCache;
+
+        let initial = serde_json::json!({
+            "results": [{"vulns": [], "next_page_token": "repeat-me"}]
+        })
+        .to_string();
+        let repeated = serde_json::json!({
+            "vulns": [], "next_page_token": "repeat-me"
+        })
+        .to_string();
+        let (url, worker) = spawn_osv_mock(vec![(200, initial), (200, repeated)]);
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let cache_dir = std::env::temp_dir().join(format!(
+            "vexa-osv-pagination-cache-{}-{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let cache = VulnCache::new(&cache_dir);
+        let client = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap();
+        let scanner = VulnScanner {
+            cache,
+            batch_api_url: url,
+            client,
+            ..VulnScanner::default()
+        };
+        let root = PkgInfo::new("pagination-root", "1.0.0", "npm");
+        let mut graph = DepGraph::new(
+            root,
+            PkgManagerInfo {
+                name: "npm".to_string(),
+                version: "10.0.0".to_string(),
+            },
+        );
+        graph.add_pkg(PkgInfo::new("pagination-test", "1.0.0", "npm"));
+
+        let result = scanner.scan_graph(&graph).await.unwrap();
+        worker.join().unwrap();
+        assert_eq!(result.advisory_status, AdvisoryStatus::PartialFailure);
+        assert_eq!(result.scan_status, ScanStatus::Incomplete);
+        assert_eq!(result.packages_unavailable, 1);
+        assert_eq!(result.packages_checked, 0);
+        assert_eq!(result.unavailable_packages.len(), 1);
+        let _ = std::fs::remove_dir_all(cache_dir);
+    }
+
+    #[tokio::test]
+    async fn osv_detail_lookup_failure_marks_scan_incomplete() {
+        use crate::core::dep_graph::{DepGraph, PkgManagerInfo};
+        use crate::scanner::cache::VulnCache;
+
+        // 1. Batch response lists vulnerability "OSV-DETAIL-FAIL"
+        let batch_resp = serde_json::json!({
+            "results": [{"vulns": [{"id": "OSV-DETAIL-FAIL"}]}]
+        })
+        .to_string();
+
+        // 2 & 3: Detail lookups return 503 Service Unavailable (attempt 1 and retry 2)
+        let (url, worker) = spawn_osv_mock(vec![
+            (200, batch_resp),
+            (503, "Service Unavailable".to_string()),
+            (503, "Service Unavailable".to_string()),
+        ]);
+
+        let base_host = url.trim_end_matches("/v1/querybatch");
+        let detail_url = format!("{}/v1/vulns", base_host);
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let cache_dir = std::env::temp_dir().join(format!("vexa-osv-detail-fail-{}", unique));
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let cache = VulnCache::new(&cache_dir);
+
+        let client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+
+        let scanner = VulnScanner {
+            cache,
+            batch_api_url: url,
+            vuln_api_url: detail_url,
+            client,
+            ..VulnScanner::default()
+        };
+
+        let root = PkgInfo::new("detail-fail-app", "1.0.0", "npm");
+        let mut graph = DepGraph::new(
+            root,
+            PkgManagerInfo {
+                name: "npm".to_string(),
+                version: "10.0.0".to_string(),
+            },
+        );
+        graph.add_pkg(PkgInfo::new("vulnerable-dep", "1.0.0", "npm"));
+
+        let result = scanner.scan_graph(&graph).await.unwrap();
+        worker.join().unwrap();
+
+        // Detail failure MUST result in Incomplete status and PartialFailure, never a false clean pass
+        assert_eq!(result.advisory_status, AdvisoryStatus::PartialFailure);
+        assert_eq!(result.scan_status, ScanStatus::Incomplete);
+        assert_eq!(result.packages_unavailable, 1);
+        assert_eq!(result.packages_checked, 0);
+        assert!(result
+            .unavailable_packages
+            .iter()
+            .any(|p| p.contains("OSV-DETAIL-FAIL")));
+
+        let _ = std::fs::remove_dir_all(cache_dir);
+    }
+
+    #[tokio::test]
+    async fn osv_detail_rate_limit_retry_exhaustion_marks_incomplete() {
+        use crate::core::dep_graph::{DepGraph, PkgManagerInfo};
+        use crate::scanner::cache::VulnCache;
+
+        // 1. Batch response succeeds
+        let batch_resp = serde_json::json!({
+            "results": [{"vulns": [{"id": "OSV-429-TEST"}]}]
+        })
+        .to_string();
+
+        // 2 & 3: Detail requests return 429 Too Many Requests
+        let (url, worker) = spawn_osv_mock(vec![
+            (200, batch_resp),
+            (429, "Too Many Requests".to_string()),
+            (429, "Too Many Requests".to_string()),
+        ]);
+
+        let base_host = url.trim_end_matches("/v1/querybatch");
+        let detail_url = format!("{}/v1/vulns", base_host);
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let cache_dir = std::env::temp_dir().join(format!("vexa-osv-429-fail-{}", unique));
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let cache = VulnCache::new(&cache_dir);
+
+        let client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+
+        let scanner = VulnScanner {
+            cache,
+            batch_api_url: url,
+            vuln_api_url: detail_url,
+            client,
+            ..VulnScanner::default()
+        };
+
+        let root = PkgInfo::new("ratelimit-app", "1.0.0", "npm");
+        let mut graph = DepGraph::new(
+            root,
+            PkgManagerInfo {
+                name: "npm".to_string(),
+                version: "10.0.0".to_string(),
+            },
+        );
+        graph.add_pkg(PkgInfo::new("ratelimited-dep", "1.0.0", "npm"));
+
+        let result = scanner.scan_graph(&graph).await.unwrap();
+        worker.join().unwrap();
+
+        assert_eq!(result.advisory_status, AdvisoryStatus::PartialFailure);
+        assert_eq!(result.scan_status, ScanStatus::Incomplete);
+        assert_eq!(result.packages_unavailable, 1);
+        assert!(result
+            .unavailable_packages
+            .iter()
+            .any(|p| p.contains("OSV-429-TEST")));
+
+        let _ = std::fs::remove_dir_all(cache_dir);
     }
 }

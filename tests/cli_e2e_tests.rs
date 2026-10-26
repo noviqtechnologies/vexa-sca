@@ -755,3 +755,200 @@ fn test_cli_no_fail_does_not_suppress_exit_code_3() {
         "--no-fail must not suppress exit code 3 when scan data is incomplete"
     );
 }
+
+/// Table-driven test covering the contract across profiles and failure conditions:
+/// - 0: clean pass (quality gates pass, scan complete)
+/// - 1: quality gate failed
+/// - 2: invalid arguments / configuration
+/// - 3: incomplete scan data
+/// - --no-fail NEVER suppresses 2 or 3
+/// - --allow-unavailable ONLY waives advisory-only outages, NEVER manifest or source gaps
+#[test]
+fn test_cli_table_driven_incomplete_scan_matrix() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+    let reachability_fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/reachability-app");
+
+    struct TestCase<'a> {
+        name: &'a str,
+        profile: &'a str, // "scan" or "ci"
+        extra_args: Vec<&'a str>,
+        expected_exit: i32,
+    }
+
+    let cases = vec![
+        TestCase {
+            name: "scan: file limit hit alone (passing gate) -> exit 3",
+            profile: "scan",
+            extra_args: vec!["--fail-on", "critical", "--max-source-files", "1"],
+            expected_exit: 3,
+        },
+        TestCase {
+            name: "scan: file limit hit with --no-fail -> exit 3",
+            profile: "scan",
+            extra_args: vec!["--max-source-files", "1", "--no-fail"],
+            expected_exit: 3,
+        },
+        TestCase {
+            name: "scan: file limit hit with --allow-unavailable (passing gate) -> exit 3",
+            profile: "scan",
+            extra_args: vec![
+                "--fail-on",
+                "critical",
+                "--max-source-files",
+                "1",
+                "--allow-unavailable",
+            ],
+            expected_exit: 3,
+        },
+        TestCase {
+            name: "scan: file limit hit with BOTH --allow-unavailable and --no-fail -> exit 3",
+            profile: "scan",
+            extra_args: vec![
+                "--max-source-files",
+                "1",
+                "--allow-unavailable",
+                "--no-fail",
+            ],
+            expected_exit: 3,
+        },
+        TestCase {
+            name: "ci: file limit hit alone (passing gate) -> exit 3",
+            profile: "ci",
+            extra_args: vec!["--fail-on", "critical", "--max-source-files", "1"],
+            expected_exit: 3,
+        },
+        TestCase {
+            name: "ci: file limit hit with --no-fail -> exit 3",
+            profile: "ci",
+            extra_args: vec!["--max-source-files", "1", "--no-fail"],
+            expected_exit: 3,
+        },
+        TestCase {
+            name: "ci: file limit hit with --allow-unavailable (passing gate) -> exit 3",
+            profile: "ci",
+            extra_args: vec![
+                "--fail-on",
+                "critical",
+                "--max-source-files",
+                "1",
+                "--allow-unavailable",
+            ],
+            expected_exit: 3,
+        },
+        TestCase {
+            name: "ci: file limit hit with BOTH --allow-unavailable and --no-fail -> exit 3",
+            profile: "ci",
+            extra_args: vec![
+                "--max-source-files",
+                "1",
+                "--allow-unavailable",
+                "--no-fail",
+            ],
+            expected_exit: 3,
+        },
+        TestCase {
+            name: "scan: quality gate failed with failing severity -> exit 1",
+            profile: "scan",
+            extra_args: vec!["--fail-on", "high"],
+            expected_exit: 1,
+        },
+    ];
+
+    for tc in cases {
+        let mut args = vec![tc.profile, reachability_fixture.to_str().unwrap()];
+        args.extend(tc.extra_args.clone());
+
+        let output = Command::new(&bin)
+            .args(&args)
+            .output()
+            .unwrap_or_else(|e| panic!("Failed to run test case '{}': {}", tc.name, e));
+
+        assert_eq!(
+            output.status.code(),
+            Some(tc.expected_exit),
+            "Test case '{}' expected exit code {}, got {:?}",
+            tc.name,
+            tc.expected_exit,
+            output.status.code()
+        );
+    }
+}
+
+#[test]
+fn test_cli_malformed_manifest_exits_code_3_and_not_suppressed() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("vexa_malformed_manifest_{}", unique));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let pkg_json = temp_dir.join("package.json");
+    let pkg_lock = temp_dir.join("package-lock.json");
+
+    fs::write(&pkg_json, br#"{"name":"malformed-app","version":"1.0.0"}"#).unwrap();
+    // Corrupt lockfile JSON
+    fs::write(
+        &pkg_lock,
+        b"{\n  \"name\": \"corrupt\",\n  INVALID JSON HERE\n",
+    )
+    .unwrap();
+
+    // Even with --no-fail and --allow-unavailable, malformed manifest MUST exit 3
+    let output = Command::new(&bin)
+        .args([
+            "scan",
+            temp_dir.to_str().unwrap(),
+            "--no-fail",
+            "--allow-unavailable",
+        ])
+        .output()
+        .expect("CLI execution failed");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "Malformed manifest must exit with code 3 (incomplete scan data), got: {:?}",
+        output.status.code()
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_cli_report_generation_write_failure_exits_code_3() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/npm-app");
+
+    // Point sarif-file to an impossible path in a non-existent nested directory
+    let invalid_target = if cfg!(windows) {
+        PathBuf::from("Z:\\nonexistent_drive_vexa\\impossible\\results.sarif")
+    } else {
+        PathBuf::from("/proc/nonexistent_vexa_dir/impossible/results.sarif")
+    };
+
+    let output = Command::new(&bin)
+        .args([
+            "scan",
+            fixture.to_str().unwrap(),
+            "--sarif-file",
+            invalid_target.to_str().unwrap(),
+            "--no-fail",
+            "--allow-unavailable",
+        ])
+        .output()
+        .expect("CLI execution failed");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "Report generation failure must mark scan incomplete and exit with code 3, got: {:?}",
+        output.status.code()
+    );
+}

@@ -206,15 +206,11 @@ impl Default for PolicyEngine {
 }
 
 impl PolicyEngine {
-    pub fn new(policy_file_path: Option<&Path>) -> Self {
-        if let Some(path) = policy_file_path {
-            if path.exists() {
-                if let Ok(engine) = Self::load(path, None) {
-                    return engine;
-                }
-            }
+    pub fn new(policy_file_path: Option<&Path>) -> Result<Self, PolicyError> {
+        match policy_file_path {
+            Some(path) => Self::load(path, None),
+            None => Ok(Self::default()),
         }
-        Self::default()
     }
 
     /// Loads a policy file from path with strict schema and constraint validation.
@@ -774,6 +770,34 @@ ignore: {}
         assert!(matches!(
             res.err().unwrap(),
             PolicyError::UnsupportedVersion(_)
+        ));
+    }
+
+    #[test]
+    fn public_constructor_propagates_invalid_and_missing_policy_files() {
+        assert!(PolicyEngine::new(None).unwrap().policy.rules.is_empty());
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "vexa-invalid-policy-{}-{}.yaml",
+            std::process::id(),
+            unique
+        ));
+        std::fs::write(&path, "version: v1.0.0\nignore: [invalid").unwrap();
+        assert!(PolicyEngine::new(Some(&path)).is_err());
+        let _ = std::fs::remove_file(&path);
+
+        let missing = std::env::temp_dir().join(format!(
+            "vexa-policy-does-not-exist-{}-{}.yaml",
+            std::process::id(),
+            unique
+        ));
+        assert!(matches!(
+            PolicyEngine::new(Some(&missing)),
+            Err(PolicyError::IoError(_))
         ));
     }
 }

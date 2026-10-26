@@ -15,9 +15,65 @@ use crate::reporters::export::{
 };
 use crate::reporters::terminal::render_terminal_report;
 use crate::scanner::quality_gate::{QualityGate, QualityGateOptions};
-use crate::scanner::vuln_scanner::VulnScanner;
-use crate::types::{PkgInfo, SeverityLevel};
+use crate::scanner::vuln_scanner::{ScanResult, VulnScanner};
+use crate::types::{PkgInfo, ScanStatus, SeverityLevel};
 use crate::{scan_project, ScanOptions};
+
+fn incomplete_scan_requires_exit3(result: &ScanResult, allow_unavailable: bool) -> bool {
+    let completeness = &result.completeness;
+    let is_incomplete = result.scan_status == ScanStatus::Incomplete
+        || completeness.advisory_status.has_unreliable_data()
+        || completeness.manifests_skipped > 0
+        || completeness.source_files_skipped > 0
+        || completeness.source_files_failed > 0
+        || !completeness.limits_hit.is_empty()
+        || result.packages_unavailable > 0;
+
+    if !is_incomplete {
+        return false;
+    }
+
+    let advisory_only = (completeness.advisory_status.has_unreliable_data()
+        || result.packages_unavailable > 0)
+        && completeness.manifests_skipped == 0
+        && completeness.source_files_skipped == 0
+        && completeness.source_files_failed == 0
+        && completeness.limits_hit.is_empty();
+
+    !(allow_unavailable && advisory_only)
+}
+
+#[cfg(test)]
+mod incomplete_scan_exit_tests {
+    use super::*;
+    use crate::types::AdvisoryStatus;
+
+    #[test]
+    fn report_only_does_not_hide_an_incomplete_scan() {
+        let mut result = ScanResult {
+            scan_status: ScanStatus::Incomplete,
+            ..Default::default()
+        };
+        result.completeness.advisory_status = AdvisoryStatus::Unavailable;
+        assert!(incomplete_scan_requires_exit3(&result, false));
+        assert!(!incomplete_scan_requires_exit3(&result, true));
+    }
+
+    #[test]
+    fn advisory_override_does_not_hide_source_or_manifest_gaps() {
+        let mut result = ScanResult {
+            scan_status: ScanStatus::Incomplete,
+            ..Default::default()
+        };
+        result.completeness.advisory_status = AdvisoryStatus::PartialFailure;
+        result.completeness.source_files_skipped = 1;
+        assert!(incomplete_scan_requires_exit3(&result, true));
+
+        result.completeness.source_files_skipped = 0;
+        result.completeness.manifests_skipped = 1;
+        assert!(incomplete_scan_requires_exit3(&result, true));
+    }
+}
 
 fn parse_epss_threshold(s: &str) -> Result<f64, String> {
     let val: f64 = s
@@ -543,7 +599,14 @@ pub async fn run() {
                 Ok(d) => d,
                 Err(e) => {
                     eprintln!("{} {}", "Error:".red().bold(), e);
-                    exit(1);
+                    if e.contains("Failed to parse manifest")
+                        || e.contains("Invalid JSON in")
+                        || e.contains("Invalid YAML in")
+                    {
+                        exit(3);
+                    } else {
+                        exit(2);
+                    }
                 }
             };
 
@@ -834,6 +897,28 @@ pub async fn run() {
 
             let manifest_type = &output.manifest_type;
             let target_dir = output.manifest_file.parent().unwrap_or(&path);
+            let lockfile_state = if !dry_run
+                && matches!(
+                    manifest_type,
+                    crate::parsers::detector::ManifestType::NpmPackageLock
+                        | crate::parsers::detector::ManifestType::NpmShrinkwrap
+                        | crate::parsers::detector::ManifestType::YarnLock
+                        | crate::parsers::detector::ManifestType::PnpmLock
+                ) {
+                match crate::patcher::LockfilePatcher::snapshot_project_state(target_dir) {
+                    Ok(state) => Some(state),
+                    Err(error) => {
+                        eprintln!(
+                            "{} {}",
+                            "Error snapshotting project state:".red().bold(),
+                            error
+                        );
+                        exit(1);
+                    }
+                }
+            } else {
+                None
+            };
             match patcher::apply_fixes(target_dir, manifest_type, &output.remediations, dry_run) {
                 Ok(patch_res) => {
                     let target_desc = match manifest_type {
@@ -1073,6 +1158,44 @@ pub async fn run() {
                             );
                         }
 
+                        if !dry_run && patch_res.modified && lockfile_state.is_some() {
+                            println!("\nRegenerating lockfile in {}…", target_dir.display());
+                            match crate::patcher::LockfilePatcher::regenerate_lockfile(target_dir) {
+                                Ok(cmd) => println!(
+                                    "  {} `{}` succeeded — lockfile is up to date.",
+                                    "✔".green(),
+                                    cmd.cyan()
+                                ),
+                                Err(error) => {
+                                    eprintln!(
+                                        "\n{} Lockfile regeneration failed:\n{}",
+                                        "✘".red().bold(),
+                                        error
+                                    );
+                                    match lockfile_state.as_ref() {
+                                        Some(snapshot) => {
+                                            match crate::patcher::LockfilePatcher::restore_project_state(snapshot) {
+                                                Ok(()) => eprintln!(
+                                                    "{} package.json and captured lockfiles were restored.",
+                                                    "Rollback complete:".yellow().bold()
+                                                ),
+                                                Err(rollback_error) => eprintln!(
+                                                    "{} {}. Preserve the repository state and restore manually; package.json.bak may contain the prior manifest.",
+                                                    "ROLLBACK FAILED:".red().bold(),
+                                                    rollback_error
+                                                ),
+                                            }
+                                        }
+                                        None => eprintln!(
+                                            "{} No pre-change snapshot was available; restore package.json and the lockfile manually.",
+                                            "ROLLBACK FAILED:".red().bold()
+                                        ),
+                                    }
+                                    exit(1);
+                                }
+                            }
+                        }
+
                         if create_pr {
                             println!("\nPreparing automated GitHub Pull Request...");
                             match PrCreator::create_and_open_pr(
@@ -1102,34 +1225,9 @@ pub async fn run() {
                                     println!("\nRun \"pip install -r requirements.txt\" to install the updated dependencies.");
                                 }
                                 crate::parsers::detector::ManifestType::NpmPackageLock
+                                | crate::parsers::detector::ManifestType::NpmShrinkwrap
                                 | crate::parsers::detector::ManifestType::YarnLock
-                                | crate::parsers::detector::ManifestType::PnpmLock => {
-                                    println!("\nRegenerating lockfile…");
-                                    match crate::patcher::LockfilePatcher::regenerate_lockfile(
-                                        &path,
-                                    ) {
-                                        Ok(cmd) => {
-                                            println!(
-                                                "  {} `{}` succeeded — lockfile is up to date.",
-                                                "✔".green(),
-                                                cmd.cyan()
-                                            );
-                                        }
-                                        Err(e) => {
-                                            eprintln!(
-                                                "\n{} Lockfile regeneration failed:\n{}",
-                                                "✘".red().bold(),
-                                                e
-                                            );
-                                            eprintln!(
-                                                "\nThe manifest (package.json) was updated but \
-                                                 the lockfile is now out of sync. Resolve the \
-                                                 error above and re-run the install command manually."
-                                            );
-                                            exit(1);
-                                        }
-                                    }
-                                }
+                                | crate::parsers::detector::ManifestType::PnpmLock => {}
                                 _ => {}
                             }
                         }
@@ -1153,7 +1251,14 @@ pub async fn run() {
                 Ok(d) => d,
                 Err(e) => {
                     eprintln!("{} {}", "Error:".red().bold(), e);
-                    exit(1);
+                    if e.contains("Failed to parse manifest")
+                        || e.contains("Invalid JSON in")
+                        || e.contains("Invalid YAML in")
+                    {
+                        exit(3);
+                    } else {
+                        exit(2);
+                    }
                 }
             };
 
@@ -1336,35 +1441,6 @@ pub async fn run() {
 
             match scan_project(&path, options).await {
                 Ok(mut output) => {
-                    // Advisory outage check: fail-safe when OSV could not be reached and no cache was available
-                    // Note: --no-fail does not suppress exit code 3 (incomplete data / outage)
-                    if output.scan_result.advisory_status.has_unreliable_data()
-                        && !allow_unavailable
-                    {
-                        let status_str = output.scan_result.advisory_status.as_str();
-                        let unavail_n = output.scan_result.packages_unavailable;
-                        if json {
-                            let report = format_json_report(
-                                &output.scan_result,
-                                &output.suppressed,
-                                &output.remediations,
-                                output.license_audit.as_ref(),
-                                output.policy_file.as_deref(),
-                            );
-                            println!("{}", report);
-                        } else {
-                            eprintln!(
-                                "{} Advisory database {} — {} package{} could not be checked. \
-Use --allow-unavailable to suppress this gate, or fix the network issue.",
-                                "Error:".red().bold(),
-                                status_str,
-                                unavail_n,
-                                if unavail_n == 1 { "" } else { "s" }
-                            );
-                        }
-                        exit(3);
-                    }
-
                     if let Some(thresh) = epss_threshold {
                         let mut retained = Vec::new();
                         let mut heuristic_or_unavailable_count = 0;
@@ -1472,6 +1548,12 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                                 file_path.display(),
                                 e
                             );
+                            output.scan_result.completeness.limits_hit.push(format!(
+                                "REPORT_WRITE_FAILED (SARIF: {}: {})",
+                                file_path.display(),
+                                e
+                            ));
+                            output.scan_result.scan_status = ScanStatus::Incomplete;
                         } else {
                             println!("✔ SARIF v2.1.0 report saved to {}", file_path.display());
                         }
@@ -1499,6 +1581,12 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                                 file_path.display(),
                                 e
                             );
+                            output.scan_result.completeness.limits_hit.push(format!(
+                                "REPORT_WRITE_FAILED (HTML: {}: {})",
+                                file_path.display(),
+                                e
+                            ));
+                            output.scan_result.scan_status = ScanStatus::Incomplete;
                         } else {
                             println!(
                                 "✔ Interactive HTML dashboard saved to {}",
@@ -1542,6 +1630,12 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                                 file_path.display(),
                                 e
                             );
+                            output.scan_result.completeness.limits_hit.push(format!(
+                                "REPORT_WRITE_FAILED (SBOM: {}: {})",
+                                file_path.display(),
+                                e
+                            ));
+                            output.scan_result.scan_status = ScanStatus::Incomplete;
                         } else {
                             println!("✔ SBOM report saved to {}", file_path.display());
                         }
@@ -1659,10 +1753,24 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                     if !gate_res.passed {
                         exit(1);
                     }
+                    if incomplete_scan_requires_exit3(&output.scan_result, allow_unavailable) {
+                        eprintln!(
+                            "{} Scan data is incomplete; refusing a successful exit. Review the completeness report or explicitly allow an advisory-only outage with --allow-unavailable.",
+                            "Error:".red().bold()
+                        );
+                        exit(3);
+                    }
                 }
                 Err(e) => {
                     eprintln!("Scan error: {}", e);
-                    exit(2);
+                    if e.contains("Failed to parse manifest")
+                        || e.contains("Invalid JSON in")
+                        || e.contains("Invalid YAML in")
+                    {
+                        exit(3);
+                    } else {
+                        exit(2);
+                    }
                 }
             }
         }
@@ -1721,44 +1829,6 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
 
             match scan_project(&path, options).await {
                 Ok(mut output) => {
-                    // Advisory outage or incomplete analysis check: fail-closed with exit code 3 in CI profile
-                    // Note: --no-fail does not suppress exit code 3 (incomplete data / outage)
-                    let has_advisory_outage =
-                        output.scan_result.advisory_status.has_unreliable_data();
-                    let is_incomplete = output.scan_result.scan_status
-                        == crate::types::ScanStatus::Incomplete
-                        || !output.scan_result.completeness.limits_hit.is_empty();
-
-                    if (has_advisory_outage || is_incomplete) && !allow_unavailable {
-                        let reason = if has_advisory_outage {
-                            format!(
-                                "Advisory database {} — {} package(s) could not be checked",
-                                output.scan_result.advisory_status.as_str(),
-                                output.scan_result.packages_unavailable
-                            )
-                        } else {
-                            "Analysis completeness checks failed (file limit or symbol data missing)".to_string()
-                        };
-
-                        if json {
-                            let report = format_json_report(
-                                &output.scan_result,
-                                &output.suppressed,
-                                &output.remediations,
-                                output.license_audit.as_ref(),
-                                output.policy_file.as_deref(),
-                            );
-                            println!("{}", report);
-                        } else {
-                            eprintln!(
-                                "{} {}. Failing closed with exit code 3 in CI profile. Use --allow-unavailable to suppress.",
-                                "CI Failure:".red().bold(),
-                                reason
-                            );
-                        }
-                        exit(3);
-                    }
-
                     if let Some(thresh) = epss_threshold {
                         let mut retained = Vec::new();
                         let mut heuristic_or_unavailable_count = 0;
@@ -1841,6 +1911,12 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                                 file_path.display(),
                                 e
                             );
+                            output.scan_result.completeness.limits_hit.push(format!(
+                                "REPORT_WRITE_FAILED (SARIF: {}: {})",
+                                file_path.display(),
+                                e
+                            ));
+                            output.scan_result.scan_status = ScanStatus::Incomplete;
                         } else {
                             println!("✔ SARIF v2.1.0 report saved to {}", file_path.display());
                         }
@@ -1873,6 +1949,12 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                                 file_path.display(),
                                 e
                             );
+                            output.scan_result.completeness.limits_hit.push(format!(
+                                "REPORT_WRITE_FAILED (SBOM: {}: {})",
+                                file_path.display(),
+                                e
+                            ));
+                            output.scan_result.scan_status = ScanStatus::Incomplete;
                         } else {
                             println!("✔ SBOM report saved to {}", file_path.display());
                         }
@@ -1887,12 +1969,24 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
 
                     if let Some(summary_path) = summary_target {
                         use std::io::Write;
-                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                        let write_res = std::fs::OpenOptions::new()
                             .create(true)
                             .append(true)
                             .open(&summary_path)
-                        {
-                            let _ = writeln!(f, "{}", summary_md);
+                            .and_then(|mut f| writeln!(f, "{}", summary_md));
+                        if let Err(e) = write_res {
+                            eprintln!(
+                                "{} Failed to write job summary to {}: {}",
+                                "Error:".red(),
+                                summary_path.display(),
+                                e
+                            );
+                            output.scan_result.completeness.limits_hit.push(format!(
+                                "REPORT_WRITE_FAILED (JobSummary: {}: {})",
+                                summary_path.display(),
+                                e
+                            ));
+                            output.scan_result.scan_status = ScanStatus::Incomplete;
                         }
                     }
 
@@ -1996,10 +2090,24 @@ Use --allow-unavailable to suppress this gate, or fix the network issue.",
                     if !gate_res.passed {
                         exit(1);
                     }
+                    if incomplete_scan_requires_exit3(&output.scan_result, allow_unavailable) {
+                        eprintln!(
+                            "{} Scan data is incomplete; refusing a successful exit. Review the completeness report or explicitly allow an advisory-only outage with --allow-unavailable.",
+                            "Error:".red().bold()
+                        );
+                        exit(3);
+                    }
                 }
                 Err(e) => {
                     eprintln!("CI Scan error: {}", e);
-                    exit(2);
+                    if e.contains("Failed to parse manifest")
+                        || e.contains("Invalid JSON in")
+                        || e.contains("Invalid YAML in")
+                    {
+                        exit(3);
+                    } else {
+                        exit(2);
+                    }
                 }
             }
         }

@@ -89,18 +89,18 @@ pub fn format_html_report(
                     String::new()
                 };
                 (
-                    "<span class=\"badge badge-reachable\">🚨 REACHABLE</span>",
+                    "<span class=\"badge badge-reachable\">USAGE SIGNAL MATCHED</span>",
                     "reachable",
                     snippet_html,
                 )
             }
             Some(r) if r.status == ReachabilityStatus::Unreachable => (
-                "<span class=\"badge badge-unreachable\">🛡️ UNREACHABLE</span>",
+                "<span class=\"badge badge-unreachable\">NO USAGE SIGNAL OBSERVED</span>",
                 "unreachable",
                 String::new(),
             ),
             _ => (
-                "<span class=\"badge badge-muted\">NOT EVALUATED</span>",
+                "<span class=\"badge badge-muted\">USAGE SIGNAL UNKNOWN</span>",
                 "not-evaluated",
                 String::new(),
             ),
@@ -502,18 +502,18 @@ pub fn format_html_report(
             </div>
             <div class="stat-card">
                 <div class="stat-val val-reach">{reachable_count}</div>
-                <div class="stat-label">🚨 Reachable In Code</div>
+                <div class="stat-label">Usage Signal Matched</div>
             </div>
             <div class="stat-card">
-                <div class="stat-val" style="color: var(--safe);">{unreachable_count}</div>
-                <div class="stat-label">🛡️ Unreachable (Low Risk)</div>
+                <div class="stat-val" style="color: var(--text-muted);">{unreachable_count}</div>
+                <div class="stat-label">No Usage Signal Observed (Not a Safety Finding)</div>
             </div>
         </div>
 
         <div class="controls">
             <input type="text" id="searchBox" class="search-box" placeholder="Search by package, CVE, GHSA, or title..." oninput="applyFilters()">
             <button class="filter-btn active" onclick="setFilter('all', this)">All ({total_vulns})</button>
-            <button class="filter-btn" onclick="setFilter('reachable', this)">🚨 Reachable ({reachable_count})</button>
+            <button class="filter-btn" onclick="setFilter('reachable', this)">Usage signal matched ({reachable_count})</button>
             <button class="filter-btn" onclick="setFilter('critical', this)">Critical ({critical_count})</button>
             <button class="filter-btn" onclick="setFilter('high', this)">High ({high_count})</button>
             <button class="filter-btn" onclick="setFilter('medium', this)">Medium ({medium_count})</button>
@@ -655,6 +655,9 @@ mod tests {
         assert!(html.contains("Command Injection in lodash"));
         assert!(html.contains("CVE-2021-23337"));
         assert!(html.contains("badge-critical"));
+        assert!(html.contains("USAGE SIGNAL UNKNOWN"));
+        assert!(html.contains("Not a Safety Finding"));
+        assert!(!html.contains("Unreachable (Low Risk)"));
     }
 
     #[test]
@@ -751,5 +754,100 @@ mod tests {
         assert!(html.contains("Introduced by jsonschema"));
         assert!(html.contains("cat-weak"));
         assert!(html.contains("cat-permissive"));
+    }
+
+    #[test]
+    fn test_html_escaping_hostile_xss_inputs() {
+        use crate::licenses::license_scanner::{
+            LicenseAudit, LicenseRisk, LicenseSummary, PackageLicenseResult,
+        };
+        use crate::types::{CallSite, ReachabilityResult, ReachabilityStatus};
+
+        let hostile_pkg = "<script>alert('pkg')</script>";
+        let hostile_title = "\"><img src=x onerror=alert(1)>";
+        let hostile_id = "<svg/onload=alert('id')>";
+        let hostile_details = "<iframe src=\"javascript:alert('xss')\">";
+        let hostile_code = "eval(\"<script>bad()</script>\")";
+        let hostile_file = "evil<dir>/index.js";
+        let hostile_proj = "<script>alert('proj')</script>";
+
+        let mut scan_result = ScanResult::default();
+        scan_result.vulnerabilities.push(VulnerabilityFinding {
+            id: hostile_id.to_string(),
+            title: hostile_title.to_string(),
+            package: hostile_pkg.to_string(),
+            version: "1.0.0".to_string(),
+            pkg_id: format!("{}@1.0.0", hostile_pkg),
+            severity: SeverityInfo {
+                level: SeverityLevel::High,
+                score: 8.5,
+                vector: None,
+            },
+            cve: Some(hostile_id.to_string()),
+            details: Some(hostile_details.to_string()),
+            paths: vec![vec!["root".to_string(), hostile_pkg.to_string()]],
+            references: vec!["https://example.com?q=<script>".to_string()],
+            reachability: Some(ReachabilityResult {
+                status: ReachabilityStatus::Reachable,
+                is_direct_call: true,
+                call_sites: vec![CallSite {
+                    file: hostile_file.to_string(),
+                    line: 42,
+                    code: hostile_code.to_string(),
+                    matched_function: "eval".to_string(),
+                    is_specific_function_match: true,
+                }],
+                target_functions: vec!["eval".to_string()],
+                reason_code: None,
+                analyzer_version: "1.0.0".to_string(),
+            }),
+            ..Default::default()
+        });
+
+        let rems = vec![RemediationAction {
+            package: hostile_pkg.to_string(),
+            current_version: "1.0.0".to_string(),
+            is_transitive: false,
+            target_version: Some("<script>2.0.0</script>".to_string()),
+            action_type: "UPGRADE_DIRECT".to_string(),
+            advice: "<a href=\"javascript:attack()\">Click</a>".to_string(),
+            resolved_vulnerability_count: 1,
+            vulnerability_ids: vec![hostile_id.to_string()],
+            highest_severity: None,
+        }];
+
+        let audit = LicenseAudit {
+            summary: LicenseSummary::default(),
+            results: vec![PackageLicenseResult {
+                package: hostile_pkg.to_string(),
+                version: "1.0.0".to_string(),
+                ecosystem: "npm".to_string(),
+                license: "<script>GPL-3.0</script>".to_string(),
+                category: LicenseCategory::StrongCopyleft,
+                risk: LicenseRisk {
+                    level: "HIGH".to_string(),
+                    score: 4,
+                },
+                ..Default::default()
+            }],
+        };
+
+        let html = format_html_report(&scan_result, &[], &rems, Some(&audit), hostile_proj, None);
+
+        // Raw unescaped dangerous tags MUST NOT exist anywhere in the generated HTML
+        assert!(!html.contains("<script>alert('pkg')</script>"));
+        assert!(!html.contains("\"><img src=x onerror=alert(1)>"));
+        assert!(!html.contains("<svg/onload=alert('id')>"));
+        assert!(!html.contains("<iframe src="));
+        assert!(!html.contains("<script>alert('proj')</script>"));
+        assert!(!html.contains("<a href=\"javascript:attack()\">"));
+        assert!(!html.contains("<script>GPL-3.0</script>"));
+
+        // Properly HTML entity-escaped forms MUST be present
+        assert!(html.contains("&lt;script&gt;alert(&#39;pkg&#39;)&lt;/script&gt;"));
+        assert!(html.contains("&quot;&gt;&lt;img src=x onerror=alert(1)&gt;"));
+        assert!(html.contains("&lt;svg/onload=alert(&#39;id&#39;)&gt;"));
+        assert!(html.contains("&lt;iframe src=&quot;javascript:alert(&#39;xss&#39;)&quot;&gt;"));
+        assert!(html.contains("&lt;script&gt;alert(&#39;proj&#39;)&lt;/script&gt;"));
     }
 }
