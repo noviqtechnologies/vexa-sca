@@ -1,0 +1,11 @@
+# Auto-detect text files and normalize line endings
+* text=auto
+
+# Enforce LF line endings on JSON, SARIF, YAML, and schemas across all platforms
+*.json text eol=lf
+*.sarif text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.rs text eol=lf
+*.md text eol=lf
+tests/schemas/* text eol=lf

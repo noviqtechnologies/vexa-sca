@@ -12,7 +12,12 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 
 function sha256File(filePath) {
-  const content = fs.readFileSync(filePath);
+  let content = fs.readFileSync(filePath);
+  // Normalize CRLF to LF for JSON and SARIF files to guarantee identical hashes across OS git checkouts
+  if (filePath.endsWith('.json') || filePath.endsWith('.sarif')) {
+    const text = content.toString('utf8').replace(/\r\n/g, '\n');
+    content = Buffer.from(text, 'utf8');
+  }
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
