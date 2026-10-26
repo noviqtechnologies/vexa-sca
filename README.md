@@ -13,8 +13,8 @@ Vexa SCA delivers fast, reproducible vulnerability triage by prioritizing action
 
 > [!NOTE]
 > **Production Status (Pilot Ready vs Experimental):**
-> - **Production Pilot Target (P0):** Node.js / JavaScript / TypeScript (`package-lock.json` v2 & v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9), Repository Usage Signals (AST single-pass import/call matching), PR-diff mode (`--baseline`), GitHub Actions integration (`vexa-sca ci`, `vexa-sca init`), transactional same-major remediation (`vexa-sca fix`), strict policy engine (`.vexa-sca`), exit code contract (0, 1, 2, 3).
-> - **Experimental / Fixture Coverage (P2):** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn (`yarn.lock`), Container OS packages (`vexa-sca container`), Copyleft license audit (`vexa-sca licenses`). Entries in this tier are verified against single fixture samples, not full production ecosystem suites.
+> - **Production Pilot Target:** Node.js / JavaScript / TypeScript (`package-lock.json` v2 & v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9), Repository Usage Signals (AST single-pass import/call matching), PR-diff mode (`--baseline`), GitHub Actions integration (`vexa-sca ci`, `vexa-sca init`), transactional same-major remediation (`vexa-sca fix`), strict policy engine (`.vexa-sca`), exit code contract (0, 1, 2, 3).
+> - **Experimental / Fixture Coverage:** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn (`yarn.lock`), Container OS packages (`vexa-sca container`), Copyleft license audit (`vexa-sca licenses`). Entries in this tier are verified against single fixture samples, not full production ecosystem suites.
 
 <p align="center">
   <a href="#quick-start"><b>Quick Start</b></a> •
@@ -47,27 +47,27 @@ Vexa SCA delivers fast, reproducible vulnerability triage by prioritizing action
 | 🚦 [**Process Exit Code Contract**](#process-exit-code-contract) | Deterministic automation contract: `0` (clean/pass), `1` (quality gate failure), `2` (config error), `3` (advisory outage / incomplete data). | `vexa-sca ci` |
 
 > [!TIP]
-> **Try It in 30 Seconds**:
+> **Try It in 60 Seconds**:
 > 
-> **1. To scan ANY project on your machine (No manual clone needed):**
-> Install the standalone binary globally via Cargo in 1 command:
+> Install `vexa-sca` globally via Cargo (or run directly in this repo with `cargo run --`):
 > ```bash
 > cargo install --git https://github.com/noviqtechnologies/vexa-sca.git
-> 
-> # Navigate to any repository on your computer and scan:
-> vexa-sca scan
 > ```
-> *(Or via `npx vexa-sca scan` once published to npm).*
-> 
-> **2. To evaluate from source in this cloned repository:**
+> **1. Interactive Visual Scan & Reachability Triage**
 > ```bash
-> # Run against the included sample application fixtures:
-> cargo run -- scan test/fixtures/npm-app
-> 
-> # Or using the Node.js launcher:
-> node bin/vexa-sca.js scan test/fixtures/npm-app
+> # Scan any project and generate a standalone offline HTML audit dashboard:
+> vexa-sca scan --html-file sca-report.html
 > ```
-> *(See [Prerequisites by OS](#prerequisites-by-os) below for 1-command toolchain installation).*
+> *Why developers keep it:* Eliminates alert fatigue in seconds. AST Repository Usage Signals reveal which vulnerable packages are actually imported (`IMPORTED_SOURCE`) versus unreferenced noise, combined with EPSS exploit likelihood scores in a zero-CDN, dark-mode interactive HTML report.
+> 
+> **2. Safe Automated Lockfile Remediation**
+> ```bash
+> # Automatically patch vulnerable dependencies with non-breaking updates:
+> vexa-sca fix
+> ```
+> *Why developers keep it:* Detection without remediation is friction. `vexa-sca fix` automatically patches vulnerable dependencies in your lockfile (`package-lock.json`, `pnpm-lock.yaml`) prioritizing **same-major patch/minor updates** to eliminate vulnerabilities without breaking your code (preview changes anytime with `vexa-sca fix --dry-run`).
+> 
+> *(Evaluating in this cloned repository? Simply replace `vexa-sca` with `cargo run -- scan test/fixtures/npm-app` or `node bin/vexa-sca.js`).*
 
 ---
 
