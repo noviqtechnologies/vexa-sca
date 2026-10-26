@@ -1,8 +1,17 @@
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Once;
 static INIT: Once = Once::new();
+
+fn file_sha256(path: &Path) -> String {
+    let bytes =
+        fs::read(path).unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e));
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    format!("{:x}", hasher.finalize())
+}
 
 fn get_bin_path(name: &str) -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -778,6 +787,45 @@ fn test_cli_table_driven_incomplete_scan_matrix() {
     }
 
     let cases = vec![
+        // 1. Complete Pass (exit 0)
+        TestCase {
+            name: "scan: complete pass via --no-fail -> exit 0",
+            profile: "scan",
+            extra_args: vec!["--no-fail"],
+            expected_exit: 0,
+        },
+        TestCase {
+            name: "ci: complete pass via --no-fail -> exit 0",
+            profile: "ci",
+            extra_args: vec!["--no-fail"],
+            expected_exit: 0,
+        },
+        TestCase {
+            name: "scan: complete pass with high threshold on clean fixture -> exit 0",
+            profile: "scan",
+            extra_args: vec!["--fail-on", "critical"],
+            expected_exit: 0,
+        },
+        TestCase {
+            name: "ci: complete pass with high threshold on clean fixture -> exit 0",
+            profile: "ci",
+            extra_args: vec!["--fail-on", "critical"],
+            expected_exit: 0,
+        },
+        // 2. Complete Gate Failure (exit 1)
+        TestCase {
+            name: "scan: quality gate failed with failing severity -> exit 1",
+            profile: "scan",
+            extra_args: vec!["--fail-on", "high"],
+            expected_exit: 1,
+        },
+        TestCase {
+            name: "ci: quality gate failed with failing severity -> exit 1",
+            profile: "ci",
+            extra_args: vec!["--fail-on", "high"],
+            expected_exit: 1,
+        },
+        // 3. Incomplete-only (exit 3)
         TestCase {
             name: "scan: file limit hit alone (passing gate) -> exit 3",
             profile: "scan",
@@ -785,14 +833,53 @@ fn test_cli_table_driven_incomplete_scan_matrix() {
             expected_exit: 3,
         },
         TestCase {
+            name: "ci: file limit hit alone (passing gate) -> exit 3",
+            profile: "ci",
+            extra_args: vec!["--fail-on", "critical", "--max-source-files", "1"],
+            expected_exit: 3,
+        },
+        // 4. Incomplete PLUS gate failure (exit 3 takes precedence over 1!)
+        TestCase {
+            name: "scan: incomplete PLUS gate failure -> exit 3 (precedence)",
+            profile: "scan",
+            extra_args: vec!["--fail-on", "high", "--max-source-files", "1"],
+            expected_exit: 3,
+        },
+        TestCase {
+            name: "ci: incomplete PLUS gate failure -> exit 3 (precedence)",
+            profile: "ci",
+            extra_args: vec!["--fail-on", "high", "--max-source-files", "1"],
+            expected_exit: 3,
+        },
+        // 5. --no-fail NEVER suppresses exit code 3
+        TestCase {
             name: "scan: file limit hit with --no-fail -> exit 3",
             profile: "scan",
             extra_args: vec!["--max-source-files", "1", "--no-fail"],
             expected_exit: 3,
         },
         TestCase {
+            name: "ci: file limit hit with --no-fail -> exit 3",
+            profile: "ci",
+            extra_args: vec!["--max-source-files", "1", "--no-fail"],
+            expected_exit: 3,
+        },
+        // 6. --allow-unavailable NEVER waives source limits or manifests
+        TestCase {
             name: "scan: file limit hit with --allow-unavailable (passing gate) -> exit 3",
             profile: "scan",
+            extra_args: vec![
+                "--fail-on",
+                "critical",
+                "--max-source-files",
+                "1",
+                "--allow-unavailable",
+            ],
+            expected_exit: 3,
+        },
+        TestCase {
+            name: "ci: file limit hit with --allow-unavailable (passing gate) -> exit 3",
+            profile: "ci",
             extra_args: vec![
                 "--fail-on",
                 "critical",
@@ -814,30 +901,6 @@ fn test_cli_table_driven_incomplete_scan_matrix() {
             expected_exit: 3,
         },
         TestCase {
-            name: "ci: file limit hit alone (passing gate) -> exit 3",
-            profile: "ci",
-            extra_args: vec!["--fail-on", "critical", "--max-source-files", "1"],
-            expected_exit: 3,
-        },
-        TestCase {
-            name: "ci: file limit hit with --no-fail -> exit 3",
-            profile: "ci",
-            extra_args: vec!["--max-source-files", "1", "--no-fail"],
-            expected_exit: 3,
-        },
-        TestCase {
-            name: "ci: file limit hit with --allow-unavailable (passing gate) -> exit 3",
-            profile: "ci",
-            extra_args: vec![
-                "--fail-on",
-                "critical",
-                "--max-source-files",
-                "1",
-                "--allow-unavailable",
-            ],
-            expected_exit: 3,
-        },
-        TestCase {
             name: "ci: file limit hit with BOTH --allow-unavailable and --no-fail -> exit 3",
             profile: "ci",
             extra_args: vec![
@@ -847,12 +910,6 @@ fn test_cli_table_driven_incomplete_scan_matrix() {
                 "--no-fail",
             ],
             expected_exit: 3,
-        },
-        TestCase {
-            name: "scan: quality gate failed with failing severity -> exit 1",
-            profile: "scan",
-            extra_args: vec!["--fail-on", "high"],
-            expected_exit: 1,
         },
     ];
 
@@ -874,6 +931,38 @@ fn test_cli_table_driven_incomplete_scan_matrix() {
             output.status.code()
         );
     }
+
+    // Explicitly verify incomplete PLUS gate failure captures both in JSON output
+    let json_output = Command::new(&bin)
+        .args([
+            "scan",
+            reachability_fixture.to_str().unwrap(),
+            "--fail-on",
+            "high",
+            "--max-source-files",
+            "1",
+            "--json",
+        ])
+        .output()
+        .expect("CLI execution failed");
+    assert_eq!(
+        json_output.status.code(),
+        Some(3),
+        "Incomplete + gate failure must exit 3"
+    );
+    let json_val: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(json_val["summary"]["status"], "INCOMPLETE");
+    let limits = json_val["summary"]["completeness"]["limits_hit"]
+        .as_array()
+        .unwrap();
+    assert!(limits
+        .iter()
+        .any(|l| l.as_str().unwrap().contains("FILE_LIMIT_HIT")));
+    assert_eq!(json_val["summary"]["qualityGate"]["passed"], false);
+    assert_eq!(
+        json_val["summary"]["qualityGate"]["severityGateFailed"],
+        true
+    );
 }
 
 #[test]
@@ -951,4 +1040,203 @@ fn test_cli_report_generation_write_failure_exits_code_3() {
         "Report generation failure must mark scan incomplete and exit with code 3, got: {:?}",
         output.status.code()
     );
+}
+
+#[test]
+fn test_real_pnpm_install_failure_and_byte_for_byte_rollback() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("vexa_pnpm_rollback_e2e_{}", unique));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let fixture_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/pnpm-app");
+    let target_pkg = temp_dir.join("package.json");
+    let target_lock = temp_dir.join("pnpm-lock.yaml");
+    let target_npmrc = temp_dir.join(".npmrc");
+
+    fs::copy(fixture_src.join("package.json"), &target_pkg).unwrap();
+    fs::copy(fixture_src.join("pnpm-lock.yaml"), &target_lock).unwrap();
+
+    // Configure .npmrc to point to an unreachable local port with 0 retries to force deterministic failure
+    fs::write(
+        &target_npmrc,
+        b"registry=http://127.0.0.1:9/\nfetch-retries=0\nfetch-retry-maxtimeout=100\nfetch-retry-mintimeout=100\n",
+    )
+    .unwrap();
+
+    let pkg_hash_before = file_sha256(&target_pkg);
+    let lock_hash_before = file_sha256(&target_lock);
+
+    // 1. Verify --dry-run does NOT write files, does NOT create backups, and leaves hashes unchanged
+    let dry_run_output = Command::new(&bin)
+        .args(["fix", temp_dir.to_str().unwrap(), "--dry-run"])
+        .output()
+        .expect("CLI dry-run failed to execute");
+    assert!(
+        dry_run_output.status.success(),
+        "--dry-run should succeed with code 0"
+    );
+    assert_eq!(
+        file_sha256(&target_pkg),
+        pkg_hash_before,
+        "Dry run must not mutate package.json"
+    );
+    assert_eq!(
+        file_sha256(&target_lock),
+        lock_hash_before,
+        "Dry run must not mutate pnpm-lock.yaml"
+    );
+    assert!(
+        !temp_dir.join("package.json.bak").exists(),
+        "Dry run must not create .bak file"
+    );
+
+    // 2. Run real `vexa-sca fix`
+    let output = Command::new(&bin)
+        .args(["fix", temp_dir.to_str().unwrap()])
+        .output()
+        .expect("CLI fix execution failed");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined_logs = format!("{}\n{}", stdout, stderr);
+
+    // Verify the command failed with code 1
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Real package-manager install failure must exit with code 1"
+    );
+
+    // Verify real pnpm was invoked (or caught by command runner) and reported failure
+    assert!(
+        combined_logs.contains("pnpm install")
+            || combined_logs.contains("Lockfile regeneration failed"),
+        "Logs must report package-manager invocation attempt:\n{}",
+        combined_logs
+    );
+
+    // Verify rollback success message was emitted
+    assert!(
+        combined_logs.contains("Rollback complete") || combined_logs.contains("were restored"),
+        "Logs must report rollback success:\n{}",
+        combined_logs
+    );
+
+    // 3. Verify byte-for-byte restoration of package.json and pnpm-lock.yaml
+    let pkg_hash_after = file_sha256(&target_pkg);
+    let lock_hash_after = file_sha256(&target_lock);
+    assert_eq!(
+        pkg_hash_after, pkg_hash_before,
+        "package.json must be restored byte-for-byte after pnpm failure"
+    );
+    assert_eq!(
+        lock_hash_after, lock_hash_before,
+        "pnpm-lock.yaml must be restored byte-for-byte after pnpm failure"
+    );
+
+    // 4. Verify extraneous lockfiles that did not exist before the run do not exist
+    assert!(
+        !temp_dir.join("pnpm-lock.yml").exists(),
+        "Extraneous lockfile must not exist"
+    );
+    assert!(
+        !temp_dir.join("package-lock.json").exists(),
+        "Extraneous lockfile must not exist"
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_real_npm_install_failure_and_byte_for_byte_rollback() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("vexa_npm_rollback_e2e_{}", unique));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let fixture_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/npm-app");
+    let target_pkg = temp_dir.join("package.json");
+    let target_lock = temp_dir.join("package-lock.json");
+    let target_npmrc = temp_dir.join(".npmrc");
+
+    fs::copy(fixture_src.join("package.json"), &target_pkg).unwrap();
+    fs::copy(fixture_src.join("package-lock.json"), &target_lock).unwrap();
+
+    // Configure .npmrc to point to an unreachable local port with 0 retries
+    fs::write(
+        &target_npmrc,
+        b"registry=http://127.0.0.1:9/\nfetch-retries=0\nfetch-retry-maxtimeout=100\nfetch-retry-mintimeout=100\n",
+    )
+    .unwrap();
+
+    let pkg_hash_before = file_sha256(&target_pkg);
+    let lock_hash_before = file_sha256(&target_lock);
+
+    // 1. Verify --dry-run
+    let dry_run_output = Command::new(&bin)
+        .args(["fix", temp_dir.to_str().unwrap(), "--dry-run"])
+        .output()
+        .expect("CLI dry-run failed to execute");
+    assert!(dry_run_output.status.success());
+    assert_eq!(file_sha256(&target_pkg), pkg_hash_before);
+    assert_eq!(file_sha256(&target_lock), lock_hash_before);
+    assert!(!temp_dir.join("package.json.bak").exists());
+
+    // 2. Run real `vexa-sca fix`
+    let output = Command::new(&bin)
+        .args(["fix", temp_dir.to_str().unwrap()])
+        .output()
+        .expect("CLI fix execution failed");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined_logs = format!("{}\n{}", stdout, stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Real npm install failure must exit with code 1"
+    );
+
+    assert!(
+        combined_logs.contains("npm install")
+            || combined_logs.contains("Lockfile regeneration failed"),
+        "Logs must report npm execution attempt:\n{}",
+        combined_logs
+    );
+
+    assert!(
+        combined_logs.contains("Rollback complete") || combined_logs.contains("were restored"),
+        "Logs must report rollback complete:\n{}",
+        combined_logs
+    );
+
+    // 3. Verify byte-for-byte restoration
+    let pkg_hash_after = file_sha256(&target_pkg);
+    let lock_hash_after = file_sha256(&target_lock);
+    assert_eq!(
+        pkg_hash_after, pkg_hash_before,
+        "package.json must be restored byte-for-byte after npm failure"
+    );
+    assert_eq!(
+        lock_hash_after, lock_hash_before,
+        "package-lock.json must be restored byte-for-byte after npm failure"
+    );
+
+    // 4. Verify extraneous files do not remain
+    assert!(!temp_dir.join("npm-shrinkwrap.json").exists());
+    assert!(!temp_dir.join("pnpm-lock.yaml").exists());
+
+    let _ = fs::remove_dir_all(&temp_dir);
 }

@@ -1,29 +1,34 @@
-# Vexa SCA: Software Composition Analysis & Security Engine
+# Vexa SCA: Enterprise-Grade Software Composition Analysis & Security Engine
 
-[![Rust Edition](https://img.shields.io/badge/Rust-2021%20Edition-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Release](https://img.shields.io/badge/Release-v1.2.0%20GA-brightgreen.svg?logo=github)](https://github.com/noviqtechnologies/vexa-sca/releases)
+[![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg?logo=githubactions)](https://github.com/noviqtechnologies/vexa-sca/actions)
+[![Tests](https://img.shields.io/badge/Tests-153%20Passing-success.svg)](#automated-tests--verification)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![Rust Edition](https://img.shields.io/badge/Rust-2021%20%7C%20MSRV%201.99.1%2B-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-brightgreen.svg)](#cross-platform-installation--setup)
-[![Tests](https://img.shields.io/badge/Tests-120%2B%20Passing-success.svg)](#automated-tests--verification)
-[![Node.js CLI Shim](https://img.shields.io/badge/Node.js%20Wrapper-Pilot%20Ready-339933?logo=node.js&logoColor=white)](#option-2-run-via-nodejs--npx-wrapper-all-platforms)
-[![Docs](https://img.shields.io/badge/Docs-Guides%20%26%20Reference-blueviolet?logo=read-the-docs&logoColor=white)](#-documentation--workflow-guides)
+[![Provenance](https://img.shields.io/badge/Attestation-GitHub%20Provenance-blue.svg)](SECURITY.md#software-supply-chain--artifact-integrity)
+[![SBOM](https://img.shields.io/badge/SBOM-CycloneDX%201.5%20%7C%20SPDX%202.3-blueviolet.svg)](#5-software-bill-of-materials-sbom-cyclonedx--spdx)
+[![SARIF](https://img.shields.io/badge/SARIF-OASIS%202.1.0-blueviolet.svg)](#7-cicd-quality-gates--policy-enforcement)
+[![Security Policy](https://img.shields.io/badge/Security-Policy%20%26%20SLA-red.svg)](SECURITY.md)
 
-**Vexa SCA** (`vexa-sca`) is an open-source, high-performance Software Composition Analysis engine built in Rust. It is tailored for modern JavaScript and TypeScript development (`npm` `package-lock.json` v2/v3, `pnpm`) in pull request and CI/CD automation workflows with GitHub Actions.
+**Vexa SCA** (`vexa-sca`) is an open-source, high-performance Software Composition Analysis (SCA) engine built in Rust. Engineered specifically for enterprise DevSecOps pipelines and modern pull-request automation, Vexa SCA delivers ultra-fast, reproducible vulnerability triage, deep transitive dependency graphing, positive-proof verdict integrity, and authoritative CI result surfaces.
 
-Vexa SCA delivers fast, reproducible vulnerability triage by prioritizing actionable findings via **Repository Usage Signals** (direct source imports, `package.json` scripts/bin entries, and config references) without unsafely suppressing unproven risks under positive-proof verdict integrity rules. It provides native PR-differential scanning (`--baseline`), same-major remediation recommendations, CycloneDX v1.5 / SPDX v2.3 SBOM generation, and authoritative CI result surfaces (GitHub Actions Step Summaries, workflow annotations, and standard process exit codes).
-
-> [!NOTE]
-> **Production Status (Pilot Ready vs Experimental):**
-> - **Production Pilot Target:** Node.js / JavaScript / TypeScript (`package-lock.json` v2 & v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9), Repository Usage Signals (AST single-pass import/call matching), PR-diff mode (`--baseline`), GitHub Actions integration (`vexa-sca ci`, `vexa-sca init`), transactional same-major remediation (`vexa-sca fix`), strict policy engine (`.vexa-sca`), exit code contract (0, 1, 2, 3).
-> - **Experimental / Fixture Coverage:** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn (`yarn.lock`), Container OS packages (`vexa-sca container`), Copyleft license audit (`vexa-sca licenses`). Entries in this tier are verified against single fixture samples, not full production ecosystem suites.
+> [!IMPORTANT]
+> **Release Status: General Availability (GA) — Release v1.2.0**
+> - **Tier 1 (GA / Production Ready):** Node.js / JavaScript / TypeScript (`package-lock.json` v2 & v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9), Repository Usage Signals (heuristic AST single-pass import/call matching), PR-differential gating (`--baseline`), GitHub Actions native CI integration (`vexa-sca ci`, `vexa-sca init`), reviewed same-major remediation proposals with byte-for-byte rollback guarantees (`vexa-sca fix`), strict policy-as-code (`.vexa-sca`), and deterministic exit code contracts (`0`, `1`, `2`, `3`).
+> - **Tier 2 (Experimental / Community Preview):** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn (`yarn.lock`), Cargo (`Cargo.lock`), Go (`go.sum`), Container OS packages (`vexa-sca container`), and Copyleft license auditing (`vexa-sca licenses`).
+>
+> **Verdict Integrity Rule:** Repository Usage Signals are heuristic syntactic triage aids. Verdict integrity mandates that missing AST signals never certify runtime safety or suppress unverified findings.
 
 <p align="center">
   <a href="#quick-start"><b>Quick Start</b></a> •
-  <a href="#what-vexa-sca-does-not-do"><b>What Vexa Does Not Do</b></a> •
+  <a href="#multi-ecosystem-coverage--maturity-levels"><b>Support Matrix</b></a> •
   <a href="#-two-operational-profiles-scan-vs-ci"><b>Profiles (Scan vs CI)</b></a> •
-  <a href="#-process-exit-code-contract"><b>Exit Codes</b></a> •
-  <a href="docs/open-source-sca.md"><b>Open Source SCA Guide</b></a> •
-  <a href="docs/cli-usage.md"><b>CLI Guide</b></a> •
-  <a href="docs/cicd-integration.md"><b>CI/CD Pipelines</b></a>
+  <a href="#-process-exit-code-contract--precedence"><b>Exit Codes</b></a> •
+  <a href="docs/open-source-sca.md"><b>Architecture Guide</b></a> •
+  <a href="docs/cli-usage.md"><b>CLI Reference</b></a> •
+  <a href="docs/cicd-integration.md"><b>CI/CD Pipelines</b></a> •
+  <a href="SECURITY.md"><b>Security Policy</b></a>
 </p>
 
 ---
@@ -47,27 +52,31 @@ Vexa SCA delivers fast, reproducible vulnerability triage by prioritizing action
 | 🚦 [**Process Exit Code Contract**](#process-exit-code-contract) | Deterministic automation contract: `0` (clean/pass), `1` (quality gate failure), `2` (config error), `3` (advisory outage / incomplete data). | `vexa-sca ci` |
 
 > [!TIP]
-> **Try It in 60 Seconds**:
+> **Quick Start & Evaluation**:
 > 
-> Install `vexa-sca` globally via Cargo (or run directly in this repo with `cargo run --`):
+> Build `vexa-sca` from a reviewed, immutable source revision:
 > ```bash
-> cargo install --git https://github.com/noviqtechnologies/vexa-sca.git
+> git clone https://github.com/noviqtechnologies/vexa-sca.git
+> cd vexa-sca
+> git checkout v1.2.0
+> cargo build --locked --release
 > ```
-> **1. Interactive Visual Scan & Reachability Triage**
+> 
+> **1. Interactive Visual Scan & Usage Signal Triage**
 > ```bash
 > # Scan any project and generate a standalone offline HTML audit dashboard:
-> vexa-sca scan --html-file sca-report.html
+> target/release/vexa-sca scan --html-file sca-report.html
 > ```
-> *Why developers keep it:* Eliminates alert fatigue in seconds. AST Repository Usage Signals reveal which vulnerable packages are actually imported (`IMPORTED_SOURCE`) versus unreferenced noise, combined with EPSS exploit likelihood scores in a zero-CDN, dark-mode interactive HTML report.
+> AST Repository Usage Signals reveal which vulnerable packages have direct import/require references (`IMPORTED_SOURCE`) versus unreferenced dependencies within the scanned scope. Signals are heuristic triage aids, do not certify runtime safety, and do not suppress findings from reports.
 > 
-> **2. Safe Automated Lockfile Remediation**
+> **2. Automated Remediation Proposals**
 > ```bash
-> # Automatically patch vulnerable dependencies with non-breaking updates:
-> vexa-sca fix
+> # Preview proposed fixes without altering files:
+> target/release/vexa-sca fix --dry-run
 > ```
-> *Why developers keep it:* Detection without remediation is friction. `vexa-sca fix` automatically patches vulnerable dependencies in your lockfile (`package-lock.json`, `pnpm-lock.yaml`) prioritizing **same-major patch/minor updates** to eliminate vulnerabilities without breaking your code (preview changes anytime with `vexa-sca fix --dry-run`).
+> `vexa-sca fix` proposes updates prioritizing same-major patch/minor updates. It provides best-effort file restoration of captured root manifests and lockfiles if package-manager regeneration fails, but cannot undo uncaptured filesystem or package-manager side effects.
 > 
-> *(Evaluating in this cloned repository? Simply replace `vexa-sca` with `cargo run -- scan test/fixtures/npm-app` or `node bin/vexa-sca.js`).*
+> *(Evaluating in this cloned repository? Run `cargo run -- scan test/fixtures/npm-app` or `node bin/vexa-sca.js`).*
 
 ---
 
@@ -80,7 +89,7 @@ Vexa SCA delivers fast, reproducible vulnerability triage by prioritizing action
 - [Architecture & Core Concepts](#architecture--core-concepts)
 - [Multi-Ecosystem Coverage](#multi-ecosystem-coverage)
 - [Key Features](#key-features)
-  - [1. Reachability Analysis (Deep SCA)](#1-reachability-analysis-deep-sca)
+  - [1. Repository Usage Signal Analysis & Verdict Integrity](#1-repository-usage-signal-analysis--verdict-integrity)
   - [2. Automated Lockfile Patcher & PR Opener (`fix`)](#2-automated-lockfile-patcher--pr-opener-fix)
   - [3. Policy & Suppression Engine (`.vexa-sca`)](#3-policy--suppression-engine-vexa-sca)
   - [4. License Compliance Scanner](#4-license-compliance-scanner)
@@ -236,27 +245,31 @@ vexa-sca --help
 
 ## Architecture & Core Concepts
 
+<p align="center">
+  <img src="docs/assets/vexa-sca-architecture.svg" alt="Vexa SCA Architecture & Data Flow Diagram" width="100%" />
+</p>
+
 ```mermaid
 graph TD
-    A["Manifests & Lockfiles\n(npm, pnpm, Yarn, Pip, Cargo, Go, Maven)"] --> B["Lockfile Ingestion & Parser\n(Multi-Format Detection)"]
-    K["Container Images & Rootfs\n(Alpine APK, Debian DPKG, Dockerfile, Tarballs)"] --> B2["OS Package Parser\n(Container Scanner Engine)"]
-    B --> C["DAG Dependency Graph Engine\n(Vexa DepGraph Schema v1.2.0)"]
+    A["Manifests & Lockfiles<br/>(npm, pnpm, Yarn, Pip, Cargo, Go, Maven)"] --> B["Lockfile Ingestion & Parser<br/>(Multi-Format Detection)"]
+    K["Container Images & Rootfs<br/>(Alpine APK, Debian DPKG, Dockerfile, Tarballs)"] --> B2["OS Package Parser<br/>(Container Scanner Engine)"]
+    B --> C["DAG Dependency Graph Engine<br/>(Vexa DepGraph Schema v1.2.0)"]
     B2 --> C
-    C --> D["Vulnerability & License Intelligence\n(OSV / CVE / SPDX / Local Cache)"]
-    D --> E["Reachability Engine (Deep SCA)\n(AST Source Call-Graph Tracing)"]
-    E --> F[".vexa-sca Policy Engine\n(Suppression Rules & Expiry Validation)"]
-    F --> G["Terminal, JSON, Markdown, SARIF v2.1.0\n(GitHub Security / GitLab SAST)"]
-    F --> H["Automated Lockfile Patcher\n(vexa-sca fix & GitHub PR Opener)"]
-    F --> I["SBOM Exporter\n(CycloneDX v1.5 / SPDX v2.3 JSON)"]
-    F --> J["Interactive HTML Audit Dashboard\n(Single-File, Offline-Ready UI)"]
-    F --> L["CI/CD Quality Gate\n(Threshold Enforcement & Exit Codes)"]
+    C --> D["Vulnerability & License Intelligence<br/>(OSV / CVE / SPDX / Local Cache)"]
+    D --> E["Repository Usage Signal Engine<br/>(AST Source Reference Tracing)"]
+    E --> F[".vexa-sca Policy Engine<br/>(Suppression Rules & Expiry Validation)"]
+    F --> G["Terminal, JSON, Markdown, SARIF v2.1.0<br/>(GitHub Security / GitLab SAST)"]
+    F --> H["Automated Lockfile Patcher<br/>(vexa-sca fix & GitHub PR Opener)"]
+    F --> I["SBOM Exporter<br/>(CycloneDX v1.5 / SPDX v2.3 JSON)"]
+    F --> J["Interactive HTML Audit Dashboard<br/>(Single-File, Offline-Ready UI)"]
+    F --> L["CI/CD Quality Gate<br/>(Threshold Enforcement & Exit Codes)"]
 ```
 
 ### Core Architectural Pillars
 1. **DAG Dependency Representation**: Modeled after standard dep-graph schema (Schema v1.2.0). Every dependency node is mapped in a Directed Acyclic Graph with distinct `nodeId` and `pkgId` coordinates (`name@version`).
 2. **Deep-Path DFS Tracing (`pkgPathsToRoot`)**: Transitive (nested) vulnerabilities trace their exact propagation chains back to the root application.
-3. **Reachability Analysis (Deep SCA)**: Static AST inspection scans your actual source code to verify if the vulnerable function (e.g., `_.template`, `parse()`, `Session.request`) is invoked at runtime, eliminating up to 80% of false positives.
-4. **Resilient Offline Cache**: Vulnerability lookups are cached on disk (`.sca-cache/`) with SHA-256 hashed keys to minimize network roundtrips and enable air-gapped CI scanning.
+3. **Repository Usage Signals**: Static AST inspection scans first-party source code to detect whether vulnerable packages have direct import/require references (`IMPORTED_SOURCE`), assisting finding triage without unsafely suppressing unproven risks.
+4. **Resilient Local Cache**: Vulnerability lookups are cached on disk (`.sca-cache/`) with SHA-256 hashed keys to minimize repeat network queries (note: `.sca-cache/` is not a complete, signed, indefinitely fresh offline vulnerability database).
 5. **Quality Gates & Policy Compliance**: Comprehensive policy evaluation that integrates seamlessly into automated CI/CD pipelines.
 
 ---
@@ -265,15 +278,15 @@ graph TD
 
 Vexa SCA automatically identifies project manifests, lockfiles, and container images without manual configuration:
 
-| Ecosystem | Supported Files | Maturity Level | Detection & Features |
+| Ecosystem | Supported Files | Support Tier & Maturity | Detection & Features |
 | :--- | :--- | :--- | :--- |
-| **Node.js / JavaScript / TypeScript** | `package-lock.json` (v2, v3)<br>`pnpm-lock.yaml` (v5, v6, v9) | **GA / Production Ready (P0)** | Full dependency tree, transitive dependencies, repository usage signals, same-major remediation |
-| **Python** | `requirements.txt` | **Experimental / Early Access (P2)** | Unpinned requirements preserved as `*` (no `0.0.0` guessing), basic lexical import detection |
-| **Java** | `pom.xml` | **Experimental / Early Access (P2)** | Maven XML coordinate parsing, unresolved versions flagged accurately |
-| **Yarn v1** | `yarn.lock` | **Experimental / Early Access (P2)** | Yarn v1 lockfile resolution |
-| **Go** | `go.sum`, `go.mod` | **Experimental / Early Access (P2)** | Go modules dependency tree, version extraction |
-| **Rust** | `Cargo.lock` | **Experimental / Early Access (P2)** | TOML package blocks, workspace dependency resolution |
-| **Container & OS Packages** | Alpine (`apk`), Debian/Ubuntu (`dpkg`), Dockerfile, `.tar`/`.tar.gz` | **Experimental / Early Access (P2)** | Distribution auto-detection, OS package vulnerability auditing |
+| **Node.js / JavaScript / TypeScript** | `package-lock.json` (v2, v3)<br>`npm-shrinkwrap.json`<br>`pnpm-lock.yaml` (v5, v6, v9) | **Tier 1: GA / Production Ready (P0)** | Full dependency graph, deep-path transitive DFS, AST repository usage signals, same-major remediation with byte-for-byte rollback, SARIF/SBOM exports |
+| **Python** | `requirements.txt` | **Tier 2: Experimental / Preview (P2)** | Unpinned requirements preserved as `*` (no guessing), basic lexical import detection |
+| **Java** | `pom.xml` | **Tier 2: Experimental / Preview (P2)** | Maven XML coordinate parsing, unresolved versions flagged accurately |
+| **Yarn v1** | `yarn.lock` | **Tier 2: Experimental / Preview (P2)** | Yarn v1 lockfile resolution |
+| **Go** | `go.sum`, `go.mod` | **Tier 2: Experimental / Preview (P2)** | Go modules dependency tree, version extraction |
+| **Rust** | `Cargo.lock` | **Tier 2: Experimental / Preview (P2)** | TOML package blocks, workspace dependency resolution |
+| **Container & OS Packages** | Alpine (`apk`), Debian/Ubuntu (`dpkg`), Dockerfile, `.tar`/`.tar.gz` | **Tier 2: Experimental / Preview (P2)** | Distribution auto-detection, OS package vulnerability auditing |
 
 ---
 
@@ -304,20 +317,20 @@ Interactive, local developer experience:
 Automated pipeline execution designed for GitHub Actions, GitLab CI, and Bitbucket Pipelines:
 - **Fails Closed on Outages**: If the OSV advisory database is unreachable or data is incomplete, exits with code `3` by default to prevent silent false negatives (suppressed with `--allow-unavailable`).
 - **PR-Diff Baseline Gating**: With `--baseline <file>`, only newly introduced findings fail the quality gate; pre-existing findings are reported as non-blocking baseline findings.
-- **Authoritative PR Surfaces**: Writes rich Markdown to `$GITHUB_STEP_SUMMARY` and emits workflow annotations (`::error::`, `::warning::`). In restricted-token environments (Dependabot or Fork PRs where PR comments and SARIF uploads fail), Job Summaries and Exit Codes remain 100% authoritative.
+- **Platform-Native PR Surfaces**: Writes rich Markdown to `$GITHUB_STEP_SUMMARY` and emits workflow annotations (`::error::`, `::warning::`). In restricted-token environments (Dependabot or Fork PRs where PR comment write permissions fail), Job Summaries and exit codes provide direct CI surfaces.
 
 ---
 
-## 🚦 Process Exit Code Contract
+## 🚦 Process Exit Code Contract & Precedence
 
-Vexa SCA adheres to a strict, deterministic process exit code contract:
+Vexa SCA enforces a strict, unambiguous precedence order across both `scan` and `ci` profiles:
 
-| Exit Code | Classification | Description & Conditions | Suppressed by `--no-fail`? |
-| :---: | :--- | :--- | :---: |
-| **`0`** | **Success / Clean** | All quality gates passed, no policy-violating vulnerabilities found, or baseline diff clean. | N/A |
-| **`1`** | **Quality Gate Failure** | Vulnerabilities detected that violate active quality gate rules (`--fail-on <severity>`, `--fail-on-reachable`, or license policies). | **Yes** (converted to `0`) |
-| **`2`** | **Configuration / Schema Error** | Invalid command-line arguments, conflicting flags, invalid or expired `.vexa-sca` policy file, missing mandatory audit fields (`reason`, `owner`, `ticket`, `expires`), or unparseable manifests. | **No** (never suppressed) |
-| **`3`** | **Advisory Outage / Incomplete Data** | Upstream OSV database unreachable and no cache available, or completeness limit exceeded during analysis in CI profile. Prevents silent false negatives. Suppress explicitly with `--allow-unavailable`. | **No** (never suppressed) |
+| Precedence | Exit Code | Classification | Description & Conditions | Suppressed by `--no-fail`? |
+| :---: | :---: | :--- | :--- | :---: |
+| **1st** | **`2`** | **Configuration / Argument Error** | Invalid command-line arguments, conflicting flags, invalid or expired `.vexa-sca` policy file, missing mandatory audit fields (`reason`, `owner`, `ticket`, `expires`). **Rejects execution before scanning begins.** | **No** (never suppressed) |
+| **2nd** | **`3`** | **Incomplete Requested Scan Data** | Unparseable/corrupted manifest, analysis limits exceeded (e.g., 500-source-file cap hit), upstream advisory lookup failure without usable cache, or report file generation/write failure. **Takes precedence over a simultaneous quality gate failure.** Findings and severity gate status are still recorded in reports and summaries. | **No** (never suppressed; `--allow-unavailable` waives advisory outages only, never manifest, source-limit, or write failures) |
+| **3rd** | **`1`** | **Quality Gate Failure** | Complete scan finished, but detected vulnerabilities or license policies violate configured thresholds (`--fail-on <severity>`, `--fail-on-reachable`, or license limits). | **Yes** (converted to `0` for report-only automation) |
+| **4th** | **`0`** | **Success / Clean** | Complete scan finished and all configured quality gates passed with no policy violations. | N/A |
 
 ---
 
@@ -334,6 +347,9 @@ vexa-sca init --enforce
 ```
 
 This generates `.github/workflows/vexa-sca.yml` pinned to immutable commit SHAs (`actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`) for supply chain security.
+
+> [!TIP]
+> **Ready-to-use Workflow Configurations**: See [docs/cicd-integration.md](docs/cicd-integration.md#complete-github-actions-workflow-githubworkflowsvexa-scayml) for complete copy-pasteable GitHub Actions (`.github/workflows/vexa-sca.yml`) and GitLab CI (`.gitlab-ci.yml`) pipeline definitions with SARIF and SBOM archiving.
 
 ---
 
@@ -360,13 +376,13 @@ vexa-sca scan
 
 ---
 
-### 2. Automated Lockfile Patcher & Remediation (`fix`)
+### 2. Automated Lockfile Remediation Proposals (`fix`)
 
-Remediate vulnerabilities safely with deterministic upgrade paths:
+Propose dependency updates to remediate vulnerabilities:
 - **Same-Major Upgrade Preference**: Prioritizes non-breaking patch and minor version bumps within the current major version series (e.g. upgrading `1.0.4` to `1.0.5` rather than jumping to breaking `2.0.0`).
-- **Major Upgrade Warnings**: When only a major breaking version resolves an advisory, Vexa SCA clearly highlights `[MAJOR UPGRADE WARNING]` and recommends verification.
-- **Transitive Remediation Advice**: For nested dependencies, provides package-manager-native advice (`npm audit fix` or lockfile overrides).
-- **Automated Pull Requests**: In CI or local development, automatically creates a dedicated git branch, applies fixes, and opens a GitHub Pull Request with structured change notes.
+- **Major Upgrade Warnings**: When only a major version resolves an advisory, Vexa SCA highlights `[MAJOR UPGRADE WARNING]` indicating potential API breaking changes.
+- **Transitive Remediation Advice**: For nested dependencies, provides manager-specific overrides (`overrides` in npm, `pnpm.overrides` in pnpm, `resolutions` in Yarn).
+- **Best-Effort File Restoration**: On failed lockfile regeneration, attempts to restore captured root manifests and lockfiles (`package.json`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`). Note that package-manager side effects (e.g. modified `node_modules`, registry caches, or uncaptured files) are outside this boundary. Review all changes before committing.
 
 ```bash
 # Preview proposed fixes without altering files
@@ -434,13 +450,13 @@ ignore:
 
 ### 4. License Compliance Scanner
 
-Categorize every third-party dependency by open source license and intellectual property risk:
-- **Permissive (Low Risk)**: MIT, Apache-2.0, BSD-2/3-Clause, ISC, CC0, Unlicense. Safe for proprietary and commercial distribution.
-- **Weak Copyleft (Medium Risk)**: LGPL-2.1/3.0, MPL-2.0, EPL-1.0/2.0, CDDL. Modifications to the library itself must typically remain open source.
-- **Strong Copyleft (High Risk / Viral GPL)**: GPL-2.0/3.0, AGPL-3.0, SSPL, EUPL. Can obligate the entire proprietary project to be licensed as open source.
+Categorize dependencies by open source license metadata and intellectual property risk categories:
+- **Permissive**: MIT, Apache-2.0, BSD-2/3-Clause, ISC, CC0, Unlicense.
+- **Weak Copyleft**: LGPL-2.1/3.0, MPL-2.0, EPL-1.0/2.0, CDDL.
+- **Strong Copyleft**: GPL-2.0/3.0, AGPL-3.0, SSPL, EUPL.
 
 > [!NOTE]
-> **Metadata Resolution**: License discovery extracts declared licenses from lockfile fields and local package descriptors (`package.json`, Cargo lockfiles, etc.). For lockfiles without embedded license fields (such as standard npm/pnpm lockfiles when `node_modules` is not yet installed locally), packages are conservatively classified as `UNKNOWN` rather than making unverified guesses.
+> **Metadata Resolution & Legal Disclaimer**: License discovery extracts declared license identifiers from manifests, lockfiles, and local package files. When license fields are absent or unresolved, packages are categorized as `UNKNOWN`. This scanner surfaces detected metadata only and does not provide legal advice or certify commercial distribution safety.
 
 ```bash
 vexa-sca licenses ./my-project
@@ -490,10 +506,11 @@ vexa-sca scan --html > report.html
 
 Automate pass/fail gates in build pipelines with customizable failure conditions and deterministic exit codes.
 
-#### Exit Code Contract:
-- **`0` (Success)**: Clean scan with no policy violations, OR `--no-fail` / `--report-only` is passed.
-- **`1` (Quality Gate Failure)**: Policy violations or active security vulnerabilities detected. **By default in CI and local runs**, discovering active vulnerabilities returns exit code `1` so CI pipelines fail securely without silent pass-throughs. If you only want to generate report files (JSON, HTML, SARIF, SBOM) or inspect vulnerabilities without breaking build scripts, pass `--no-fail` (or `--report-only`).
-- **`2` (Scan Error)**: Unrecoverable execution error (e.g. malformed lockfile, invalid file path, unreadable container archive).
+#### Exit Code Contract & Precedence:
+- **`2` (Config / Arg Error)**: Invalid arguments, malformed policy, expired waivers. Rejected before scanning.
+- **`3` (Incomplete Data)**: Advisory lookup failure, file cap hit, manifest parse error, or report-write failure. Takes precedence over gate failure.
+- **`1` (Quality Gate Failure)**: Complete scan finished, but findings exceed configured threshold (`--fail-on <severity>`, `--fail-on-reachable`, or license limits). Suppressed by `--no-fail`.
+- **`0` (Success)**: Complete scan finished with zero gate violations.
 
 - `--fail-on <low|medium|high|critical>`: Block builds when vulnerabilities equal or exceed the given severity.
 - `--fail-on-reachable`: Break builds only if a vulnerability has verified AST call-graph reachability.
@@ -610,11 +627,16 @@ vexa-sca ci [PATH] [OPTIONS]
 | :--- | :--- | :--- |
 | `[PATH]` | Argument | Target directory to scan (defaults to `.`) |
 | `--baseline <FILE>` | Option | Baseline report (JSON or SARIF) for PR-differential gating |
-| `--job-summary-file <FILE>` | Option | Path to write GitHub Job Summary markdown (or writes to `$GITHUB_STEP_SUMMARY`) |
-| `--fail-on <LVL>` | Option | Fail CI build with exit code 1 if vulnerabilities meet or exceed severity |
-| `--fail-on-licenses <CAT>` | Option | Fail CI build with exit code 1 on license risk |
+| `--job-summary-file <FILE>` | Option | Path to write GitHub Job Summary markdown (defaults to `$GITHUB_STEP_SUMMARY`) |
+| `--sarif-file <FILE>` | Option | Save standard OASIS SARIF v2.1.0 report to a file path (for GitHub Code Scanning) |
+| `--sbom <FORMAT>` | Option | Output Software Bill of Materials (`cyclonedx` or `spdx`) |
+| `--sbom-file <FILE>` | Option | Save SBOM report to a file path |
+| `--json` | Flag | Output report in JSON format |
+| `--markdown` | Flag | Output report in Markdown format |
+| `--fail-on <LVL>` | Option | Fail CI build with exit code 1 if vulnerabilities meet or exceed severity (`low`, `medium`, `high`, `critical`) |
+| `--fail-on-licenses <CAT>` | Option | Fail CI build with exit code 1 on license risk category |
 | `--allow-unavailable` | Flag | Escape hatch: exit 0 even if the advisory database is unreachable |
-| `--no-fail` | Flag | Non-blocking report mode (always exits 0 on findings) |
+| `--no-fail` | Flag | Non-blocking report mode (suppresses exit code 1 on findings) |
 
 ---
 
@@ -753,18 +775,18 @@ Standard CVSS scores reflect theoretical severity, not whether attackers are act
 # Prioritize vulnerabilities with a 20%+ probability of real-world exploitation
 vexa-sca scan --epss-threshold 0.20
 
-# Combine with reachability to eliminate both unreachable and non-exploited CVEs
-vexa-sca scan --reachable-only --epss-threshold 0.50
+# Filter by high EPSS exploit probability alongside usage signal triage
+vexa-sca scan --epss-threshold 0.50
 ```
 
 ---
 
-## ♾️ Open Engine Execution Policy
+## 🛡️ Privacy, Network Egress & Local Execution Policy
 
-Vexa SCA runs completely locally on your workstation and in CI/CD without cloud usage quotas, billing tiers, or account registration requirements:
-* **Local & CI Scans**: 100% **Unlimited**. Run scans on any public or private repository with zero rate limits, seat licensing, or artificial scan caps.
-* **Zero Telemetry**: Scans never transmit your source code, manifest structure, or private repository metadata to external tracking servers.
-* **Air-Gap Compatible**: Cache vulnerability metadata locally in `.sca-cache/` for reliable, deterministic offline and disconnected scanning.
+Vexa SCA operates as a standalone CLI tool without cloud accounts, billing tiers, or proprietary telemetry:
+* **Package Coordinate Disclosure**: Advisory enrichment queries the public OSV API (`api.osv.dev`) over HTTPS. Queries disclose package coordinates (`ecosystem`, `name`, `version`). No first-party source code, file paths, git metadata, or proprietary package contents are ever transmitted.
+* **Local Cache**: Advisory responses are cached locally on disk in `.sca-cache/` to reduce repeat lookups during development and CI. `.sca-cache/` is not a complete, signed, or indefinitely fresh offline vulnerability database; do not advertise air-gapped coverage based on cache hits.
+* **Standalone Execution**: Scans run locally on your workstation or CI agent without external SaaS dependencies.
 
 ---
 
@@ -936,28 +958,40 @@ fi
 
 ---
 
-## Automated Tests & Verification
+## Automated Tests & Release Verification
 
-Vexa SCA includes a comprehensive automated test suite covering all core engines, parsers, reporters, and gates:
+Vexa SCA enforces rigorous quality gates with 153 automated tests covering all core engines, lockfile parsers, reporters, rollback mechanisms, and CLI contracts:
 
 ```bash
-# Run all unit, integration, and E2E fixture tests (34 tests)
+# 1. Run all unit and integration tests (153 tests: 130 lib + 23 E2E)
 cargo test
 
-# Or via npm script
-npm test
+# 2. Run schema validation against pinned official SARIF 2.1.0, CycloneDX 1.5, and SPDX 2.3 schemas
+npm run validate:schemas
+
+# 3. Format, lint, and clippy audit
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
-### Test Suite Validations:
+### Verified Test Capabilities:
+- **Exit-Code Precedence Contract**: Table-driven tests validating `2` (Config error) > `3` (Incomplete scan) > `1` (Gate failure) > `0` (Success).
+- **Rollback Guarantees**: Real `pnpm` and `npm` install failure tests demonstrating byte-for-byte SHA-256 restoration of `package.json` and captured lockfiles.
+- **Official Schema Conformity**: Pinned JSON schemas (OASIS SARIF 2.1.0, CycloneDX 1.5, SPDX 2.3) independently verified via `ajv` validators.
 - **DAG Dependency Graph**: Cyclic dependency handling, DFS propagation paths to root, Schema v1.2.0 serialization.
-- **Parsers**: `package-lock.json` (v1, v2, v3), `yarn.lock`, `pnpm-lock.yaml`, `requirements.txt`, `Cargo.lock`, `go.sum`, `pom.xml`.
+- **Parsers**: `package-lock.json` (v1, v2, v3), `npm-shrinkwrap.json`, `pnpm-lock.yaml` (v5, v6, v9), `requirements.txt`, `Cargo.lock`, `go.sum`, `pom.xml`.
 - **Policy Engine**: Alias matching, active suppressions, and expired date invalidation.
-- **Fixer Engine**: Direct upgrades, `overrides` injection, backup restoration, and PR template generation.
-- **Software Bill of Materials (SBOM)**: CycloneDX v1.5 JSON spec conformity (PURLs, component dependencies, vulnerability blocks) & SPDX v2.3 JSON schema conformity.
-- **Interactive HTML Dashboard**: Offline zero-dependency HTML generator, glassmorphism UI, search/filtering script integrity, XSS HTML entity escaping.
-- **CI/CD Quality Gate**: Severity threshold calculations, reachable flag gating, copyleft license restrictions, and exit code accuracy.
-- **Container Scanner**: Alpine Linux `apk` database parsing, Debian/Ubuntu `dpkg` status parsing, `/etc/os-release` identification, Dockerfile analysis, and tarball extraction.
-- **SARIF v2.1.0 & Reporting**: Schema validation for OASIS SARIF v2.1.0, JSON, Markdown, and ANSI Terminal output.
+- **Remediation & Fixer**: Same-major upgrade preference, `overrides` injection, backup restoration, and PR template generation.
+- **Interactive HTML Dashboard**: Offline zero-dependency HTML generator, glassmorphism dark theme, live search/filter, and XSS HTML entity escaping.
+- **Container Scanner**: Alpine Linux `apk` database parsing, Debian/Ubuntu `dpkg` status parsing, `/etc/os-release` identification, and tarball extraction.
+
+For complete audit and verification records, see [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md).
+
+---
+
+## 🔒 Security Policy & Responsible Disclosure
+
+Vexa SCA is committed to the security of the global software supply chain. To report vulnerabilities confidentially, please review our [Security Policy (SECURITY.md)](SECURITY.md).
 
 ---
 

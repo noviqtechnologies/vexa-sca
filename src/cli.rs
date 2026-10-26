@@ -1357,7 +1357,7 @@ pub async fn run() {
                     }
 
                     if json {
-                        println!("{}", format_json_report(&res, &[], &[], None, None));
+                        println!("{}", format_json_report(&res, &[], &[], None, None, None));
                     } else {
                         render_terminal_report(&res, &[], &[], None, None);
                     }
@@ -1522,6 +1522,52 @@ pub async fn run() {
                             "No cloud telemetry or scan quotas enforced.".dimmed()
                         );
                     }
+                    // 5. CI/CD Quality Gate Evaluation (evaluated before report formatting so summaries reflect gate status)
+                    let mut effective_fail_on_reachable = fail_on_reachable;
+                    let mut effective_severity = None;
+
+                    if let Some(fo) = &fail_on {
+                        let lower = fo.trim().to_lowercase();
+                        if lower == "reachable" {
+                            effective_fail_on_reachable = true;
+                        } else if lower.starts_with("reachable-") || lower.starts_with("reachable_")
+                        {
+                            effective_fail_on_reachable = true;
+                            let sev_str = &lower[10..];
+                            effective_severity = Some(SeverityLevel::from_str_loose(sev_str));
+                        } else {
+                            effective_severity = Some(SeverityLevel::from_str_loose(&lower));
+                        }
+                    }
+
+                    if effective_fail_on_reachable {
+                        eprintln!(
+                            "{} --fail-on-reachable evaluates repository syntactic import/require usage, not runtime control-flow exploitability. Vulnerabilities with UNKNOWN reachability fail the gate unless --allow-unknown-reachability is set.",
+                            "Notice:".yellow().bold()
+                        );
+                    }
+
+                    let mut gate_scan_result = output.scan_result.clone();
+                    if !output.all_vulnerabilities.is_empty() {
+                        gate_scan_result.vulnerabilities = output.all_vulnerabilities.clone();
+                    }
+
+                    let gate_opts = QualityGateOptions {
+                        fail_on_severity: effective_severity,
+                        fail_on_reachable: effective_fail_on_reachable,
+                        fail_on_unknown_reachability,
+                        allow_unknown_reachability,
+                        fail_on_licenses,
+                        fail_on_unmaintained,
+                        no_fail,
+                        baseline_mode: baseline.is_some(),
+                    };
+                    let gate_res = QualityGate::evaluate(
+                        &gate_scan_result,
+                        output.license_audit.as_ref(),
+                        &gate_opts,
+                    );
+
                     let project_name = output
                         .manifest_file
                         .parent()
@@ -1568,6 +1614,7 @@ pub async fn run() {
                             output.license_audit.as_ref(),
                             project_name,
                             Some(&output.manifest_file),
+                            Some(&gate_res),
                         ))
                     } else {
                         None
@@ -1662,7 +1709,8 @@ pub async fn run() {
                                 &output.suppressed,
                                 &output.remediations,
                                 output.license_audit.as_ref(),
-                                output.policy_file.as_deref()
+                                output.policy_file.as_deref(),
+                                Some(&gate_res),
                             )
                         );
                     } else if markdown {
@@ -1688,8 +1736,11 @@ pub async fn run() {
 
                     // Write GitHub Step Summary if env var is set
                     if let Some(summary_env) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-                        let summary_md =
-                            format_github_step_summary(&output.scan_result, &output.remediations);
+                        let summary_md = format_github_step_summary(
+                            &output.scan_result,
+                            &output.remediations,
+                            Some(&gate_res),
+                        );
                         use std::io::Write;
                         if let Ok(mut f) = std::fs::OpenOptions::new()
                             .create(true)
@@ -1700,65 +1751,31 @@ pub async fn run() {
                         }
                     }
 
-                    // 5. CI/CD Quality Gate Evaluation
-                    let mut effective_fail_on_reachable = fail_on_reachable;
-                    let mut effective_severity = None;
-
-                    if let Some(fo) = &fail_on {
-                        let lower = fo.trim().to_lowercase();
-                        if lower == "reachable" {
-                            effective_fail_on_reachable = true;
-                        } else if lower.starts_with("reachable-") || lower.starts_with("reachable_")
-                        {
-                            effective_fail_on_reachable = true;
-                            let sev_str = &lower[10..];
-                            effective_severity = Some(SeverityLevel::from_str_loose(sev_str));
-                        } else {
-                            effective_severity = Some(SeverityLevel::from_str_loose(&lower));
-                        }
-                    }
-
-                    if effective_fail_on_reachable {
-                        eprintln!(
-                            "{} --fail-on-reachable evaluates repository syntactic import/require usage, not runtime control-flow exploitability. Vulnerabilities with UNKNOWN reachability fail the gate unless --allow-unknown-reachability is set.",
-                            "Notice:".yellow().bold()
-                        );
-                    }
-
-                    let mut gate_scan_result = output.scan_result.clone();
-                    if !output.all_vulnerabilities.is_empty() {
-                        gate_scan_result.vulnerabilities = output.all_vulnerabilities.clone();
-                    }
-
-                    let gate_opts = QualityGateOptions {
-                        fail_on_severity: effective_severity,
-                        fail_on_reachable: effective_fail_on_reachable,
-                        fail_on_unknown_reachability,
-                        allow_unknown_reachability,
-                        fail_on_licenses,
-                        fail_on_unmaintained,
-                        no_fail,
-                        baseline_mode: baseline.is_some(),
-                    };
-                    let gate_res = QualityGate::evaluate(
-                        &gate_scan_result,
-                        output.license_audit.as_ref(),
-                        &gate_opts,
-                    );
-
                     if !json && !sarif && !html && sbom.is_none() {
                         QualityGate::print_terminal_summary(&gate_res);
                     }
 
-                    if !gate_res.passed {
-                        exit(1);
-                    }
+                    // Strict precedence contract:
+                    // 3 (incomplete scan data) takes precedence over finding quality gate failure (1).
                     if incomplete_scan_requires_exit3(&output.scan_result, allow_unavailable) {
                         eprintln!(
-                            "{} Scan data is incomplete; refusing a successful exit. Review the completeness report or explicitly allow an advisory-only outage with --allow-unavailable.",
+                            "{} Scan data is incomplete; refusing a successful exit (exit code 3 takes precedence over gate status). Review the completeness report or explicitly allow an advisory-only outage with --allow-unavailable.",
                             "Error:".red().bold()
                         );
+                        if !gate_res.passed {
+                            eprintln!(
+                                "{} Configured quality gate also failed on available findings:",
+                                "Notice:".yellow().bold()
+                            );
+                            for reason in &gate_res.failure_reasons {
+                                eprintln!("  {} {}", "✖".red(), reason);
+                            }
+                        }
                         exit(3);
+                    }
+
+                    if !gate_res.passed {
+                        exit(1);
                     }
                 }
                 Err(e) => {
@@ -1892,6 +1909,53 @@ pub async fn run() {
                             output.scan_result.vulnerabilities.len();
                     }
 
+                    // CI Quality Gate Evaluation (evaluated before reports so summaries reflect gate status)
+                    let mut effective_fail_on_reachable = fail_on_reachable;
+                    let mut effective_severity = None;
+
+                    if let Some(fo) = &fail_on {
+                        let lower = fo.trim().to_lowercase();
+                        if lower == "reachable" {
+                            effective_fail_on_reachable = true;
+                        } else if lower.starts_with("reachable-") || lower.starts_with("reachable_")
+                        {
+                            effective_fail_on_reachable = true;
+                            let sev_str = &lower[10..];
+                            effective_severity = Some(SeverityLevel::from_str_loose(sev_str));
+                        } else {
+                            effective_severity = Some(SeverityLevel::from_str_loose(&lower));
+                        }
+                    }
+
+                    if effective_fail_on_reachable {
+                        eprintln!(
+                            "{} --fail-on-reachable evaluates repository syntactic import/require usage, not runtime control-flow exploitability. Vulnerabilities with UNKNOWN reachability fail the gate unless --allow-unknown-reachability is set.",
+                            "Notice:".yellow().bold()
+                        );
+                    }
+
+                    let mut gate_scan_result = output.scan_result.clone();
+                    if !output.all_vulnerabilities.is_empty() {
+                        gate_scan_result.vulnerabilities = output.all_vulnerabilities.clone();
+                    }
+
+                    let gate_opts = QualityGateOptions {
+                        fail_on_severity: effective_severity,
+                        fail_on_reachable: effective_fail_on_reachable,
+                        fail_on_unknown_reachability,
+                        allow_unknown_reachability,
+                        fail_on_licenses,
+                        fail_on_unmaintained,
+                        no_fail,
+                        baseline_mode: baseline.is_some(),
+                    };
+
+                    let gate_res = QualityGate::evaluate(
+                        &gate_scan_result,
+                        output.license_audit.as_ref(),
+                        &gate_opts,
+                    );
+
                     // SARIF Report
                     let sarif_output = if sarif || sarif_file.is_some() {
                         Some(format_sarif_report(
@@ -1961,8 +2025,11 @@ pub async fn run() {
                     }
 
                     // Write GitHub Step Summary ($GITHUB_STEP_SUMMARY or custom file)
-                    let summary_md =
-                        format_github_step_summary(&output.scan_result, &output.remediations);
+                    let summary_md = format_github_step_summary(
+                        &output.scan_result,
+                        &output.remediations,
+                        Some(&gate_res),
+                    );
 
                     let summary_target = job_summary_file
                         .or_else(|| std::env::var_os("GITHUB_STEP_SUMMARY").map(PathBuf::from));
@@ -2012,7 +2079,8 @@ pub async fn run() {
                                 &output.suppressed,
                                 &output.remediations,
                                 output.license_audit.as_ref(),
-                                output.policy_file.as_deref()
+                                output.policy_file.as_deref(),
+                                Some(&gate_res),
                             )
                         );
                     } else if markdown {
@@ -2036,66 +2104,31 @@ pub async fn run() {
                         );
                     }
 
-                    // CI Quality Gate Evaluation
-                    let mut effective_fail_on_reachable = fail_on_reachable;
-                    let mut effective_severity = None;
-
-                    if let Some(fo) = &fail_on {
-                        let lower = fo.trim().to_lowercase();
-                        if lower == "reachable" {
-                            effective_fail_on_reachable = true;
-                        } else if lower.starts_with("reachable-") || lower.starts_with("reachable_")
-                        {
-                            effective_fail_on_reachable = true;
-                            let sev_str = &lower[10..];
-                            effective_severity = Some(SeverityLevel::from_str_loose(sev_str));
-                        } else {
-                            effective_severity = Some(SeverityLevel::from_str_loose(&lower));
-                        }
-                    }
-
-                    if effective_fail_on_reachable {
-                        eprintln!(
-                            "{} --fail-on-reachable evaluates repository syntactic import/require usage, not runtime control-flow exploitability. Vulnerabilities with UNKNOWN reachability fail the gate unless --allow-unknown-reachability is set.",
-                            "Notice:".yellow().bold()
-                        );
-                    }
-
-                    let mut gate_scan_result = output.scan_result.clone();
-                    if !output.all_vulnerabilities.is_empty() {
-                        gate_scan_result.vulnerabilities = output.all_vulnerabilities.clone();
-                    }
-
-                    let gate_opts = QualityGateOptions {
-                        fail_on_severity: effective_severity,
-                        fail_on_reachable: effective_fail_on_reachable,
-                        fail_on_unknown_reachability,
-                        allow_unknown_reachability,
-                        fail_on_licenses,
-                        fail_on_unmaintained,
-                        no_fail,
-                        baseline_mode: baseline.is_some(),
-                    };
-
-                    let gate_res = QualityGate::evaluate(
-                        &gate_scan_result,
-                        output.license_audit.as_ref(),
-                        &gate_opts,
-                    );
-
                     if !json && !sarif && sbom.is_none() {
                         QualityGate::print_terminal_summary(&gate_res);
                     }
 
-                    if !gate_res.passed {
-                        exit(1);
-                    }
+                    // Strict precedence contract:
+                    // 3 (incomplete scan data) takes precedence over finding quality gate failure (1).
                     if incomplete_scan_requires_exit3(&output.scan_result, allow_unavailable) {
                         eprintln!(
-                            "{} Scan data is incomplete; refusing a successful exit. Review the completeness report or explicitly allow an advisory-only outage with --allow-unavailable.",
+                            "{} Scan data is incomplete; refusing a successful exit (exit code 3 takes precedence over gate status). Review the completeness report or explicitly allow an advisory-only outage with --allow-unavailable.",
                             "Error:".red().bold()
                         );
+                        if !gate_res.passed {
+                            eprintln!(
+                                "{} Configured quality gate also failed on available findings:",
+                                "Notice:".yellow().bold()
+                            );
+                            for reason in &gate_res.failure_reasons {
+                                eprintln!("  {} {}", "✖".red(), reason);
+                            }
+                        }
                         exit(3);
+                    }
+
+                    if !gate_res.passed {
+                        exit(1);
                     }
                 }
                 Err(e) => {
@@ -2264,6 +2297,7 @@ ignore:
                             output.license_audit.as_ref(),
                             &output.os_info.name,
                             Some(&target),
+                            None,
                         ))
                     } else {
                         None
@@ -2325,7 +2359,8 @@ ignore:
                                 &[],
                                 &[],
                                 output.license_audit.as_ref(),
-                                None
+                                None,
+                                None,
                             )
                         );
                     } else if markdown {

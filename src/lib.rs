@@ -518,6 +518,7 @@ mod tests {
             output.license_audit.as_ref(),
             "sample-npm-app",
             Some(&output.manifest_file),
+            None,
         );
 
         assert!(html.contains("<!DOCTYPE html>"));

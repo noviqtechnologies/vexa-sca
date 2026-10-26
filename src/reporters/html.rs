@@ -15,6 +15,7 @@ pub fn format_html_report(
     license_audit: Option<&LicenseAudit>,
     project_name: &str,
     manifest_file: Option<&Path>,
+    quality_gate: Option<&crate::scanner::quality_gate::QualityGateResult>,
 ) -> String {
     let timestamp = Utc::now().to_rfc2822();
     let manifest_display = manifest_file
@@ -281,6 +282,33 @@ pub fn format_html_report(
     } else {
         String::new()
     };
+    let (gate_val_style, gate_status_text) = match quality_gate {
+        Some(gate) if gate.passed => ("color: var(--safe);", "PASSED"),
+        Some(_) => ("color: var(--crit);", "FAILED"),
+        None => ("color: var(--text-muted);", "NOT EVALUATED"),
+    };
+
+    let quality_gate_section = match quality_gate {
+        Some(gate) if !gate.failure_reasons.is_empty() => {
+            let mut list = String::new();
+            for r in &gate.failure_reasons {
+                list.push_str(&format!("<li>{}</li>", html_escape(r)));
+            }
+            let title = if gate.passed {
+                "Quality Gate Warnings (Waived via --no-fail)"
+            } else {
+                "Quality Gate Violations"
+            };
+            format!(
+                r#"<section class="section" id="quality-gate-sec" style="margin-bottom: 24px; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);">
+                    <h2 style="font-size: 18px; margin-bottom: 8px; color: var(--heading);">{}</h2>
+                    <ul style="padding-left: 20px; color: var(--text);">{}</ul>
+                </section>"#,
+                title, list
+            )
+        }
+        _ => String::new(),
+    };
 
     format!(
         r#"<!DOCTYPE html>
@@ -501,6 +529,10 @@ pub fn format_html_report(
                 <div class="stat-label">Medium Vulnerabilities</div>
             </div>
             <div class="stat-card">
+                <div class="stat-val" style="{gate_val_style}">{gate_status_text}</div>
+                <div class="stat-label">Quality Gate</div>
+            </div>
+            <div class="stat-card">
                 <div class="stat-val val-reach">{reachable_count}</div>
                 <div class="stat-label">Usage Signal Matched</div>
             </div>
@@ -509,6 +541,8 @@ pub fn format_html_report(
                 <div class="stat-label">No Usage Signal Observed (Not a Safety Finding)</div>
             </div>
         </div>
+
+        {quality_gate_section}
 
         <div class="controls">
             <input type="text" id="searchBox" class="search-box" placeholder="Search by package, CVE, GHSA, or title..." oninput="applyFilters()">
@@ -647,6 +681,7 @@ mod tests {
             None,
             "test-app",
             Some(Path::new("package-lock.json")),
+            None,
         );
 
         assert!(html.contains("<!DOCTYPE html>"));
@@ -749,7 +784,7 @@ mod tests {
             ],
         };
 
-        let html = format_html_report(&scan_result, &[], &rems, Some(&audit), "app", None);
+        let html = format_html_report(&scan_result, &[], &rems, Some(&audit), "app", None, None);
         assert!(html.contains("Introduced by hyper-rustls"));
         assert!(html.contains("Introduced by jsonschema"));
         assert!(html.contains("cat-weak"));
@@ -832,7 +867,24 @@ mod tests {
             }],
         };
 
-        let html = format_html_report(&scan_result, &[], &rems, Some(&audit), hostile_proj, None);
+        let gate = crate::scanner::quality_gate::QualityGateResult {
+            passed: false,
+            failure_reasons: vec!["Found 1 vulnerability exceeding threshold".to_string()],
+            reachable_violations: 1,
+            unknown_reachability_violations: 0,
+            deferred_unreachable_count: 0,
+            no_fail: false,
+        };
+
+        let html = format_html_report(
+            &scan_result,
+            &[],
+            &rems,
+            Some(&audit),
+            hostile_proj,
+            None,
+            Some(&gate),
+        );
 
         // Raw unescaped dangerous tags MUST NOT exist anywhere in the generated HTML
         assert!(!html.contains("<script>alert('pkg')</script>"));
@@ -842,6 +894,8 @@ mod tests {
         assert!(!html.contains("<script>alert('proj')</script>"));
         assert!(!html.contains("<a href=\"javascript:attack()\">"));
         assert!(!html.contains("<script>GPL-3.0</script>"));
+        assert!(!html.contains("evil<dir>/index.js"));
+        assert!(!html.contains("eval(\"<script>bad()</script>\")"));
 
         // Properly HTML entity-escaped forms MUST be present
         assert!(html.contains("&lt;script&gt;alert(&#39;pkg&#39;)&lt;/script&gt;"));
@@ -849,5 +903,14 @@ mod tests {
         assert!(html.contains("&lt;svg/onload=alert(&#39;id&#39;)&gt;"));
         assert!(html.contains("&lt;iframe src=&quot;javascript:alert(&#39;xss&#39;)&quot;&gt;"));
         assert!(html.contains("&lt;script&gt;alert(&#39;proj&#39;)&lt;/script&gt;"));
+        assert!(html.contains("evil&lt;dir&gt;/index.js"));
+        assert!(html.contains("eval(&quot;&lt;script&gt;bad()&lt;/script&gt;&quot;)"));
+        assert!(html.contains("Quality Gate Violations"));
+        assert!(html.contains("FAILED"));
+
+        // Confirm safety claims are never made for unobserved signals
+        assert!(!html.contains("Low Risk"));
+        assert!(!html.contains("low risk"));
+        assert!(html.contains("Not a Safety Finding"));
     }
 }

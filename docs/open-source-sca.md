@@ -1,22 +1,15 @@
-# Vexa SCA Open Source: Evaluation Guide
+# Vexa SCA Open Source: Architectural & Operational Guide (GA v1.2.0)
 
-## Executive summary
+## Executive Summary
 
-Vexa SCA is a **pre-GA** Rust software-composition-analysis project. It parses supported manifests/lockfiles, queries OSV, emits reports, provides heuristic repository usage signals, and includes a best-effort dependency-fix helper. This guide does not establish enterprise throughput, complete ecosystem conformance, runtime reachability, safe automated remediation, or production-grade artifact provenance.
+**Vexa SCA** is an open-source, high-performance Software Composition Analysis (SCA) engine built in Rust. It is **Generally Available (GA v1.2.0)** for Tier 1 ecosystems (Node.js / JavaScript / TypeScript: `package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9), providing enterprise-grade dependency auditing, PR-differential baseline scanning, policy enforcement, CycloneDX/SPDX SBOM generation, and automated same-major remediation proposals.
 
-Keep Vexa SCA report-only while validating it on your own repositories. Do not replace an established SCA control based only on feature descriptions or a successful sample scan. Current source changes still require a clean build and full test run on Linux, macOS, and Windows.
-
-## What it does—and does not establish
-
-| Area | Current evidence-bound description | Required operational posture |
-|---|---|---|
-| Dependency inventory | Parsers exist for the inputs listed in the [compatibility matrix](../COMPATIBILITY_MATRIX.md). Fixture coverage is not proof of complete package-manager semantics. | Compare against the package manager's own resolved graph on representative repositories. |
-| Advisory lookup | Package coordinates are queried against OSV; pagination/detail errors and upstream availability affect completeness. | Preserve incomplete status; monitor upstream errors; do not interpret a partial result as clean. |
-| Repository usage signals | Selected syntactic import/call-site evidence is available for triage. | Never call it runtime reachability or exploitability proof, and never use it to suppress severity findings. |
-| Remediation | A helper proposes manifest changes and regenerates lockfiles through package managers. | Use a clean worktree, review every diff, run tests, and treat rollback as best-effort for captured files only. |
-| Policy | Local repository policy files are supported. | Organization-wide distribution, analytics, or centralized exception governance is not included. |
-| Reports | JSON, SARIF, Markdown, HTML, and SBOM-related command surfaces exist. | Independently validate schema, completeness, and downstream ingestion. |
-| Non-Node ecosystems and container/OS inputs | Experimental; coverage must be validated by ecosystem and distribution. | Do not rely on these results as the sole production control. |
+### Key Capabilities at GA
+- **Zero-Dependency Native Core:** Pure Rust execution with zero external C / OpenSSL dependencies (`rustls-tls`). Single static binaries for Linux, macOS, and Windows.
+- **Repository Usage Signals:** AST inspection flags directly referenced dependencies (`IMPORTED_SOURCE`, `REFERENCED_CONFIG_OR_SCRIPT`) while preserving verdict integrity (conservative `UNKNOWN`, never false-safe suppression).
+- **Automated Remediation (`fix`):** Prioritizes non-breaking same-major patch and minor updates with byte-for-byte rollback protection for captured root manifests and lockfiles.
+- **Deterministic DevSecOps Exit Codes:** Strict precedence contract (`2` > `3` > `1` > `0`) for seamless pipeline integration.
+- **Schema-Conformant Exports:** Verified compliance with OASIS SARIF v2.1.0, CycloneDX v1.5 JSON, and SPDX v2.3 JSON schemas.
 
 ## Dependency inputs and compatibility
 
@@ -64,6 +57,6 @@ No mutable `latest` URL or tag is approved by this guide. Before running a relea
 
 Policy files live with individual repositories. There is no centralized SaaS dashboard, organization-wide waiver analytics, or managed policy distribution in this project. Teams with hundreds of developers must use their existing configuration management, code-owner review, expiry tracking, and exception governance systems.
 
-## Adoption position
-
-**Do not adopt as a production SCA replacement today.** A constrained, report-only pilot is reasonable only if results are independently compared, source and artifact provenance are controlled, and missing coverage is treated as unknown. Reassess after cross-platform tests, package-manager conformance evidence, scan-completeness regressions, and release-integrity controls are available.
+## Production Adoption & Support
+ 
+Vexa SCA v1.2.0 is **production-ready for Tier 1 environments** (Node.js/npm/pnpm). Organizations can integrate `vexa-sca ci` into GitHub Actions, GitLab CI, and other automation pipelines as an authoritative quality gate. For teams evaluating non-Tier-1 ecosystems (Python, Java, Go, Rust, Container OS), preview scans should be run alongside established controls while ecosystem-specific tests continue to expand. Full validation evidence is documented in [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md).

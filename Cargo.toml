@@ -1,11 +1,13 @@
 [package]
 name = "vexa-sca"
-version = "1.0.0"
+version = "1.2.0"
 edition = "2021"
 authors = ["Vexa"]
 description = "Vexa SCA - Software Composition Analysis & Security Engine (High-Performance Rust Core)"
 license = "Apache-2.0"
 default-run = "vexa-sca"
+
+[workspace]
 
 [lib]
 name = "vexa_sca"

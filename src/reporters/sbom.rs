@@ -30,6 +30,31 @@ impl SbomFormat {
     }
 }
 
+fn decode_base64_to_hex(input: &str) -> Option<String> {
+    const B64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut table = [255u8; 256];
+    for (i, &c) in B64_CHARS.iter().enumerate() {
+        table[c as usize] = i as u8;
+    }
+    let bytes = input.trim_end_matches('=').as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len() * 3 / 4);
+    let mut buffer = 0u32;
+    let mut bits = 0u32;
+    for &b in bytes {
+        let val = table[b as usize];
+        if val == 255 {
+            return None;
+        }
+        buffer = (buffer << 6) | (val as u32);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            decoded.push(((buffer >> bits) & 0xFF) as u8);
+        }
+    }
+    Some(hex::encode(decoded))
+}
+
 /// Generates a standard CycloneDX v1.5 JSON Software Bill of Materials (SBOM)
 pub fn format_cyclonedx_sbom(
     dep_graph: &DepGraph,
@@ -131,17 +156,33 @@ pub fn format_cyclonedx_sbom(
                 } else {
                     "SHA-256"
                 };
-                let clean_hash = integrity
+                let raw_hash = integrity
                     .trim_start_matches("sha512-")
                     .trim_start_matches("sha256-")
                     .trim_start_matches("sha1-");
 
-                comp_obj["hashes"] = json!([
-                    {
-                        "alg": alg,
-                        "content": clean_hash
+                let hex_content = if (raw_hash.len() == 32
+                    || raw_hash.len() == 40
+                    || raw_hash.len() == 64
+                    || raw_hash.len() == 96
+                    || raw_hash.len() == 128)
+                    && raw_hash.chars().all(|c| c.is_ascii_hexdigit())
+                {
+                    Some(raw_hash.to_lowercase())
+                } else {
+                    decode_base64_to_hex(raw_hash)
+                };
+
+                if let Some(content) = hex_content {
+                    if matches!(content.len(), 32 | 40 | 64 | 96 | 128) {
+                        comp_obj["hashes"] = json!([
+                            {
+                                "alg": alg,
+                                "content": content
+                            }
+                        ]);
                     }
-                ]);
+                }
             }
 
             components.push(comp_obj);
@@ -247,7 +288,7 @@ pub fn format_cyclonedx_sbom(
     }
 
     let mut cyclonedx = json!({
-        "$schema": "http://cyclonedx.org/schema/bom-1.5.json",
+        "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
         "serialNumber": serial_number,
@@ -258,7 +299,7 @@ pub fn format_cyclonedx_sbom(
                 {
                     "vendor": "Vexa",
                     "name": "vexa-sca",
-                    "version": "1.0.0"
+                    "version": env!("CARGO_PKG_VERSION")
                 }
             ],
             "component": metadata_component

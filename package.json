@@ -1,6 +1,6 @@
 {
   "name": "vexa-sca",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Vexa SCA - Software Composition Analysis & Security Engine (High-Performance Rust Core)",
   "bin": {
     "vexa-sca": "bin/vexa-sca.js",
@@ -11,7 +11,13 @@
   "scripts": {
     "test": "cargo test",
     "build": "cargo build --release",
-    "scan": "cargo run --bin vexa-sca -- scan"
+    "scan": "cargo run --bin vexa-sca -- scan",
+    "validate:schemas": "node scripts/validate_reports.mjs"
+  },
+  "devDependencies": {
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1",
+    "ajv-draft-04": "1.0.0"
   },
   "keywords": [
     "vexa",

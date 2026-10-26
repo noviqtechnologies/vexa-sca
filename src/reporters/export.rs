@@ -14,6 +14,7 @@ pub fn format_json_report(
     remediations: &[RemediationAction],
     license_audit: Option<&LicenseAudit>,
     policy_file: Option<&Path>,
+    quality_gate: Option<&crate::scanner::quality_gate::QualityGateResult>,
 ) -> String {
     let reachable_count = scan_result
         .vulnerabilities
@@ -93,6 +94,14 @@ pub fn format_json_report(
             "newVulnerabilitiesCount": scan_result.new_vulnerabilities_count,
             "baselineVulnerabilitiesCount": scan_result.baseline_vulnerabilities_count,
             "completeness": &scan_result.completeness,
+            "qualityGate": quality_gate.map(|g| {
+                serde_json::json!({
+                    "passed": g.passed,
+                    "severityGateFailed": !g.passed && g.has_severity_failure(),
+                    "failureReasons": &g.failure_reasons,
+                    "noFailSuppressed": g.no_fail && !g.failure_reasons.is_empty(),
+                })
+            }),
         },
         "vulnerabilities": scan_result.vulnerabilities,
         "suppressed": suppressed,
@@ -275,6 +284,7 @@ pub fn format_markdown_report(
 pub fn format_github_step_summary(
     scan_result: &ScanResult,
     remediations: &[RemediationAction],
+    quality_gate: Option<&crate::scanner::quality_gate::QualityGateResult>,
 ) -> String {
     let mut out = String::new();
     out.push_str("## 🛡️ Vexa SCA Security Report\n\n");
@@ -283,12 +293,38 @@ pub fn format_github_step_summary(
         crate::types::ScanStatus::Fail => "🔴 **FAIL**",
         crate::types::ScanStatus::Incomplete => "🟡 **INCOMPLETE**",
     };
-    out.push_str(&format!(
-        "**Status:** {} | **Dependencies:** {} | **Active Vulnerabilities:** {}\n\n",
-        status_badge,
-        scan_result.scanned_packages_count,
-        scan_result.vulnerabilities.len()
-    ));
+    if let Some(gate) = quality_gate {
+        let gate_badge = if gate.passed {
+            if gate.no_fail && !gate.failure_reasons.is_empty() {
+                "🟢 **PASSED (via --no-fail)**"
+            } else {
+                "🟢 **PASSED**"
+            }
+        } else {
+            "🔴 **FAILED**"
+        };
+        out.push_str(&format!(
+            "**Status:** {} | **Quality Gate:** {} | **Dependencies:** {} | **Active Vulnerabilities:** {}\n\n",
+            status_badge,
+            gate_badge,
+            scan_result.scanned_packages_count,
+            scan_result.vulnerabilities.len()
+        ));
+        if !gate.passed || (gate.no_fail && !gate.failure_reasons.is_empty()) {
+            out.push_str("### 🚦 Quality Gate Details\n\n");
+            for reason in &gate.failure_reasons {
+                out.push_str(&format!("- ✖ {}\n", reason));
+            }
+            out.push('\n');
+        }
+    } else {
+        out.push_str(&format!(
+            "**Status:** {} | **Dependencies:** {} | **Active Vulnerabilities:** {}\n\n",
+            status_badge,
+            scan_result.scanned_packages_count,
+            scan_result.vulnerabilities.len()
+        ));
+    }
 
     if scan_result.baseline_vulnerabilities_count > 0 {
         out.push_str(&format!(

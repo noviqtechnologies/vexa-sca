@@ -167,8 +167,8 @@
       <rect width="152" height="66" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
       <text x="12" y="19" fill="#34d399" font-family="sans-serif" font-size="10" font-weight="700">OSV Advisory DB</text>
       <text x="12" y="32" fill="#94a3b8" font-family="sans-serif" font-size="9">api.osv.dev (CVE / GHSA)</text>
-      <text x="12" y="47" fill="#64748b" font-family="monospace" font-size="8">Offline Cache (.sca-cache)</text>
-      <text x="12" y="58" fill="#38bdf8" font-family="sans-serif" font-size="8">SHA-256 Air-Gapped storage</text>
+      <text x="12" y="47" fill="#64748b" font-family="monospace" font-size="8">Local Cache (.sca-cache)</text>
+      <text x="12" y="58" fill="#38bdf8" font-family="sans-serif" font-size="8">SHA-256 Local key store</text>
     </g>
 
     <!-- EPSS -->
@@ -182,12 +182,12 @@
     <!-- AST Reachability -->
     <g transform="translate(14, 186)">
       <rect width="152" height="110" rx="6" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5"/>
-      <text x="12" y="19" fill="#38bdf8" font-family="sans-serif" font-size="10" font-weight="700">Deep Reachability (AST)</text>
+      <text x="12" y="19" fill="#38bdf8" font-family="sans-serif" font-size="10" font-weight="700">Usage Signals (AST)</text>
       <text x="12" y="33" fill="#cbd5e1" font-family="sans-serif" font-size="9">Parses .js, .ts, .py code</text>
       <rect x="8" y="42" width="136" height="42" rx="4" fill="#0b0f19"/>
-      <text x="14" y="56" fill="#34d399" font-family="monospace" font-size="8">REACHABLE (Call-Site)</text>
-      <text x="14" y="70" fill="#64748b" font-family="monospace" font-size="8">UNREACHABLE (Dead)</text>
-      <text x="12" y="100" fill="#38bdf8" font-family="sans-serif" font-size="8" font-weight="600">Cuts up to 80% false alerts</text>
+      <text x="14" y="56" fill="#34d399" font-family="monospace" font-size="8">IMPORTED_SOURCE</text>
+      <text x="14" y="70" fill="#64748b" font-family="monospace" font-size="8">NO_REFERENCE / UNKNOWN</text>
+      <text x="12" y="100" fill="#38bdf8" font-family="sans-serif" font-size="8" font-weight="600">Prioritizes active usage</text>
     </g>
 
     <!-- Policy Engine -->

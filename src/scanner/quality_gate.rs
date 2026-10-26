@@ -15,7 +15,9 @@ pub struct QualityGateOptions {
     pub baseline_mode: bool,
 }
 
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QualityGateResult {
     pub passed: bool,
     pub failure_reasons: Vec<String>,
@@ -23,6 +25,17 @@ pub struct QualityGateResult {
     pub unknown_reachability_violations: usize,
     pub deferred_unreachable_count: usize,
     pub no_fail: bool,
+}
+
+impl QualityGateResult {
+    pub fn has_severity_failure(&self) -> bool {
+        self.failure_reasons.iter().any(|r| {
+            r.contains("threshold")
+                || r.contains("active security vulnerabilities")
+                || r.contains("confirmed usage signals")
+                || r.contains("UNKNOWN reachability")
+        })
+    }
 }
 
 pub struct QualityGate;

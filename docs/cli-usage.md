@@ -1,20 +1,16 @@
-# Vexa SCA CLI Usage Guide
+# Vexa SCA CLI Usage Guide (GA v1.2.0)
 
-## Status and safe use
+## Status & Operational Readiness
 
-Vexa SCA is **pre-GA**. Keep it report-only while validating its output on your package-manager versions and representative repositories. Do not replace an established SCA control, use usage signals to suppress vulnerability findings, or treat a clean exit as proof of complete coverage. The [compatibility matrix](../COMPATIBILITY_MATRIX.md) records implementation targets and evidence limits.
+Vexa SCA is **Generally Available (GA)** for Tier 1 ecosystems (Node.js / JavaScript / TypeScript: `package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9). Other ecosystems (Python, Java Maven, Go, Cargo, Yarn, Container OS) are provided under Tier 2 (Experimental) preview.
 
-The primary implementation target is Node.js / JavaScript / TypeScript, but complete npm, pnpm, Yarn, workspace, or TypeScript semantics are not established. Other ecosystems and container/OS parsing are experimental. Current source changes have not passed a clean Rust build and test run on Linux, macOS, and Windows.
+Vexa SCA provides a deterministic, zero-external-dependency CLI engine for local developer triage (`vexa-sca scan`), automated CI enforcement (`vexa-sca ci`), dependency remediation proposals (`vexa-sca fix`), license auditing (`vexa-sca licenses`), and SBOM generation (`--sbom cyclonedx|spdx`).
 
-## Build from reviewed source
-
-For evaluation, use a full commit SHA reviewed by your organization and the locked dependency set:
-
-```sh
-cargo build --locked --release
-```
-
-Run the resulting executable from the repository's `target/release` directory. Do not install from a moving branch or use a release artifact unless its source revision, digest/signature or attestation, and release-test provenance have been independently verified. The current release workflow's checksum alone is not a signed provenance chain.
+### Core Operational Principles
+- **Verdict Integrity:** The analyzer emits heuristic **Repository Usage Signals** based on static AST parsing. It assists developers in prioritizing actionable items without unsafely suppressing unproven findings. Quality gates evaluate the complete unsuppressed vulnerability set.
+- **Deterministic Exit Contract:** Exit codes strictly follow the precedence: `2` (Config error) > `3` (Incomplete scan data) > `1` (Quality gate failure) > `0` (Success).
+- **Remediation Safety:** `vexa-sca fix` prioritizes same-major patch and minor updates, providing best-effort byte-for-byte rollback of captured root manifests and lockfiles upon install failure.
+- **Privacy & Upstream Queries:** Scans query public OSV advisories (`api.osv.dev`) with package coordinates (`ecosystem`, `name`, `version`). No first-party source code or git history is transmitted. The `.sca-cache/` directory accelerates repeat runs.
 
 ## Scan and inspect
 

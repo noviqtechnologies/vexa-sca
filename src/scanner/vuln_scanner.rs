@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 /// Internal result of a single OSV batch query attempt.
+#[derive(Debug)]
 pub enum BatchFetchOutcome {
     /// Successfully retrieved advisory IDs (may be empty if no vulns).
     Success(Vec<Vec<Value>>),
@@ -1374,10 +1375,7 @@ mod tests {
             loop {
                 match listener.accept() {
                     Ok((stream, _)) => return Some(stream),
-                    Err(error)
-                        if error.kind() == std::io::ErrorKind::WouldBlock
-                            && started.elapsed() < Duration::from_secs(15) =>
-                    {
+                    Err(_) if started.elapsed() < Duration::from_secs(15) => {
                         std::thread::sleep(Duration::from_millis(10));
                     }
                     Err(_) => return None,
@@ -1446,7 +1444,7 @@ mod tests {
                     .collect();
                 assert_eq!(ids, vec!["OSV-1", "OSV-2", "OSV-3"]);
             }
-            _ => panic!("all pages should produce a complete success"),
+            other => panic!("all pages should produce a complete success, got: {:?}", other),
         }
     }
 

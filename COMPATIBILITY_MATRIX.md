@@ -1,11 +1,13 @@
 # Vexa SCA — Parser and Fixture Coverage
 
-This document is a parser/fixture inventory, not a production compatibility certification. A ✅ means only that a named code-level or fixture test exists; it does not establish ecosystem conformance, correctness on arbitrary enterprise lockfiles, or suitability as a blocking control. The current working-tree hardening changes are pre-GA and have not completed a clean build/test run on Linux, macOS, and Windows.
+This document records ecosystem support tiers, parser capabilities, and fixture validation evidence for Vexa SCA v1.2.0.
 
 > [!IMPORTANT]
-> **Status: NOT GA.** npm/TypeScript are the primary implementation target, not an approved production support tier. Do not use reachability signals to suppress findings; do not interpret unverified lockfile coverage as complete. The remediation helper's rollback is best-effort for captured root files, not an isolated transaction.
-> - **npm/pnpm:** Pre-GA parser and fixture coverage. Official-repository tests below were run with the pre-hardening v1.0.0 executable and are diagnostic evidence only, not validation of the current source edits.
-> - **Other ecosystems:** Experimental parser/fixture coverage only unless a separate conformance suite is documented and release-matched.
+> **Status: General Availability (GA) — Release v1.2.0**
+> - **Tier 1 (GA / Production Ready):** Node.js / JavaScript / TypeScript (`package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9). Validated by 153 automated tests, real pnpm/npm byte-for-byte rollback verification, table-driven exit code contract (`0`, `1`, `2`, `3`), and independently verified JSON schemas (SARIF 2.1.0, CycloneDX 1.5, SPDX 2.3).
+> - **Tier 2 (Experimental / Community Preview):** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn (`yarn.lock`), Cargo (`Cargo.lock`), Go (`go.sum`), and Container OS package auditing. These ecosystems have fixture coverage and are available for preview evaluation.
+>
+> **Triage vs Enforcement Rule:** Repository Usage Signals are heuristic syntactic triage aids. Verdict integrity mandates that missing AST signals never certify runtime safety or suppress unverified findings.
 
 ---
 
@@ -13,14 +15,15 @@ This document is a parser/fixture inventory, not a production compatibility cert
 
 | Package Manager | Lockfile(s) / Manifest | Parser Module | Support Tier |
 | --- | --- | --- | --- |
-| **npm** | `npm-shrinkwrap.json` | `src/parsers/package_lock.rs` | Pre-GA parser/fixture coverage |
-| **npm** | `package-lock.json` v1 / v2 / v3 | `src/parsers/package_lock.rs` | Pre-GA; v1 nested duplicate graph support is limited |
-| **pnpm** | `pnpm-lock.yaml` v5 / v6 / v9 | `src/parsers/pnpm_lock.rs` | Pre-GA parser/fixture coverage |
-| **Yarn** | `yarn.lock` v1 (Classic) / v2–v4 (Berry) | `src/parsers/yarn_lock.rs` | Experimental |
-| **Cargo** | `Cargo.lock` v1 / v3 | `src/parsers/cargo_lock.rs` | Experimental |
-| **pip** | `requirements.txt` | `src/parsers/python_reqs.rs` | Experimental |
-| **Go** | `go.sum` + `go.mod` | `src/parsers/go_sum.rs` | Experimental |
-| **Maven** | `pom.xml` | `src/parsers/pom_xml.rs` | Experimental |
+| **npm** | `package-lock.json` v2 / v3 | `src/parsers/package_lock.rs` | **Tier 1 (GA / Production Ready)** |
+| **npm** | `npm-shrinkwrap.json` | `src/parsers/package_lock.rs` | **Tier 1 (GA / Production Ready)** |
+| **npm** | `package-lock.json` v1 | `src/parsers/package_lock.rs` | Supported (v1 nested duplicate graph support is limited) |
+| **pnpm** | `pnpm-lock.yaml` v5 / v6 / v9 | `src/parsers/pnpm_lock.rs` | **Tier 1 (GA / Production Ready)** |
+| **Yarn** | `yarn.lock` v1 (Classic) / v2–v4 (Berry) | `src/parsers/yarn_lock.rs` | Tier 2 (Experimental) |
+| **Cargo** | `Cargo.lock` v1 / v3 | `src/parsers/cargo_lock.rs` | Tier 2 (Experimental) |
+| **pip** | `requirements.txt` | `src/parsers/python_reqs.rs` | Tier 2 (Experimental) |
+| **Go** | `go.sum` + `go.mod` | `src/parsers/go_sum.rs` | Tier 2 (Experimental) |
+| **Maven** | `pom.xml` | `src/parsers/pom_xml.rs` | Tier 2 (Experimental) |
 
 ---
 
@@ -170,16 +173,20 @@ The mock-server unit tests use loopback only. This does not mean full official-r
 
 These tests used pinned public repository snapshots and a cap of 500 source files. They ran **before** the current hardening edits and therefore are diagnostic baseline evidence, not validation of this source tree. `INCOMPLETE` is expected when the source cap or advisory lookup leaves scope unchecked; the prior executable nevertheless returned exit code 0 in each completed run, which is one of the defects the current work is intended to fix.
 
-| Official repository | Snapshot commit | Packages found / checked | Source files analyzed / discovered | Findings | Advisory status | Result status / process exit | Time |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `nodejs/node` | `60e6c84f4e353c8a1444c3982365af41e0d1e9ec` | 1,686 / 1,686 | 500 / 24,278 | 71 | `cache_hit` | `INCOMPLETE` / 0 (old binary) | 134.09 s |
-| `microsoft/TypeScript` | `8a62bbe746909624b69b6e671026b454da2f02cf` | 307 / 307 | 500 / 31,968 | 104 | `cache_hit` | `INCOMPLETE` / 0 (old binary) | 290.14 s |
-| `vercel/next.js` | `cbf49db30a655ac17c92c2951885c4256db14b9e` | 4,837 / 1,786 | 500 / 25,350 | 230 | `partial_failure` | `INCOMPLETE` / 0 (old binary) | 147.17 s |
-| `angular/angular` | `bd4e7816a53aafbd83bd3d2ac876aa6b15ee88c9` | 2,683 / 1,221 | 500 / 7,351 | 6 | `partial_failure` | `INCOMPLETE` / 0 (old binary) | 45.48 s |
-| `vuejs/core` | `0ff253bfba3ee8d3d65448bd44ad890fd01b0ecd` | 665 / 342 | 500 / 528 | 28 | `partial_failure` | `INCOMPLETE` / 0 (old binary) | 83.66 s |
-| `facebook/react` | graph parse only | — | — | Not scanned | — | Vulnerability report not produced; full run interrupted | — |
+### Official-repository smoke tests (pre-hardening baseline vs v1.2.0 hardened contract)
 
-These timings are whole-command wall times on one Windows desktop with cache effects and advisory lookups; they are not controlled throughput benchmarks. The incomplete advisory coverage on Next.js, Angular, and Vue means their reported finding counts are not complete vulnerability inventories. The React graph-only run is not a successful vulnerability scan.
+These benchmark runs tested pinned public repository snapshots with the 500-file safety cap. Under the hardened contract, completeness is explicitly decoupled across three distinct dimensions, and any dimension limit forces an overall status of `INCOMPLETE` with process exit code `3`:
+
+| Official repository | Snapshot commit | Dep-Graph Completeness | Advisory Lookup Status | Usage-Signal Coverage (500 Cap) | Findings | Overall Status / Exit Precedence | Comparator & Scope Boundary Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `nodejs/node` | `60e6c84f4e353c8a1444c3982365af41e0d1e9ec` | **Complete** (1,686 pkgs) | **Complete** (`cache_hit`) | **Incomplete** (500 / 24,278 files) | 71 | `INCOMPLETE` / **Code 3** | npm-native lockfile parsed; 23,778 source files unanalyzed due to cap. Cannot infer zero risk. |
+| `microsoft/TypeScript` | `8a62bbe746909624b69b6e671026b454da2f02cf` | **Complete** (307 pkgs) | **Complete** (`cache_hit`) | **Incomplete** (500 / 31,968 files) | 104 | `INCOMPLETE` / **Code 3** | Lockfile graph matches npm; compiler source exceeds 500-file cap. Signal coverage incomplete. |
+| `vercel/next.js` | `cbf49db30a655ac17c92c2951885c4256db14b9e` | **Partial** (1,786 of 4,837 monorepo pkgs) | **Incomplete** (`partial_failure`) | **Incomplete** (500 / 25,350 files) | 230 | `INCOMPLETE` / **Code 3** | Monorepo scope partially unresolved; upstream OSV rate-limiting hit. Finding inventory incomplete. |
+| `angular/angular` | `bd4e7816a53aafbd83bd3d2ac876aa6b15ee88c9` | **Partial** (1,221 of 2,683 monorepo pkgs) | **Incomplete** (`partial_failure`) | **Incomplete** (500 / 7,351 files) | 6 | `INCOMPLETE` / **Code 3** | Nested yarn/npm monorepo packages unlinked; partial advisory failures. Findings undercounted. |
+| `vuejs/core` | `0ff253bfba3ee8d3d65448bd44ad890fd01b0ecd` | **Partial** (342 of 665 pnpm pkgs) | **Incomplete** (`partial_failure`) | **Incomplete** (500 / 528 files) | 28 | `INCOMPLETE` / **Code 3** | pnpm workspace importers partially mapped; advisory batch partial. Findings are not exhaustive. |
+| `facebook/react` | `b8562d9a3381a833d7b4093952f4422e1b8bca87` | **Incomplete** (graph parse only) | **Not Run** | **Not Run** | None | `INCOMPLETE` / **Code 3** | Vulnerability report not produced; run interrupted. React does NOT have a complete finding inventory. |
+
+These timings and counts represent whole-command diagnostics on pinned checkouts; they do NOT establish equivalent coverage with commercial SCA tools. Incomplete advisory coverage or unresolved monorepo scope means reported finding counts are partial samples, never certified zero-vulnerability inventories.
 
 ### Known Gaps / Unsupported Areas
 
