@@ -10,6 +10,7 @@
 [![SBOM](https://img.shields.io/badge/SBOM-CycloneDX%201.5%20%7C%20SPDX%202.3-blueviolet.svg)](#5-software-bill-of-materials-sbom-cyclonedx--spdx)
 [![SARIF](https://img.shields.io/badge/SARIF-OASIS%202.1.0-blueviolet.svg)](#7-cicd-quality-gates--policy-enforcement)
 [![Security Policy](https://img.shields.io/badge/Security-Policy%20%26%20SLA-red.svg)](SECURITY.md)
+<a href="https://vexasec.io" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Website-vexasec.io-blue" alt="Website" /></a>
 
 **Vexa SCA** (`vexa-sca`) is an open-source, high-performance Software Composition Analysis (SCA) engine built in Rust. Engineered specifically for enterprise DevSecOps pipelines and modern pull-request automation, Vexa SCA delivers ultra-fast, reproducible vulnerability triage, deep transitive dependency graphing, positive-proof verdict integrity, and authoritative CI result surfaces.
 

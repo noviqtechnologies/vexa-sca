@@ -1,15 +1,15 @@
-Vexa SCA Open Core & Commercial Licensing Notice
-================================================
+Vexa SCA Open-Source License and Service Availability Notice
+============================================================
 
 1. Open-Source Engine:
    The core standalone scanning engine, parsers, and local CLI tools in this 
    repository are licensed under the Apache License, Version 2.0 (below).
 
-2. Cloud Services & Commercial Subscriptions:
-   Use of Vexa SCA Cloud API (api.vexasec.io/sca), remote policy synchronization, 
-   automated team pull requests, and air-gapped Enterprise features are subject 
-   to the Vexa SCA Terms of Service and Commercial Subscription Agreement at:
-   https://vexasec.io/sca/terms
+2. Paid Services:
+   No paid Vexa SCA hosted service, subscription, or paid-support offer is
+   currently published or offered by this repository. The Apache License below
+   applies to the source code only; no separate paid-service terms are currently
+   offered.
 
 -------------------------------------------------------------------------
 
