@@ -61,25 +61,43 @@ impl CisaKevCatalog {
 
     fn populate_builtin_fallbacks(&mut self) {
         let prominent = [
-            ("CVE-2021-44228", "2021-12-10", "Apache Log4j Remote Code Execution"),
-            ("CVE-2021-45046", "2021-12-14", "Apache Log4j Denial of Service and RCE"),
+            (
+                "CVE-2021-44228",
+                "2021-12-10",
+                "Apache Log4j Remote Code Execution",
+            ),
+            (
+                "CVE-2021-45046",
+                "2021-12-14",
+                "Apache Log4j Denial of Service and RCE",
+            ),
             ("CVE-2020-8203", "2021-11-03", "Lodash Prototype Pollution"),
             ("CVE-2021-23337", "2021-11-03", "Lodash Command Injection"),
-            ("CVE-2022-22965", "2022-04-01", "Spring Framework RCE (Spring4Shell)"),
-            ("CVE-2023-38606", "2023-07-26", "Apple WebKit and Kernel Vulnerability"),
+            (
+                "CVE-2022-22965",
+                "2022-04-01",
+                "Spring Framework RCE (Spring4Shell)",
+            ),
+            (
+                "CVE-2023-38606",
+                "2023-07-26",
+                "Apple WebKit and Kernel Vulnerability",
+            ),
         ];
 
         for (cve, date, name) in prominent {
-            self.entries.entry(cve.to_uppercase()).or_insert_with(|| KevVulnerability {
-                cve_id: cve.to_string(),
-                vendor_project: None,
-                product: None,
-                vulnerability_name: Some(name.to_string()),
-                date_added: date.to_string(),
-                short_description: None,
-                required_action: None,
-                due_date: None,
-            });
+            self.entries
+                .entry(cve.to_uppercase())
+                .or_insert_with(|| KevVulnerability {
+                    cve_id: cve.to_string(),
+                    vendor_project: None,
+                    product: None,
+                    vulnerability_name: Some(name.to_string()),
+                    date_added: date.to_string(),
+                    short_description: None,
+                    required_action: None,
+                    due_date: None,
+                });
         }
     }
 

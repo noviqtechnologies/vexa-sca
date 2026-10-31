@@ -1251,9 +1251,20 @@ fn test_cli_wrap_typosquat_block() {
         .output()
         .expect("Failed to run vexa-sca wrap");
 
-    assert_eq!(output.status.code(), Some(1), "Typosquat package install must be blocked with exit code 1");
-    let combined = format!("{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-    assert!(combined.contains("FIREWALL BLOCKED") || combined.contains("typosquat"), "Firewall block banner must be printed");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Typosquat package install must be blocked with exit code 1"
+    );
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("FIREWALL BLOCKED") || combined.contains("typosquat"),
+        "Firewall block banner must be printed"
+    );
 }
 
 #[test]
@@ -1266,22 +1277,42 @@ fn test_cli_upload_facts_generates_file() {
 
     // Copy fixture files to temp dir
     let fixture_dir = Path::new("test/fixtures/npm-app");
-    fs::copy(fixture_dir.join("package.json"), temp_dir.join("package.json")).unwrap();
-    fs::copy(fixture_dir.join("package-lock.json"), temp_dir.join("package-lock.json")).unwrap();
+    fs::copy(
+        fixture_dir.join("package.json"),
+        temp_dir.join("package.json"),
+    )
+    .unwrap();
+    fs::copy(
+        fixture_dir.join("package-lock.json"),
+        temp_dir.join("package-lock.json"),
+    )
+    .unwrap();
 
     let output = Command::new(&bin)
-        .args(["scan", temp_dir.to_str().unwrap(), "--upload-facts", "--no-fail"])
+        .args([
+            "scan",
+            temp_dir.to_str().unwrap(),
+            "--upload-facts",
+            "--no-fail",
+        ])
         .output()
         .expect("Failed to run vexa-sca scan --upload-facts");
 
     assert!(output.status.success(), "Scan with --no-fail should exit 0");
 
     let facts_file = temp_dir.join(".vexa.facts.json");
-    assert!(facts_file.exists(), ".vexa.facts.json must be generated when --upload-facts is passed");
+    assert!(
+        facts_file.exists(),
+        ".vexa.facts.json must be generated when --upload-facts is passed"
+    );
 
     let content = fs::read_to_string(&facts_file).unwrap();
-    let facts: serde_json::Value = serde_json::from_str(&content).expect(".vexa.facts.json must be valid JSON");
-    assert_eq!(facts.get("schema_version").and_then(|v| v.as_str()), Some("2.0"));
+    let facts: serde_json::Value =
+        serde_json::from_str(&content).expect(".vexa.facts.json must be valid JSON");
+    assert_eq!(
+        facts.get("schema_version").and_then(|v| v.as_str()),
+        Some("2.0")
+    );
     assert!(facts.get("manifests").unwrap().as_array().unwrap().len() >= 1);
 
     let _ = fs::remove_dir_all(&temp_dir);
@@ -1302,13 +1333,26 @@ fn test_cli_mcp_initialize_and_tools_list() {
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-        writeln!(stdin, r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#).unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
+        )
+        .unwrap();
         writeln!(stdin, r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list"}}"#).unwrap();
     }
 
     let output = child.wait_with_output().expect("Failed to read mcp stdout");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains(r#""name":"vexa-sca""#), "MCP initialize response must identify as vexa-sca");
-    assert!(stdout.contains("vexa_check_package"), "MCP tools/list must include vexa_check_package");
-    assert!(stdout.contains("vexa_scan_workspace"), "MCP tools/list must include vexa_scan_workspace");
+    assert!(
+        stdout.contains(r#""name":"vexa-sca""#),
+        "MCP initialize response must identify as vexa-sca"
+    );
+    assert!(
+        stdout.contains("vexa_check_package"),
+        "MCP tools/list must include vexa_check_package"
+    );
+    assert!(
+        stdout.contains("vexa_scan_workspace"),
+        "MCP tools/list must include vexa_scan_workspace"
+    );
 }

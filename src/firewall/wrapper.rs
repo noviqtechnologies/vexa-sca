@@ -38,7 +38,8 @@ impl FirewallWrapper {
         let mut packages = Self::extract_packages_to_install(&pm_lower, args);
         let subcmd = args.first().map(|s| s.as_str()).unwrap_or("");
         if packages.is_empty() && (subcmd == "install" || subcmd == "i") {
-            if let Ok(detection) = crate::parsers::detector::detect_and_parse(Path::new("."), false) {
+            if let Ok(detection) = crate::parsers::detector::detect_and_parse(Path::new("."), false)
+            {
                 for pkg in detection.graph.get_all_pkgs() {
                     if pkg.name != detection.graph.root_pkg.name {
                         packages.push(PackageToEvaluate {
@@ -65,7 +66,8 @@ impl FirewallWrapper {
             let ws_findings = LocalSupplyChainAnalyzer::scan_workspace(Path::new("."));
             for f in ws_findings {
                 if f.severity == SeverityLevel::Critical {
-                    blocked_reasons.push(format!("[{}] {}: {}", f.rule_id, f.signal_name, f.message));
+                    blocked_reasons
+                        .push(format!("[{}] {}: {}", f.rule_id, f.signal_name, f.message));
                 }
             }
 
@@ -78,14 +80,16 @@ impl FirewallWrapper {
                 );
                 for f in sc_findings {
                     if f.severity == SeverityLevel::Critical || f.severity == SeverityLevel::High {
-                        blocked_reasons.push(format!("[{}] {}: {}", f.rule_id, f.signal_name, f.message));
+                        blocked_reasons
+                            .push(format!("[{}] {}: {}", f.rule_id, f.signal_name, f.message));
                     }
                 }
 
                 // 2. Check CISA KEV and public OSV even when version is unpinned
                 let ver = pkg.version.as_deref().unwrap_or("*");
                 let scanner = VulnScanner::new(None);
-                let root_pkg = crate::types::PkgInfo::new("firewall-check", "1.0.0", &pkg.ecosystem);
+                let root_pkg =
+                    crate::types::PkgInfo::new("firewall-check", "1.0.0", &pkg.ecosystem);
                 let mut graph = crate::core::dep_graph::DepGraph::new(
                     root_pkg,
                     crate::core::dep_graph::PkgManagerInfo {
@@ -149,11 +153,15 @@ impl FirewallWrapper {
                         {
                             if resp.status().is_success() {
                                 if let Ok(eval_res) = resp.json::<serde_json::Value>().await {
-                                    if eval_res.get("decision").and_then(|d| d.as_str()) == Some("BLOCK") {
-                                        let reason = eval_res.get("reason")
+                                    if eval_res.get("decision").and_then(|d| d.as_str())
+                                        == Some("BLOCK")
+                                    {
+                                        let reason = eval_res
+                                            .get("reason")
                                             .and_then(|r| r.as_str())
                                             .unwrap_or("Blocked by cloud security policy");
-                                        blocked_reasons.push(format!("[CLOUD POLICY BLOCK] {}", reason));
+                                        blocked_reasons
+                                            .push(format!("[CLOUD POLICY BLOCK] {}", reason));
                                     }
                                 }
                             }
@@ -164,7 +172,12 @@ impl FirewallWrapper {
 
             if !blocked_reasons.is_empty() {
                 eprintln!("\n{}", "================================================================================".red().bold());
-                eprintln!("{}", " [FIREWALL BLOCKED] Vexa SCA prevented package installation".red().bold());
+                eprintln!(
+                    "{}",
+                    " [FIREWALL BLOCKED] Vexa SCA prevented package installation"
+                        .red()
+                        .bold()
+                );
                 eprintln!("{}\n", "================================================================================".red().bold());
                 for reason in blocked_reasons {
                     eprintln!("  {} {}", "✖".red().bold(), reason);
@@ -332,7 +345,12 @@ mod tests {
 
     #[test]
     fn test_extract_packages_npm() {
-        let args = vec!["install".to_string(), "lodash@4.17.21".to_string(), "--save-dev".to_string(), "axios".to_string()];
+        let args = vec![
+            "install".to_string(),
+            "lodash@4.17.21".to_string(),
+            "--save-dev".to_string(),
+            "axios".to_string(),
+        ];
         let pkgs = FirewallWrapper::extract_packages_to_install("npm", &args);
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "lodash");
@@ -343,7 +361,13 @@ mod tests {
 
     #[test]
     fn test_extract_packages_pip() {
-        let args = vec!["install".to_string(), "requests==2.31.0".to_string(), "-r".to_string(), "req.txt".to_string(), "urllib3".to_string()];
+        let args = vec![
+            "install".to_string(),
+            "requests==2.31.0".to_string(),
+            "-r".to_string(),
+            "req.txt".to_string(),
+            "urllib3".to_string(),
+        ];
         let pkgs = FirewallWrapper::extract_packages_to_install("pip", &args);
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "requests");
@@ -354,7 +378,12 @@ mod tests {
 
     #[test]
     fn test_extract_packages_cargo() {
-        let args = vec!["add".to_string(), "tokio@1.35.0".to_string(), "--features".to_string(), "full".to_string()];
+        let args = vec![
+            "add".to_string(),
+            "tokio@1.35.0".to_string(),
+            "--features".to_string(),
+            "full".to_string(),
+        ];
         let pkgs = FirewallWrapper::extract_packages_to_install("cargo", &args);
         assert_eq!(pkgs.len(), 1);
         assert_eq!(pkgs[0].name, "tokio");

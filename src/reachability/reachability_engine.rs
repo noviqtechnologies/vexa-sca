@@ -361,7 +361,8 @@ impl ReachabilityEngine {
         for cand in &candidates {
             if let Some(ref targets) = target_functions {
                 for t in targets {
-                    if let Some(sites) = self.ast_index.symbol_calls.get(&(cand.clone(), t.clone())) {
+                    if let Some(sites) = self.ast_index.symbol_calls.get(&(cand.clone(), t.clone()))
+                    {
                         for s in sites {
                             if seen_sites.insert((s.file.clone(), s.line)) {
                                 if is_test_path(&s.file) {
@@ -374,7 +375,11 @@ impl ReachabilityEngine {
                     }
                 }
                 // Check wildcard symbol
-                if let Some(sites) = self.ast_index.symbol_calls.get(&(cand.clone(), "*".to_string())) {
+                if let Some(sites) = self
+                    .ast_index
+                    .symbol_calls
+                    .get(&(cand.clone(), "*".to_string()))
+                {
                     for s in sites {
                         if seen_sites.insert((s.file.clone(), s.line)) {
                             if is_test_path(&s.file) {
@@ -541,8 +546,10 @@ impl ReachabilityEngine {
         target_functions: Option<&[String]>,
     ) -> (bool, Vec<(usize, String, String, bool)>) {
         // Only attempt oxc_parser if content looks like JS/TS, NOT Rust/Python/Go/Java (BUG-003)
-        let is_rust = content.contains("fn ") || content.contains("use ") || content.contains("pub mod ");
-        let is_python = content.contains("def ") || content.contains("import ") && content.contains(":\n");
+        let is_rust =
+            content.contains("fn ") || content.contains("use ") || content.contains("pub mod ");
+        let is_python =
+            content.contains("def ") || content.contains("import ") && content.contains(":\n");
         let is_go = content.contains("package ") || content.contains("func ");
         let is_java = content.contains("public class ") || content.contains("package ");
 
@@ -567,7 +574,6 @@ impl ReachabilityEngine {
         pkg_name: &str,
         target_functions: Option<&[String]>,
     ) -> (bool, Vec<(usize, String, String, bool)>) {
-
         if !content.contains(pkg_name) {
             return (false, Vec::new());
         }

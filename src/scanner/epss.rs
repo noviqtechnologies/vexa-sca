@@ -172,10 +172,9 @@ impl EpssResolver {
                         if let Some(data_list) = api_data.data {
                             for entry in data_list {
                                 let cve_key = entry.cve.trim().to_uppercase();
-                                if let (Ok(score), Ok(percentile)) = (
-                                    entry.epss.parse::<f64>(),
-                                    entry.percentile.parse::<f64>(),
-                                ) {
+                                if let (Ok(score), Ok(percentile)) =
+                                    (entry.epss.parse::<f64>(), entry.percentile.parse::<f64>())
+                                {
                                     results.insert(
                                         cve_key.clone(),
                                         EpssInfo {
@@ -407,7 +406,10 @@ mod tests {
         let cves: Vec<String> = (1..=150).map(|i| format!("CVE-2024-{:04}", i)).collect();
         let res = resolver.resolve_epss_batch(&cves).await;
         assert_eq!(res.len(), 150);
-        assert_eq!(res.get("CVE-2024-0001").unwrap().source, EpssSource::Unavailable);
+        assert_eq!(
+            res.get("CVE-2024-0001").unwrap().source,
+            EpssSource::Unavailable
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

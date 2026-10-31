@@ -37,10 +37,7 @@ impl PythonRequirementsParser {
             ));
         }
 
-        let file_name = req_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let file_name = req_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         if file_name == "uv.lock" || file_name == "poetry.lock" {
             Self::parse_toml_lockfile(&project_dir, &req_path, file_name)
@@ -206,10 +203,15 @@ impl PythonRequirementsParser {
                     .canonicalize()
                     .unwrap_or_else(|_| project_dir.to_path_buf());
                 if let Ok(inc_canon) = included_path.canonicalize() {
-                    if inc_canon.starts_with(&root_canon) && inc_canon.exists() && recursion_depth < 5 {
-                        if let Ok(sub_graph) =
-                            Self::parse_requirements_txt(project_dir, &inc_canon, recursion_depth + 1)
-                        {
+                    if inc_canon.starts_with(&root_canon)
+                        && inc_canon.exists()
+                        && recursion_depth < 5
+                    {
+                        if let Ok(sub_graph) = Self::parse_requirements_txt(
+                            project_dir,
+                            &inc_canon,
+                            recursion_depth + 1,
+                        ) {
                             graph.merge(&sub_graph);
                         }
                     }

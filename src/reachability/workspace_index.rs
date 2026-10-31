@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use crate::reachability::js_ast_analyzer::{analyze_file, source_type_for_path, ImportResolutionState};
+use crate::reachability::js_ast_analyzer::{
+    analyze_file, source_type_for_path, ImportResolutionState,
+};
 use crate::types::CallSite;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -228,9 +230,15 @@ impl WorkspaceAstIndex {
                     } else {
                         clean.to_string()
                     };
-                    external_imports.entry(base_pkg.clone()).or_default().insert("*".to_string());
+                    external_imports
+                        .entry(base_pkg.clone())
+                        .or_default()
+                        .insert("*".to_string());
                     if base_pkg != clean {
-                        external_imports.entry(clean.to_string()).or_default().insert("*".to_string());
+                        external_imports
+                            .entry(clean.to_string())
+                            .or_default()
+                            .insert("*".to_string());
                     }
                 }
                 ImportResolutionState::NonPackageImport(path) => {
@@ -245,13 +253,19 @@ impl WorkspaceAstIndex {
         }
 
         // If file has dynamic construct (eval, createRequire, etc.), check if tokens match packages
-        let has_dynamic = general_analysis.has_dynamic_construct || general_analysis.has_unresolved_dynamic;
+        let has_dynamic =
+            general_analysis.has_dynamic_construct || general_analysis.has_unresolved_dynamic;
         if has_dynamic {
             for line in content.lines() {
-                for token in line.split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '@' && c != '/') {
+                for token in line.split(|c: char| {
+                    !c.is_alphanumeric() && c != '-' && c != '_' && c != '@' && c != '/'
+                }) {
                     let clean = token.trim().trim_matches('\'').trim_matches('"');
                     if !clean.is_empty() && (clean.starts_with('@') || clean.len() >= 3) {
-                        external_imports.entry(clean.to_string()).or_default().insert("*".to_string());
+                        external_imports
+                            .entry(clean.to_string())
+                            .or_default()
+                            .insert("*".to_string());
                     }
                 }
             }
@@ -317,7 +331,11 @@ impl WorkspaceAstIndex {
             if let Some(cap) = use_re.captures(trimmed) {
                 if let Some(crate_name) = cap.get(1) {
                     let crate_str = crate_name.as_str();
-                    if crate_str != "crate" && crate_str != "super" && crate_str != "std" && crate_str != "core" {
+                    if crate_str != "crate"
+                        && crate_str != "super"
+                        && crate_str != "std"
+                        && crate_str != "core"
+                    {
                         let mut symbols = HashSet::new();
                         if let Some(syms) = cap.get(2) {
                             for s in syms.as_str().split(',') {
@@ -410,8 +428,10 @@ impl WorkspaceAstIndex {
         let mut call_sites: HashMap<(String, String), Vec<CallSite>> = HashMap::new();
         let lines: Vec<&str> = content.lines().collect();
 
-        let import_re = Regex::new(r"^import\s+([a-zA-Z0-9_\.]+)(?:\s+as\s+([a-zA-Z0-9_]+))?").unwrap();
-        let from_re = Regex::new(r"^from\s+([a-zA-Z0-9_\.]+)\s+import\s+([a-zA-Z0-9_,\s\*]+)").unwrap();
+        let import_re =
+            Regex::new(r"^import\s+([a-zA-Z0-9_\.]+)(?:\s+as\s+([a-zA-Z0-9_]+))?").unwrap();
+        let from_re =
+            Regex::new(r"^from\s+([a-zA-Z0-9_\.]+)\s+import\s+([a-zA-Z0-9_,\s\*]+)").unwrap();
         let call_re = Regex::new(r"([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*\(").unwrap();
 
         for (idx, line) in lines.iter().enumerate() {
@@ -420,7 +440,10 @@ impl WorkspaceAstIndex {
                 if let Some(pkg) = cap.get(1) {
                     let base_pkg = pkg.as_str().split('.').next().unwrap_or(pkg.as_str());
                     let norm = normalize_python_pkg(base_pkg);
-                    external_imports.entry(norm).or_default().insert("*".to_string());
+                    external_imports
+                        .entry(norm)
+                        .or_default()
+                        .insert("*".to_string());
                 }
             } else if let Some(cap) = from_re.captures(trimmed) {
                 if let Some(pkg) = cap.get(1) {
@@ -488,8 +511,14 @@ impl WorkspaceAstIndex {
             if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.contains('/') {
                 let pkg = trimmed.trim_matches('"');
                 let pkg_name = pkg.split('/').last().unwrap_or(pkg);
-                external_imports.entry(pkg_name.to_string()).or_default().insert("*".to_string());
-                external_imports.entry(pkg.to_string()).or_default().insert("*".to_string());
+                external_imports
+                    .entry(pkg_name.to_string())
+                    .or_default()
+                    .insert("*".to_string());
+                external_imports
+                    .entry(pkg.to_string())
+                    .or_default()
+                    .insert("*".to_string());
             }
 
             for (pkg, _) in &external_imports {
@@ -571,7 +600,8 @@ impl WorkspaceAstIndex {
             barrel_reexports: vec![],
             has_reexports: false,
             call_sites,
-            has_dynamic_loading: content.contains("Class.forName") || content.contains("Method.invoke"),
+            has_dynamic_loading: content.contains("Class.forName")
+                || content.contains("Method.invoke"),
             parse_failed: false,
             is_test,
         }
@@ -669,4 +699,3 @@ fn is_test_path(path: &str) -> bool {
         || lower.contains("__tests__")
         || lower.contains("__test__")
 }
-

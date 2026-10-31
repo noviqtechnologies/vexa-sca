@@ -71,10 +71,10 @@ pub fn map_cwe_to_owasp(cwe: &str) -> Option<&'static str> {
 
         // A03:2021 - Injection
         "CWE-20" | "CWE-74" | "CWE-75" | "CWE-77" | "CWE-78" | "CWE-79" | "CWE-80" | "CWE-83"
-        | "CWE-87" | "CWE-88" | "CWE-89" | "CWE-90" | "CWE-91" | "CWE-93" | "CWE-94"
-        | "CWE-95" | "CWE-96" | "CWE-97" | "CWE-98" | "CWE-99" | "CWE-113" | "CWE-116"
-        | "CWE-138" | "CWE-184" | "CWE-470" | "CWE-507" | "CWE-564" | "CWE-610" | "CWE-643"
-        | "CWE-644" | "CWE-652" | "CWE-917" => Some("A03:2021-Injection"),
+        | "CWE-87" | "CWE-88" | "CWE-89" | "CWE-90" | "CWE-91" | "CWE-93" | "CWE-94" | "CWE-95"
+        | "CWE-96" | "CWE-97" | "CWE-98" | "CWE-99" | "CWE-113" | "CWE-116" | "CWE-138"
+        | "CWE-184" | "CWE-470" | "CWE-507" | "CWE-564" | "CWE-610" | "CWE-643" | "CWE-644"
+        | "CWE-652" | "CWE-917" => Some("A03:2021-Injection"),
 
         // A04:2021 - Insecure Design
         "CWE-73" | "CWE-183" | "CWE-209" | "CWE-213" | "CWE-235" | "CWE-256" | "CWE-257"
@@ -84,9 +84,9 @@ pub fn map_cwe_to_owasp(cwe: &str) -> Option<&'static str> {
         | "CWE-653" | "CWE-656" | "CWE-657" | "CWE-799" => Some("A04:2021-Insecure Design"),
 
         // A05:2021 - Security Misconfiguration
-        "CWE-16" | "CWE-2" | "CWE-11" | "CWE-13" | "CWE-15" | "CWE-260" | "CWE-315"
-        | "CWE-520" | "CWE-526" | "CWE-537" | "CWE-541" | "CWE-547" | "CWE-611" | "CWE-614"
-        | "CWE-756" | "CWE-776" | "CWE-942" | "CWE-1004" | "CWE-1032" | "CWE-1174" => {
+        "CWE-16" | "CWE-2" | "CWE-11" | "CWE-13" | "CWE-15" | "CWE-260" | "CWE-315" | "CWE-520"
+        | "CWE-526" | "CWE-537" | "CWE-541" | "CWE-547" | "CWE-611" | "CWE-614" | "CWE-756"
+        | "CWE-776" | "CWE-942" | "CWE-1004" | "CWE-1032" | "CWE-1174" => {
             Some("A05:2021-Security Misconfiguration")
         }
 
@@ -98,8 +98,8 @@ pub fn map_cwe_to_owasp(cwe: &str) -> Option<&'static str> {
         // A07:2021 - Identification and Authentication Failures
         "CWE-255" | "CWE-259" | "CWE-287" | "CWE-288" | "CWE-290" | "CWE-294" | "CWE-295"
         | "CWE-297" | "CWE-300" | "CWE-302" | "CWE-304" | "CWE-306" | "CWE-307" | "CWE-346"
-        | "CWE-384" | "CWE-521" | "CWE-613" | "CWE-620" | "CWE-640" | "CWE-804"
-        | "CWE-842" | "CWE-916" | "CWE-1021" | "CWE-1216" => {
+        | "CWE-384" | "CWE-521" | "CWE-613" | "CWE-620" | "CWE-640" | "CWE-804" | "CWE-842"
+        | "CWE-916" | "CWE-1021" | "CWE-1216" => {
             Some("A07:2021-Identification and Authentication Failures")
         }
 
@@ -157,10 +157,7 @@ mod tests {
 
     #[test]
     fn test_owasp_top_10_mapping() {
-        assert_eq!(
-            map_cwe_to_owasp("CWE-79"),
-            Some("A03:2021-Injection")
-        );
+        assert_eq!(map_cwe_to_owasp("CWE-79"), Some("A03:2021-Injection"));
         assert_eq!(
             map_cwe_to_owasp("CWE-502"),
             Some("A08:2021-Software and Data Integrity Failures")
@@ -177,7 +174,11 @@ mod tests {
 
     #[test]
     fn test_classify_cwes() {
-        let raw = vec!["cwe-79".to_string(), "502".to_string(), "CWE-79".to_string()];
+        let raw = vec![
+            "cwe-79".to_string(),
+            "502".to_string(),
+            "CWE-79".to_string(),
+        ];
         let (cwes, owasp) = classify_cwes(&raw);
         assert_eq!(cwes.len(), 2);
         assert_eq!(cwes[0], "CWE-79");

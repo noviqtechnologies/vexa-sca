@@ -172,7 +172,11 @@ impl McpServer {
                 })
             }
             "tools/call" => {
-                let name = req.params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let name = req
+                    .params
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("");
                 let args = req.params.get("arguments").cloned().unwrap_or(json!({}));
 
                 let tool_output = Self::execute_tool(name, args).await;
@@ -208,7 +212,10 @@ impl McpServer {
             "vexa_check_package" => {
                 let pkg = args.get("package").and_then(|p| p.as_str()).unwrap_or("");
                 let ver = args.get("version").and_then(|v| v.as_str()).unwrap_or("");
-                let eco = args.get("ecosystem").and_then(|e| e.as_str()).unwrap_or("npm");
+                let eco = args
+                    .get("ecosystem")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("npm");
 
                 if pkg.is_empty() || ver.is_empty() {
                     return "Error: package and version arguments are required".to_string();
@@ -221,13 +228,17 @@ impl McpServer {
                 if !sc.is_empty() {
                     out.push_str("⚠️ **Supply Chain Findings:**\n");
                     for f in sc {
-                        out.push_str(&format!("- [{}] {}: {}\n", f.rule_id, f.signal_name, f.message));
+                        out.push_str(&format!(
+                            "- [{}] {}: {}\n",
+                            f.rule_id, f.signal_name, f.message
+                        ));
                     }
                     out.push('\n');
                 }
 
                 // Check CISA KEV and OSV
-                let kev_catalog = CisaKevCatalog::load_or_fetch(Path::new(".sca-cache"), None).await;
+                let kev_catalog =
+                    CisaKevCatalog::load_or_fetch(Path::new(".sca-cache"), None).await;
                 let scanner = VulnScanner::new(None);
                 let root_pkg = crate::types::PkgInfo::new("check-target", "1.0.0", eco);
                 let mut graph = crate::core::dep_graph::DepGraph::new(
@@ -255,9 +266,14 @@ impl McpServer {
                     Ok(scan_res) => {
                         let vulns = scan_res.vulnerabilities;
                         if vulns.is_empty() {
-                            out.push_str("✅ No known vulnerabilities found in public advisory databases.\n");
+                            out.push_str(
+                                "✅ No known vulnerabilities found in public advisory databases.\n",
+                            );
                         } else {
-                            out.push_str(&format!("Found **{}** vulnerabilities:\n\n", vulns.len()));
+                            out.push_str(&format!(
+                                "Found **{}** vulnerabilities:\n\n",
+                                vulns.len()
+                            ));
                             for v in &vulns {
                                 let kev_flag = if let Some(cve) = &v.cve {
                                     if kev_catalog.is_kev(cve) {
@@ -291,7 +307,10 @@ impl McpServer {
             }
             "vexa_scan_workspace" => {
                 let target = args.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-                let reachable_only = args.get("reachable_only").and_then(|r| r.as_bool()).unwrap_or(false);
+                let reachable_only = args
+                    .get("reachable_only")
+                    .and_then(|r| r.as_bool())
+                    .unwrap_or(false);
 
                 let scan_opts = ScanOptions {
                     dev: true,
@@ -309,7 +328,8 @@ impl McpServer {
 
                 match scan_project(Path::new(target), scan_opts).await {
                     Ok(result) => {
-                        let mut out = format!("### Vexa SCA Workspace Scan Results for '{}'\n\n", target);
+                        let mut out =
+                            format!("### Vexa SCA Workspace Scan Results for '{}'\n\n", target);
                         out.push_str(&format!(
                             "- **Ecosystem Manifest:** {:?}\n- **Scanned Packages:** {}\n- **Vulnerabilities Found:** {}\n",
                             result.manifest_type,
@@ -320,25 +340,40 @@ impl McpServer {
                         if !result.scan_result.vulnerabilities.is_empty() {
                             out.push_str("\n| Severity | Package | Vulnerability | Reachability | Fixed In |\n| :--- | :--- | :--- | :--- | :--- |\n");
                             for f in result.scan_result.vulnerabilities.iter().take(20) {
-                                let reach_status = f.reachability.as_ref().map(|r| format!("{:?}", r.status)).unwrap_or_else(|| "UNKNOWN".to_string());
+                                let reach_status = f
+                                    .reachability
+                                    .as_ref()
+                                    .map(|r| format!("{:?}", r.status))
+                                    .unwrap_or_else(|| "UNKNOWN".to_string());
                                 out.push_str(&format!(
                                     "| {:?} | {} | {} | {} | {} |\n",
                                     f.severity.level,
                                     f.package,
                                     f.id,
                                     reach_status,
-                                    if f.fixed_in.is_empty() { "None".to_string() } else { f.fixed_in.join(", ") }
+                                    if f.fixed_in.is_empty() {
+                                        "None".to_string()
+                                    } else {
+                                        f.fixed_in.join(", ")
+                                    }
                                 ));
                             }
                             if result.scan_result.vulnerabilities.len() > 20 {
-                                out.push_str(&format!("\n*...and {} more vulnerabilities*\n", result.scan_result.vulnerabilities.len() - 20));
+                                out.push_str(&format!(
+                                    "\n*...and {} more vulnerabilities*\n",
+                                    result.scan_result.vulnerabilities.len() - 20
+                                ));
                             }
                         }
 
                         // Also run local supply chain rules
-                        let sc_findings = LocalSupplyChainAnalyzer::scan_workspace(Path::new(target));
+                        let sc_findings =
+                            LocalSupplyChainAnalyzer::scan_workspace(Path::new(target));
                         if !sc_findings.is_empty() {
-                            out.push_str(&format!("\n### Supply Chain Threat Detections ({})\n\n", sc_findings.len()));
+                            out.push_str(&format!(
+                                "\n### Supply Chain Threat Detections ({})\n\n",
+                                sc_findings.len()
+                            ));
                             for sc in sc_findings.iter().take(10) {
                                 out.push_str(&format!(
                                     "- **[{}] {}** ({:?}): {} (at {})\n",
@@ -357,7 +392,10 @@ impl McpServer {
                 }
             }
             "vexa_explain_finding" => {
-                let finding_id = args.get("finding_id").and_then(|f| f.as_str()).unwrap_or("");
+                let finding_id = args
+                    .get("finding_id")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("");
                 if finding_id.is_empty() {
                     return "Error: finding_id argument is required".to_string();
                 }
@@ -381,12 +419,19 @@ impl McpServer {
                 )
             }
             "vexa_remediate_manifest" => {
-                let manifest = args.get("manifest_path").and_then(|m| m.as_str()).unwrap_or("");
+                let manifest = args
+                    .get("manifest_path")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("");
                 let pkg = args.get("package").and_then(|p| p.as_str()).unwrap_or("");
-                let target_ver = args.get("target_version").and_then(|t| t.as_str()).unwrap_or("");
+                let target_ver = args
+                    .get("target_version")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
 
                 if manifest.is_empty() || pkg.is_empty() || target_ver.is_empty() {
-                    return "Error: manifest_path, package, and target_version are required".to_string();
+                    return "Error: manifest_path, package, and target_version are required"
+                        .to_string();
                 }
 
                 let path = PathBuf::from(manifest);
@@ -409,7 +454,10 @@ impl McpServer {
                 };
 
                 match LockfilePatcher::apply_fixes(dir, &[action], false) {
-                    Ok(res) => format!("Successfully patched manifest. Modified: {}, Backup: {:?}", res.modified, res.backup_file),
+                    Ok(res) => format!(
+                        "Successfully patched manifest. Modified: {}, Backup: {:?}",
+                        res.modified, res.backup_file
+                    ),
                     Err(e) => format!("Failed to patch manifest: {}", e),
                 }
             }
@@ -430,11 +478,16 @@ mod tests {
             method: "initialize".to_string(),
             params: json!({}),
         };
-        let resp = McpServer::handle_request(req).await.expect("should return response");
+        let resp = McpServer::handle_request(req)
+            .await
+            .expect("should return response");
         assert_eq!(resp.jsonrpc, "2.0");
         assert_eq!(resp.id, Some(json!(1)));
         let res = resp.result.expect("result must be present");
-        assert_eq!(res.get("serverInfo").unwrap().get("name").unwrap(), "vexa-sca");
+        assert_eq!(
+            res.get("serverInfo").unwrap().get("name").unwrap(),
+            "vexa-sca"
+        );
     }
 
     #[tokio::test]
@@ -445,10 +498,15 @@ mod tests {
             method: "tools/list".to_string(),
             params: json!({}),
         };
-        let resp = McpServer::handle_request(req).await.expect("should return response");
+        let resp = McpServer::handle_request(req)
+            .await
+            .expect("should return response");
         let res = resp.result.unwrap();
         let tools = res.get("tools").unwrap().as_array().unwrap();
-        let tool_names: Vec<&str> = tools.iter().map(|t| t.get("name").unwrap().as_str().unwrap()).collect();
+        let tool_names: Vec<&str> = tools
+            .iter()
+            .map(|t| t.get("name").unwrap().as_str().unwrap())
+            .collect();
         assert!(tool_names.contains(&"vexa_check_package"));
         assert!(tool_names.contains(&"vexa_scan_workspace"));
         assert!(tool_names.contains(&"vexa_explain_finding"));
@@ -468,7 +526,9 @@ mod tests {
                 }
             }),
         };
-        let resp = McpServer::handle_request(req).await.expect("should return response");
+        let resp = McpServer::handle_request(req)
+            .await
+            .expect("should return response");
         let res = resp.result.unwrap();
         let content = res.get("content").unwrap().as_array().unwrap();
         let text = content[0].get("text").unwrap().as_str().unwrap();

@@ -552,7 +552,11 @@ pub fn generate_workspace_facts(
             );
         }
 
-        (re.ast_index.parse_complete, re.ast_index.files_analyzed, pkgs_map)
+        (
+            re.ast_index.parse_complete,
+            re.ast_index.files_analyzed,
+            pkgs_map,
+        )
     } else {
         (true, 0, std::collections::HashMap::new())
     };
@@ -570,7 +574,6 @@ pub fn generate_workspace_facts(
         },
     }
 }
-
 
 #[cfg(test)]
 mod tests {

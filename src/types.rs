@@ -600,4 +600,3 @@ pub struct FactCallLocation {
     pub line: usize,
     pub symbol: String,
 }
-

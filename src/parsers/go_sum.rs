@@ -118,7 +118,10 @@ impl GoLockParser {
         Ok(())
     }
 
-    fn enrich_integrity_from_go_sum(graph: &mut DepGraph, go_sum_path: &Path) -> Result<(), String> {
+    fn enrich_integrity_from_go_sum(
+        graph: &mut DepGraph,
+        go_sum_path: &Path,
+    ) -> Result<(), String> {
         let content =
             fs::read_to_string(go_sum_path).map_err(|e| format!("Failed to read go.sum: {}", e))?;
 
@@ -358,7 +361,10 @@ exclude github.com/bad/lib v0.5.0
         assert!(!names.contains(&"github.com/bad/lib"));
         assert!(!names.contains(&"github.com/old/module"));
 
-        let fork = pkgs.iter().find(|p| p.name == "github.com/new/fork").unwrap();
+        let fork = pkgs
+            .iter()
+            .find(|p| p.name == "github.com/new/fork")
+            .unwrap();
         assert_eq!(fork.version, "2.0.0");
 
         let _ = fs::remove_dir_all(&temp_dir);

@@ -1773,14 +1773,26 @@ pub async fn run() {
                     }
 
                     if upload_facts {
-                        if let Ok(detection) = crate::parsers::detector::detect_and_parse(&path, !prod_only) {
-                            let facts = crate::reporters::export::generate_workspace_facts(&path, &detection, None);
+                        if let Ok(detection) =
+                            crate::parsers::detector::detect_and_parse(&path, !prod_only)
+                        {
+                            let facts = crate::reporters::export::generate_workspace_facts(
+                                &path, &detection, None,
+                            );
                             let facts_path = path.join(".vexa.facts.json");
                             if let Ok(serialized) = serde_json::to_string_pretty(&facts) {
                                 if let Err(e) = std::fs::write(&facts_path, serialized) {
-                                    eprintln!("{} Failed to write .vexa.facts.json: {}", "Warning:".yellow(), e);
+                                    eprintln!(
+                                        "{} Failed to write .vexa.facts.json: {}",
+                                        "Warning:".yellow(),
+                                        e
+                                    );
                                 } else {
-                                    eprintln!("{} Exported Zero-Code-Retention scan facts to {}", "✔".green().bold(), facts_path.display());
+                                    eprintln!(
+                                        "{} Exported Zero-Code-Retention scan facts to {}",
+                                        "✔".green().bold(),
+                                        facts_path.display()
+                                    );
                                 }
                             }
                         }
@@ -2137,14 +2149,26 @@ pub async fn run() {
                     }
 
                     if upload_facts {
-                        if let Ok(detection) = crate::parsers::detector::detect_and_parse(&path, !prod_only) {
-                            let facts = crate::reporters::export::generate_workspace_facts(&path, &detection, None);
+                        if let Ok(detection) =
+                            crate::parsers::detector::detect_and_parse(&path, !prod_only)
+                        {
+                            let facts = crate::reporters::export::generate_workspace_facts(
+                                &path, &detection, None,
+                            );
                             let facts_path = path.join(".vexa.facts.json");
                             if let Ok(serialized) = serde_json::to_string_pretty(&facts) {
                                 if let Err(e) = std::fs::write(&facts_path, serialized) {
-                                    eprintln!("{} Failed to write .vexa.facts.json: {}", "Warning:".yellow(), e);
+                                    eprintln!(
+                                        "{} Failed to write .vexa.facts.json: {}",
+                                        "Warning:".yellow(),
+                                        e
+                                    );
                                 } else {
-                                    eprintln!("{} Exported Zero-Code-Retention scan facts to {}", "✔".green().bold(), facts_path.display());
+                                    eprintln!(
+                                        "{} Exported Zero-Code-Retention scan facts to {}",
+                                        "✔".green().bold(),
+                                        facts_path.display()
+                                    );
                                 }
                             }
                         }

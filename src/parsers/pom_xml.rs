@@ -41,7 +41,8 @@ impl PomXmlParser {
                 .unwrap_or("java-app")
                 .to_string()
         });
-        let root_group = Self::extract_tag(&content, "groupId").unwrap_or_else(|| "com.example".to_string());
+        let root_group =
+            Self::extract_tag(&content, "groupId").unwrap_or_else(|| "com.example".to_string());
         let root_version =
             Self::extract_tag(&content, "version").unwrap_or_else(|| "1.0.0".to_string());
 
@@ -78,16 +79,21 @@ impl PomXmlParser {
         let dep_regex = Regex::new(r"(?s)<dependency>([\s\S]*?)</dependency>").unwrap();
         for cap in dep_regex.captures_iter(&content_without_dep_mgmt) {
             let block = &cap[1];
-            let group_id = Self::extract_tag(block, "groupId").map(|g| Self::interpolate(&g, &properties));
-            let artifact_id = Self::extract_tag(block, "artifactId").map(|a| Self::interpolate(&a, &properties));
-            let mut version = Self::extract_tag(block, "version")
-                .map(|v| Self::interpolate(&v, &properties));
+            let group_id =
+                Self::extract_tag(block, "groupId").map(|g| Self::interpolate(&g, &properties));
+            let artifact_id =
+                Self::extract_tag(block, "artifactId").map(|a| Self::interpolate(&a, &properties));
+            let mut version =
+                Self::extract_tag(block, "version").map(|v| Self::interpolate(&v, &properties));
             let scope = Self::extract_tag(block, "scope")
                 .map(|s| Self::interpolate(&s, &properties))
                 .unwrap_or_else(|| "prod".to_string());
 
             if let (Some(gid), Some(aid)) = (group_id, artifact_id) {
-                if version.is_none() || version.as_deref() == Some("") || version.as_deref() == Some("unresolved") {
+                if version.is_none()
+                    || version.as_deref() == Some("")
+                    || version.as_deref() == Some("unresolved")
+                {
                     if let Some(mv) = managed_versions.get(&(gid.clone(), aid.clone())) {
                         version = Some(mv.clone());
                     }
@@ -140,7 +146,9 @@ impl PomXmlParser {
         if let Some(start) = xml.find("<properties>") {
             if let Some(end) = xml[start..].find("</properties>") {
                 let props_block = &xml[start + 12..start + end];
-                let prop_regex = Regex::new(r"<([a-zA-Z0-9_.-]+)>(?:\s*)([^<]*)(?:\s*)</([a-zA-Z0-9_.-]+)>").unwrap();
+                let prop_regex =
+                    Regex::new(r"<([a-zA-Z0-9_.-]+)>(?:\s*)([^<]*)(?:\s*)</([a-zA-Z0-9_.-]+)>")
+                        .unwrap();
                 for cap in prop_regex.captures_iter(props_block) {
                     if cap[1] == cap[3] {
                         let k = cap[1].to_string();
@@ -163,9 +171,12 @@ impl PomXmlParser {
                 let dep_regex = Regex::new(r"(?s)<dependency>([\s\S]*?)</dependency>").unwrap();
                 for cap in dep_regex.captures_iter(block) {
                     let d_block = &cap[1];
-                    let gid = Self::extract_tag(d_block, "groupId").map(|g| Self::interpolate(&g, properties));
-                    let aid = Self::extract_tag(d_block, "artifactId").map(|a| Self::interpolate(&a, properties));
-                    let ver = Self::extract_tag(d_block, "version").map(|v| Self::interpolate(&v, properties));
+                    let gid = Self::extract_tag(d_block, "groupId")
+                        .map(|g| Self::interpolate(&g, properties));
+                    let aid = Self::extract_tag(d_block, "artifactId")
+                        .map(|a| Self::interpolate(&a, properties));
+                    let ver = Self::extract_tag(d_block, "version")
+                        .map(|v| Self::interpolate(&v, properties));
                     if let (Some(g), Some(a), Some(v)) = (gid, aid, ver) {
                         managed_versions.insert((g, a), v);
                     }
@@ -189,7 +200,11 @@ impl PomXmlParser {
                 if parent_pom_path.is_file() {
                     if let Ok(parent_content) = fs::read_to_string(&parent_pom_path) {
                         Self::extract_properties(&parent_content, properties);
-                        Self::extract_dependency_management(&parent_content, properties, managed_versions);
+                        Self::extract_dependency_management(
+                            &parent_content,
+                            properties,
+                            managed_versions,
+                        );
                     }
                 }
             }
@@ -273,10 +288,16 @@ mod tests {
         let graph = PomXmlParser::parse(&temp_dir).expect("should parse interpolated pom.xml");
         let pkgs = graph.get_all_pkgs();
 
-        let guava = pkgs.iter().find(|p| p.name == "com.google.guava:guava").unwrap();
+        let guava = pkgs
+            .iter()
+            .find(|p| p.name == "com.google.guava:guava")
+            .unwrap();
         assert_eq!(guava.version, "31.1-jre");
 
-        let commons = pkgs.iter().find(|p| p.name == "commons-io:commons-io").unwrap();
+        let commons = pkgs
+            .iter()
+            .find(|p| p.name == "commons-io:commons-io")
+            .unwrap();
         assert_eq!(commons.version, "2.11.0");
 
         let _ = fs::remove_dir_all(&temp_dir);

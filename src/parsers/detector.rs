@@ -38,9 +38,11 @@ impl From<ManifestEcosystem> for Ecosystem {
 
 pub fn ecosystem_for_manifest_name(file_name: &str) -> Option<ManifestEcosystem> {
     match file_name {
-        "npm-shrinkwrap.json" | "package-lock.json" | "yarn.lock" | "pnpm-lock.yaml" | "pnpm-lock.yml" => {
-            Some(ManifestEcosystem::Npm)
-        }
+        "npm-shrinkwrap.json"
+        | "package-lock.json"
+        | "yarn.lock"
+        | "pnpm-lock.yaml"
+        | "pnpm-lock.yml" => Some(ManifestEcosystem::Npm),
         "requirements.txt" | "uv.lock" | "poetry.lock" | "Pipfile.lock" => {
             Some(ManifestEcosystem::Python)
         }
@@ -306,7 +308,10 @@ fn collect_additional_discovered_projects(
 
     if let Some(eco) = primary_eco {
         let mut map = HashMap::new();
-        map.insert(eco, (primary_canon.clone(), manifest_priority_rank(primary_name)));
+        map.insert(
+            eco,
+            (primary_canon.clone(), manifest_priority_rank(primary_name)),
+        );
         selected_by_dir_eco.insert(primary_dir, map);
     }
 
@@ -381,13 +386,11 @@ fn collect_additional_discovered_projects(
 
 /// Discovers and parses all workspace manifests grouped by directory and ecosystem (DDD §3.1.1, BUG-001)
 pub fn detect_workspace_manifests(root: &Path) -> Result<Vec<DiscoveredManifest>, ParseError> {
-    let abs_path = root
-        .canonicalize()
-        .unwrap_or_else(|_| root.to_path_buf());
+    let abs_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
     if abs_path.is_file() {
-        let (manifest_type, graph) = parse_manifest_at(&abs_path, false)
-            .map_err(|e| ParseError::Malformed(e))?;
+        let (manifest_type, graph) =
+            parse_manifest_at(&abs_path, false).map_err(|e| ParseError::Malformed(e))?;
         let name = abs_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let ecosystem = ecosystem_for_manifest_name(name)
             .map(Ecosystem::from)
@@ -743,8 +746,7 @@ mod tests {
 
     #[test]
     fn test_root_multi_ecosystem_npm_plus_cargo_merging() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("vexa_multi_eco_{}", std::process::id()));
+        let temp_dir = std::env::temp_dir().join(format!("vexa_multi_eco_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
 
         let package_lock_json = r#"{
@@ -782,7 +784,11 @@ checksum = "3fb1c873e1b9b056a4dc4c0c198b24c3ffa059243875552b2bd0933b1aee4ce2"
             .expect("should detect and parse multi-ecosystem root manifests");
 
         // Both ecosystems must be detected and preserved in projects
-        assert_eq!(res.projects.len(), 2, "Both root npm and root Cargo must be scanned");
+        assert_eq!(
+            res.projects.len(),
+            2,
+            "Both root npm and root Cargo must be scanned"
+        );
         let project_types: Vec<ManifestType> = res
             .projects
             .iter()
@@ -794,8 +800,14 @@ checksum = "3fb1c873e1b9b056a4dc4c0c198b24c3ffa059243875552b2bd0933b1aee4ce2"
         // Both packages should be present in the merged dependency graph
         let pkgs = res.graph.get_all_pkgs();
         let pkg_names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
-        assert!(pkg_names.contains(&"lodash"), "Merged graph must contain lodash from npm");
-        assert!(pkg_names.contains(&"serde"), "Merged graph must contain serde from crates.io");
+        assert!(
+            pkg_names.contains(&"lodash"),
+            "Merged graph must contain lodash from npm"
+        );
+        assert!(
+            pkg_names.contains(&"serde"),
+            "Merged graph must contain serde from crates.io"
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

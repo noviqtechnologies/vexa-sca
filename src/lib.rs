@@ -188,9 +188,9 @@ pub async fn scan_project(
         for proj in &detection.projects {
             if let Some(dir) = proj.manifest_file.parent() {
                 let dir_buf = dir.to_path_buf();
-                engines_by_dir.entry(dir_buf.clone()).or_insert_with(|| {
-                    ReachabilityEngine::new_with_limit(&dir_buf, max_f)
-                });
+                engines_by_dir
+                    .entry(dir_buf.clone())
+                    .or_insert_with(|| ReachabilityEngine::new_with_limit(&dir_buf, max_f));
             }
         }
 
