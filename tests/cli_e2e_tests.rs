@@ -1313,7 +1313,12 @@ fn test_cli_upload_facts_generates_file() {
         facts.get("schema_version").and_then(|v| v.as_str()),
         Some("2.0")
     );
-    assert!(facts.get("manifests").unwrap().as_array().unwrap().len() >= 1);
+    assert!(!facts
+        .get("manifests")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
