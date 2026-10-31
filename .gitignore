@@ -8,6 +8,7 @@
 /outputs/
 /completed/
 /prd/
+/socket/
 
 # Node.js & package manager dependencies
 /node_modules/

@@ -19,10 +19,12 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     AssignmentExpression, BindingPattern, CallExpression, ExportAllDeclaration,
     ExportFromDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier,
-    MemberExpression, NewExpression, PropertyKey, SimpleAssignmentTarget, VariableDeclarator,
+    ImportExpression, MemberExpression, NewExpression, PropertyKey, SimpleAssignmentTarget,
+    VariableDeclarator,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::{ParseOptions, Parser};
+use oxc_span::GetSpan;
 use oxc_span::SourceType;
 
 use serde::{Deserialize, Serialize};
@@ -77,6 +79,7 @@ pub fn analyze_file(
     // ── Pass 0: Collect local constant string declarations ────────────────────
     let mut const_collector = ConstantCollector {
         constants: HashMap::new(),
+        shadowed: HashSet::new(),
     };
     walk::walk_program(&mut const_collector, &program);
 
@@ -91,6 +94,7 @@ pub fn analyze_file(
         has_reexports: false,
         has_unresolved_dynamic: false,
         has_dynamic_construct: false,
+        handled_spans: HashSet::new(),
     };
     walk::walk_program(&mut collector, &program);
 
@@ -168,15 +172,29 @@ fn resolve_specifier_state(
 
 struct ConstantCollector {
     constants: HashMap<String, String>,
+    shadowed: HashSet<String>,
 }
 
 impl<'a> Visit<'a> for ConstantCollector {
     fn visit_variable_declarator(&mut self, decl: &VariableDeclarator<'a>) {
         if let BindingPattern::BindingIdentifier(id) = &decl.id {
+            let name = id.name.to_string();
             if let Some(init) = &decl.init {
                 let unwrapped = unwrap_await(init);
                 if let Some(lit) = extract_string_literal(unwrapped) {
-                    self.constants.insert(id.name.to_string(), lit);
+                    if self.shadowed.contains(&name) {
+                        // Already known to be shadowed/re-declared
+                    } else if let Some(existing) = self.constants.get(&name) {
+                        if existing != &lit {
+                            self.constants.remove(&name);
+                            self.shadowed.insert(name.clone());
+                        }
+                    } else {
+                        self.constants.insert(name.clone(), lit);
+                    }
+                } else {
+                    self.constants.remove(&name);
+                    self.shadowed.insert(name);
                 }
             }
         }
@@ -187,9 +205,18 @@ impl<'a> Visit<'a> for ConstantCollector {
         if let Some(SimpleAssignmentTarget::AssignmentTargetIdentifier(id)) =
             assign.left.as_simple_assignment_target()
         {
+            let name = id.name.to_string();
             let unwrapped = unwrap_await(&assign.right);
             if let Some(lit) = extract_string_literal(unwrapped) {
-                self.constants.insert(id.name.to_string(), lit);
+                if let Some(existing) = self.constants.get(&name) {
+                    if existing != &lit {
+                        self.constants.remove(&name);
+                        self.shadowed.insert(name);
+                    }
+                }
+            } else {
+                self.constants.remove(&name);
+                self.shadowed.insert(name);
             }
         }
         walk::walk_assignment_expression(self, assign);
@@ -208,6 +235,7 @@ struct BindingCollector<'a> {
     has_reexports: bool,
     has_unresolved_dynamic: bool,
     has_dynamic_construct: bool,
+    handled_spans: HashSet<oxc_span::Span>,
 }
 
 impl<'a> Visit<'a> for BindingCollector<'a> {
@@ -220,7 +248,7 @@ impl<'a> Visit<'a> for BindingCollector<'a> {
         };
         self.import_states.push(state);
 
-        if pkg_matches(src, self.pkg_name) {
+        if self.pkg_name.is_empty() || pkg_matches(src, self.pkg_name) {
             self.is_imported = true;
             if let Some(specifiers) = &imp.specifiers {
                 for spec in specifiers {
@@ -249,22 +277,30 @@ impl<'a> Visit<'a> for BindingCollector<'a> {
 
     fn visit_export_from_declaration(&mut self, exp: &ExportFromDeclaration<'a>) {
         let src = exp.source.value.as_str().unwrap_or("");
-        if pkg_matches(src, self.pkg_name) {
+        let state = if src.starts_with('.') || src.starts_with('/') {
+            ImportResolutionState::NonPackageImport(src.to_string())
+        } else {
+            ImportResolutionState::LiteralPackageSpecifier(src.to_string())
+        };
+        self.import_states.push(state);
+        self.has_reexports = true;
+        if self.pkg_name.is_empty() || pkg_matches(src, self.pkg_name) {
             self.is_imported = true;
-            self.has_reexports = true;
-        } else if src.starts_with('.') || src.starts_with('/') {
-            self.has_reexports = true;
         }
         walk::walk_export_from_declaration(self, exp);
     }
 
     fn visit_export_all_declaration(&mut self, exp: &ExportAllDeclaration<'a>) {
         let src = exp.source.value.as_str().unwrap_or("");
-        if pkg_matches(src, self.pkg_name) {
+        let state = if src.starts_with('.') || src.starts_with('/') {
+            ImportResolutionState::NonPackageImport(src.to_string())
+        } else {
+            ImportResolutionState::LiteralPackageSpecifier(src.to_string())
+        };
+        self.import_states.push(state);
+        self.has_reexports = true;
+        if self.pkg_name.is_empty() || pkg_matches(src, self.pkg_name) {
             self.is_imported = true;
-            self.has_reexports = true;
-        } else if src.starts_with('.') || src.starts_with('/') {
-            self.has_reexports = true;
         }
         walk::walk_export_all_declaration(self, exp);
     }
@@ -276,16 +312,20 @@ impl<'a> Visit<'a> for BindingCollector<'a> {
         let mut is_import = false;
 
         if let Expression::ImportExpression(imp) = callee {
-            is_import = true;
-            let state = resolve_specifier_state(&imp.source, self.constants);
-            self.handle_import_specifier_state(state, None);
+            if !self.handled_spans.contains(&imp.source.span()) {
+                is_import = true;
+                let state = resolve_specifier_state(&imp.source, self.constants);
+                self.handle_import_specifier_state(state, None);
+            }
         } else if let Expression::Identifier(id) = callee {
             if id.name == "require" {
                 is_require = true;
                 if let Some(arg) = call.arguments.first() {
                     if let Some(arg_expr) = arg.as_expression() {
-                        let state = resolve_specifier_state(arg_expr, self.constants);
-                        self.handle_import_specifier_state(state, None);
+                        if !self.handled_spans.contains(&arg_expr.span()) {
+                            let state = resolve_specifier_state(arg_expr, self.constants);
+                            self.handle_import_specifier_state(state, None);
+                        }
                     }
                 }
             } else if id.name == "createRequire" || id.name == "eval" {
@@ -306,17 +346,26 @@ impl<'a> Visit<'a> for BindingCollector<'a> {
         walk::walk_call_expression(self, call);
     }
 
+    fn visit_import_expression(&mut self, imp: &ImportExpression<'a>) {
+        if !self.handled_spans.contains(&imp.source.span()) {
+            let state = resolve_specifier_state(&imp.source, self.constants);
+            self.handle_import_specifier_state(state, None);
+        }
+        walk::walk_import_expression(self, imp);
+    }
+
     fn visit_variable_declarator(&mut self, decl: &VariableDeclarator<'a>) {
         if let Some(init) = &decl.init {
             let unwrapped = unwrap_await(init);
 
             // Handle `const x = require(...)` or `const x = await import(...)`
             if let Some((spec_expr, is_member_prop)) = extract_require_or_import_call(unwrapped) {
+                self.handled_spans.insert(spec_expr.span());
                 let state = resolve_specifier_state(spec_expr, self.constants);
                 match &state {
                     ImportResolutionState::LiteralPackageSpecifier(pkg)
                     | ImportResolutionState::ResolvedConstantSpecifier(pkg) => {
-                        if pkg_matches(pkg, self.pkg_name) {
+                        if self.pkg_name.is_empty() || pkg_matches(pkg, self.pkg_name) {
                             self.is_imported = true;
                             if let Some(prop) = is_member_prop {
                                 bind_pattern(
@@ -400,10 +449,13 @@ impl<'a> BindingCollector<'a> {
         match &state {
             ImportResolutionState::LiteralPackageSpecifier(s)
             | ImportResolutionState::ResolvedConstantSpecifier(s) => {
-                if pkg_matches(s, self.pkg_name) {
+                if self.pkg_name.is_empty() || pkg_matches(s, self.pkg_name) {
                     self.is_imported = true;
                     if let Some(pattern) = binding_opt {
                         bind_pattern(pattern, "dyn", &mut self.bindings, &mut self.named_imports);
+                    } else {
+                        self.has_dynamic_construct = true;
+                        self.has_unresolved_dynamic = true;
                     }
                 }
             }

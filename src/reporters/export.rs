@@ -403,6 +403,175 @@ pub fn emit_github_annotations(vulns: &[crate::types::VulnerabilityFinding]) {
     }
 }
 
+pub fn generate_workspace_facts(
+    project_dir: &Path,
+    detection: &crate::parsers::detector::DetectionResult,
+    reach_engine: Option<&crate::reachability::reachability_engine::ReachabilityEngine>,
+) -> crate::types::WorkspaceScanFacts {
+    let repo_name = project_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("project")
+        .to_string();
+
+    let mut git_repo = repo_name;
+    let mut commit_sha = None;
+    let mut branch = None;
+
+    let git_dir = project_dir.join(".git");
+    if git_dir.exists() {
+        if let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD")) {
+            let trimmed = head.trim();
+            if let Some(b) = trimmed.strip_prefix("ref: refs/heads/") {
+                branch = Some(b.to_string());
+                let ref_path = git_dir.join("refs").join("heads").join(b);
+                if let Ok(c) = std::fs::read_to_string(ref_path) {
+                    commit_sha = Some(c.trim().to_string());
+                }
+            } else if trimmed.len() == 40 {
+                commit_sha = Some(trimmed.to_string());
+            }
+        }
+        if let Ok(config) = std::fs::read_to_string(git_dir.join("config")) {
+            for line in config.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("url = ") {
+                    git_repo = trimmed.trim_start_matches("url = ").to_string();
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut manifests = Vec::new();
+    let mut dep_facts = Vec::new();
+
+    for (node_id, node) in &detection.graph.nodes {
+        if node_id == &detection.graph.root_node_id {
+            continue;
+        }
+        let pkg_info = detection.graph.pkgs.get(&node.pkg_id);
+        let purl = pkg_info
+            .map(|p| p.purl.clone())
+            .unwrap_or_else(|| format!("pkg:generic/{}", node_id));
+
+        let is_direct = detection
+            .graph
+            .nodes
+            .get(&detection.graph.root_node_id)
+            .map(|r| r.deps.contains(node_id))
+            .unwrap_or(false);
+
+        let parents: Vec<String> = detection
+            .graph
+            .parents
+            .get(node_id)
+            .map(|p_set| {
+                p_set
+                    .iter()
+                    .filter_map(|p_id| {
+                        detection
+                            .graph
+                            .nodes
+                            .get(p_id)
+                            .and_then(|pn| detection.graph.pkgs.get(&pn.pkg_id))
+                            .map(|p| p.purl.clone())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        dep_facts.push(crate::types::FactDependency {
+            purl,
+            is_direct,
+            scope: node.info.scope.clone(),
+            parents,
+        });
+    }
+
+    let manifest_path_rel = detection
+        .manifest_file
+        .strip_prefix(project_dir)
+        .unwrap_or(&detection.manifest_file)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    let lockfile_sha = std::fs::read(&detection.manifest_file).ok().map(|bytes| {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        hex::encode(hasher.finalize())
+    });
+
+    manifests.push(crate::types::ManifestFact {
+        path: manifest_path_rel,
+        ecosystem: detection.manifest_type.as_str().to_string(),
+        lockfile_blob_sha256: lockfile_sha,
+        dependencies: dep_facts,
+    });
+
+    let (coverage_complete, files_analyzed, imported_packages) = if let Some(re) = reach_engine {
+        let mut pkgs_map = std::collections::HashMap::new();
+
+        for (pkg_name, files) in &re.ast_index.package_importers {
+            let mut symbols = std::collections::HashSet::new();
+            let mut call_locs = Vec::new();
+
+            for fpath in files {
+                if let Some(facts) = re.ast_index.files.get(fpath) {
+                    if let Some(syms) = facts.external_imports.get(pkg_name) {
+                        for s in syms {
+                            symbols.insert(s.clone());
+                        }
+                    }
+                }
+            }
+
+            for ((p, sym), sites) in &re.ast_index.symbol_calls {
+                if p == pkg_name {
+                    for s in sites {
+                        call_locs.push(crate::types::FactCallLocation {
+                            file: s.file.clone(),
+                            line: s.line,
+                            symbol: sym.clone(),
+                        });
+                    }
+                }
+            }
+
+            let mut sorted_symbols: Vec<String> = symbols.into_iter().collect();
+            sorted_symbols.sort();
+
+            let purl = format!("pkg:npm/{}", pkg_name);
+            pkgs_map.insert(
+                purl,
+                crate::types::ImportedPackageFact {
+                    imported_symbols: sorted_symbols,
+                    call_locations: call_locs,
+                },
+            );
+        }
+
+        (re.ast_index.parse_complete, re.ast_index.files_analyzed, pkgs_map)
+    } else {
+        (true, 0, std::collections::HashMap::new())
+    };
+
+    crate::types::WorkspaceScanFacts {
+        schema_version: "2.0".to_string(),
+        repository: git_repo,
+        commit_sha,
+        branch,
+        manifests,
+        ast_facts: crate::types::AstFacts {
+            coverage_complete,
+            files_analyzed,
+            imported_packages,
+        },
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::format_markdown_report;
@@ -424,5 +593,21 @@ mod tests {
         assert!(report.contains("| Severity | Usage Signal |"));
         assert!(report.contains("Unknown"));
         assert!(!report.contains("Unreachable (Low Risk)"));
+    }
+
+    #[test]
+    fn test_generate_workspace_facts_zero_code_retention() {
+        let fixture_dir = std::path::Path::new("test/fixtures/npm-app");
+        let detection = crate::parsers::detector::detect_and_parse(fixture_dir, true)
+            .expect("should detect and parse npm-app");
+        let facts = super::generate_workspace_facts(fixture_dir, &detection, None);
+
+        assert_eq!(facts.schema_version, "2.0");
+        assert_eq!(facts.manifests.len(), 1);
+        assert!(!facts.manifests[0].dependencies.is_empty());
+        let json_str = serde_json::to_string_pretty(&facts).unwrap();
+        // Zero-code-retention: ensure no source code lines are leaked
+        assert!(!json_str.contains("console.log"));
+        assert!(!json_str.contains("function "));
     }
 }

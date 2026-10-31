@@ -7,6 +7,7 @@ use crate::types::{
     SeverityLevel, UsageSignal, VulnerabilityFinding,
 };
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -60,12 +61,79 @@ pub struct ScanResult {
     pub unavailable_packages: Vec<String>,
 }
 
+/// OSV Ecosystem Specific Import metadata (DDD §3.3)
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct OsvEcosystemImport {
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub symbols: Vec<String>,
+}
+
+/// OSV Ecosystem Specific container
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OsvEcosystemSpecific {
+    #[serde(default)]
+    pub imports: Vec<OsvEcosystemImport>,
+    #[serde(default)]
+    pub affected_functions: Vec<String>,
+    #[serde(default)]
+    pub severity: Option<String>,
+}
+
+/// OSV Database Specific metadata (DDD §3.3)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OsvDatabaseSpecific {
+    #[serde(default)]
+    pub cwe_ids: Vec<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub severity: Option<String>,
+    #[serde(default)]
+    pub affected_functions: Vec<String>,
+    #[serde(default)]
+    pub functions: Vec<String>,
+}
+
+/// OSV Affected entry model (DDD §3.3)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OsvAffected {
+    #[serde(default)]
+    pub package: Option<serde_json::Value>,
+    #[serde(default)]
+    pub ranges: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub database_specific: Option<OsvDatabaseSpecific>,
+    #[serde(default)]
+    pub ecosystem_specific: Option<OsvEcosystemSpecific>,
+}
+
+/// OSV Advisory model (DDD §3.3)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OsvVulnerability {
+    pub id: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub details: Option<String>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub affected: Vec<OsvAffected>,
+    #[serde(default)]
+    pub references: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub database_specific: Option<OsvDatabaseSpecific>,
+}
+
 pub struct VulnScanner {
     pub cache: VulnCache,
     pub batch_api_url: String,
     pub vuln_api_url: String,
     pub client: Client,
     pub epss_resolver: EpssResolver,
+    pub kev_catalog: std::sync::RwLock<crate::scanner::kev::CisaKevCatalog>,
 }
 
 impl Default for VulnScanner {
@@ -87,10 +155,20 @@ impl VulnScanner {
             vuln_api_url: "https://api.osv.dev/v1/vulns".to_string(),
             client,
             epss_resolver: EpssResolver::default(),
+            kev_catalog: std::sync::RwLock::new(crate::scanner::kev::CisaKevCatalog::new()),
         }
     }
 
     pub async fn scan_graph(&self, dep_graph: &DepGraph) -> Result<ScanResult, String> {
+        let fresh_kev = crate::scanner::kev::CisaKevCatalog::load_or_fetch(
+            std::path::Path::new(".sca-cache"),
+            Some(&self.client),
+        )
+        .await;
+        if let Ok(mut guard) = self.kev_catalog.write() {
+            *guard = fresh_kev;
+        }
+
         let pkgs = dep_graph.get_all_pkgs();
         let mut uncached: Vec<PkgInfo> = Vec::new();
         let mut results_map: HashMap<String, Vec<Value>> = HashMap::new();
@@ -894,6 +972,65 @@ impl VulnScanner {
         cwes
     }
 
+    fn extract_affected_symbols(&self, cluster: &[&Value]) -> Vec<String> {
+        let mut symbols = HashSet::new();
+        for adv in cluster {
+            if let Some(affected) = adv.get("affected").and_then(|a| a.as_array()) {
+                for aff in affected {
+                    // ecosystem_specific.imports[].(path + symbols)
+                    if let Some(imports) = aff
+                        .get("ecosystem_specific")
+                        .and_then(|e| e.get("imports"))
+                        .and_then(|i| i.as_array())
+                    {
+                        for imp in imports {
+                            let import_path = imp.get("path").and_then(|p| p.as_str());
+                            if let Some(syms) = imp.get("symbols").and_then(|s| s.as_array()) {
+                                for s in syms {
+                                    if let Some(name) = s.as_str() {
+                                        symbols.insert(name.to_string());
+                                        if let Some(p) = import_path {
+                                            symbols.insert(format!("{}::{}", p, name));
+                                        }
+                                    }
+                                }
+                            } else if let Some(p) = import_path {
+                                symbols.insert(p.to_string());
+                            }
+                        }
+                    }
+                    // ecosystem_specific.affected_functions
+                    if let Some(funcs) = aff
+                        .get("ecosystem_specific")
+                        .and_then(|e| e.get("affected_functions"))
+                        .and_then(|f| f.as_array())
+                    {
+                        for f in funcs {
+                            if let Some(name) = f.as_str() {
+                                symbols.insert(name.to_string());
+                            }
+                        }
+                    }
+                    // database_specific.affected_functions / functions
+                    if let Some(funcs) = aff
+                        .get("database_specific")
+                        .and_then(|d| d.get("affected_functions").or_else(|| d.get("functions")))
+                        .and_then(|f| f.as_array())
+                    {
+                        for f in funcs {
+                            if let Some(name) = f.as_str() {
+                                symbols.insert(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut res: Vec<String> = symbols.into_iter().collect();
+        res.sort();
+        res
+    }
+
     fn cluster_advisories<'a>(&self, advisories: &[&'a Value]) -> Vec<Vec<&'a Value>> {
         let n = advisories.len();
         if n <= 1 {
@@ -1080,6 +1217,25 @@ impl VulnScanner {
         let mut cwes: Vec<String> = cwe_set.into_iter().collect();
         cwes.sort();
 
+        let (normalized_cwe_ids, owasp_category) =
+            crate::scanner::cwe_owasp_map::classify_cwes(&cwes);
+        let affected_symbols = self.extract_affected_symbols(cluster);
+
+        let kev_guard = self.kev_catalog.read().unwrap();
+        let is_kev = kev_guard.is_kev(&primary_id)
+            || cve.as_ref().map(|c| kev_guard.is_kev(c)).unwrap_or(false)
+            || aliases.iter().any(|a| kev_guard.is_kev(a));
+        let kev_date_added = if is_kev {
+            cve.as_ref()
+                .and_then(|c| kev_guard.get_date_added(c))
+                .or_else(|| kev_guard.get_date_added(&primary_id))
+                .or_else(|| aliases.iter().find_map(|a| kev_guard.get_date_added(a)))
+                .map(str::to_string)
+        } else {
+            None
+        };
+        drop(kev_guard);
+
         // 6. Best title / summary
         let title_extracted = cluster
             .iter()
@@ -1120,9 +1276,27 @@ impl VulnScanner {
             }
         });
 
-        // 7. References
+        // 7. References and database_specific.source
         let mut ref_set = HashSet::new();
         for adv in cluster {
+            if let Some(src) = adv
+                .get("database_specific")
+                .and_then(|d| d.get("source"))
+                .and_then(|s| s.as_str())
+            {
+                ref_set.insert(src.to_string());
+            }
+            if let Some(affected) = adv.get("affected").and_then(|a| a.as_array()) {
+                for aff in affected {
+                    if let Some(src) = aff
+                        .get("database_specific")
+                        .and_then(|d| d.get("source"))
+                        .and_then(|s| s.as_str())
+                    {
+                        ref_set.insert(src.to_string());
+                    }
+                }
+            }
             if let Some(arr) = adv.get("references").and_then(|v| v.as_array()) {
                 for r in arr {
                     if let Some(u) = r.get("url").and_then(|u| u.as_str()) {
@@ -1164,6 +1338,11 @@ impl VulnScanner {
             severity,
             cve,
             cwes,
+            cwe_ids: normalized_cwe_ids,
+            owasp_category,
+            is_kev,
+            kev_date_added,
+            affected_symbols,
             fixed_in,
             is_transitive,
             paths: paths_strings.to_vec(),

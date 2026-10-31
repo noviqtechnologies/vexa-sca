@@ -160,13 +160,6 @@ pub fn format_html_report(
                         epss.source.as_str(), pct, pct
                     )
                 }
-                crate::types::EpssSource::Heuristic => {
-                    let pct = epss.score * 100.0;
-                    format!(
-                        r#"<span class="badge" style="background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.4);" title="Local Heuristic Estimate (EPSS unavailable from FIRST.org): {:.1}%">Heuristic {:.1}%</span>"#,
-                        pct, pct
-                    )
-                }
                 crate::types::EpssSource::Unavailable => {
                     r#"<span class="badge" style="background: rgba(148, 163, 184, 0.2); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.4);" title="EPSS data unavailable">EPSS N/A</span>"#.to_string()
                 }

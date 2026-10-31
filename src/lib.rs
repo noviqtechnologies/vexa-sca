@@ -1,13 +1,16 @@
 pub mod cli;
 pub mod container;
 pub mod core;
+pub mod firewall;
 pub mod licenses;
+pub mod mcp;
 pub mod parsers;
 pub mod patcher;
 pub mod policy;
 pub mod reachability;
 pub mod reporters;
 pub mod scanner;
+pub mod supply_chain;
 pub mod types;
 
 use std::path::{Path, PathBuf};
@@ -147,7 +150,12 @@ pub async fn scan_project(
 ) -> Result<ProjectScanOutput, String> {
     // 1. Detect and parse manifest into DepGraph
     let detection = detect_and_parse(project_dir, options.dev)?;
-    let multiple_project_scopes = detection.discovered_projects.len() > 1;
+    let distinct_project_dirs: std::collections::HashSet<_> = detection
+        .discovered_projects
+        .iter()
+        .filter_map(|p| p.parent())
+        .collect();
+    let multiple_project_scopes = distinct_project_dirs.len() > 1;
 
     // 2. Scan graph for vulnerabilities
     let scanner = VulnScanner::new(None);
@@ -168,31 +176,47 @@ pub async fn scan_project(
         policy_engine.filter_vulnerabilities(&raw_scan_result.vulnerabilities, None);
 
     // 4. Run Reachability Analysis & Usage Signals (FR-001, FR-007a)
-    let reachability_engine = if let Some(max_f) = options.max_source_files {
-        ReachabilityEngine::new_with_limit(project_dir, max_f)
-    } else {
-        ReachabilityEngine::new(project_dir)
-    };
-    active = reachability_engine.evaluate_reachability(active);
+    // BUG-005 Fix: Scope WorkspaceAstIndex per manifest directory root instead of invalidating
+    // reachability across the workspace in monorepos.
+    let max_f = options.max_source_files.unwrap_or(10_000);
+    let reachability_engine = ReachabilityEngine::new_with_limit(project_dir, max_f);
 
-    // The current graph merger does not retain enough project identity to bind an
-    // imported source file to the exact lockfile scope that contributed a finding.
-    // Keep the import evidence, but do not present it as a package-scoped proof.
-    if multiple_project_scopes {
-        for finding in &mut active {
-            if let Some(reachability) = finding.reachability.as_mut() {
-                if reachability.status == ReachabilityStatus::Reachable {
-                    reachability.status = ReachabilityStatus::Unknown;
-                    reachability.reason_code = Some(crate::types::ReasonCode::CrossFileUnresolved);
-                }
-            }
-            if finding.reachability.as_ref().is_some_and(|r| {
-                r.status == ReachabilityStatus::Unknown
-                    && r.reason_code == Some(crate::types::ReasonCode::CrossFileUnresolved)
-            }) {
-                finding.reason_code = Some(crate::types::ReasonCode::CrossFileUnresolved);
+    if multiple_project_scopes && !detection.projects.is_empty() {
+        let mut engines_by_dir: std::collections::HashMap<std::path::PathBuf, ReachabilityEngine> =
+            std::collections::HashMap::new();
+
+        for proj in &detection.projects {
+            if let Some(dir) = proj.manifest_file.parent() {
+                let dir_buf = dir.to_path_buf();
+                engines_by_dir.entry(dir_buf.clone()).or_insert_with(|| {
+                    ReachabilityEngine::new_with_limit(&dir_buf, max_f)
+                });
             }
         }
+
+        for finding in &mut active {
+            let target_engine = detection
+                .projects
+                .iter()
+                .find_map(|proj| {
+                    if proj.graph.pkgs.values().any(|p| p.name == finding.package) {
+                        proj.manifest_file
+                            .parent()
+                            .and_then(|dir| engines_by_dir.get(dir))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(&reachability_engine);
+
+            let (reach, usage) = target_engine.check_vulnerability_and_usage(finding);
+            finding.reason_code = reach.reason_code;
+            finding.reachability = Some(reach);
+            finding.usage_signal = usage;
+            finding.priority_score = finding.compute_priority_score();
+        }
+    } else {
+        active = reachability_engine.evaluate_reachability(active);
     }
 
     let unreachable_total = active
@@ -421,9 +445,27 @@ mod tests {
                     .unwrap_or(false)
             })
             .count();
+        let unreachable_count = normal
+            .scan_result
+            .vulnerabilities
+            .iter()
+            .filter(|v| {
+                v.reachability
+                    .as_ref()
+                    .map(|r| r.status == ReachabilityStatus::Unreachable)
+                    .unwrap_or(false)
+            })
+            .count();
 
-        assert!(reachable_count > 0);
-        assert!(unknown_count > 0);
+        assert!(reachable_count > 0, "expected at least one Reachable vuln");
+        // BUG-004 fix: when AST coverage is complete and no call sites are found,
+        // the engine now emits Unreachable instead of Unknown. The fixture may
+        // therefore have zero Unknown vulns; assert that at least one
+        // non-Reachable verdict (Unknown OR Unreachable) is present.
+        assert!(
+            unknown_count > 0 || unreachable_count > 0,
+            "expected at least one Unknown or Unreachable vuln (got reachable={reachable_count}, unknown={unknown_count}, unreachable={unreachable_count})"
+        );
 
         let filtered = scan_project(
             fixture_dir,

@@ -635,6 +635,7 @@ mod tests {
                 reason_code: None,
                 priority_score: 5.0,
                 is_new: true,
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -749,6 +750,7 @@ mod tests {
                 reason_code: None,
                 priority_score: 5.0,
                 is_new: true,
+                ..Default::default()
             }],
             ..Default::default()
         };

@@ -293,6 +293,10 @@ pub enum Commands {
         /// Overall scan timeout in seconds (default: 300)
         #[arg(long, default_value = "300")]
         timeout_secs: u64,
+
+        /// Generate Zero-Code-Retention .vexa.facts.json for cloud sync or offline review
+        #[arg(long, visible_alias = "facts")]
+        upload_facts: bool,
     },
 
     /// Automated scan profile for CI/CD pipelines (fails closed on incomplete data/advisory outage)
@@ -413,6 +417,10 @@ pub enum Commands {
         /// Overall scan timeout in seconds (default: 300)
         #[arg(long, default_value = "300")]
         timeout_secs: u64,
+
+        /// Generate Zero-Code-Retention .vexa.facts.json for cloud sync or offline review
+        #[arg(long, visible_alias = "facts")]
+        upload_facts: bool,
     },
 
     /// Initialize pinned GitHub Actions workflow for Vexa SCA in .github/workflows/vexa-sca.yml
@@ -583,6 +591,19 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Package manager security firewall wrapper with zero-shell interpolation (npm, pnpm, yarn, bun, pip, uv, cargo)
+    Wrap {
+        /// Package manager name (npm, pnpm, yarn, bun, pip, uv, cargo)
+        pm: String,
+
+        /// Arguments forwarded to the package manager
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// Launch Model Context Protocol (MCP) JSON-RPC server over stdin/stdout for Cursor, Claude Code, and Copilot
+    Mcp,
 }
 
 pub async fn run() {
@@ -1408,7 +1429,7 @@ pub async fn run() {
             fail_on_licenses,
             fail_on_unmaintained,
             epss_threshold,
-            epss_allow_heuristic,
+            epss_allow_heuristic: _epss_allow_heuristic,
             strict_epss,
             usage,
             baseline,
@@ -1416,6 +1437,7 @@ pub async fn run() {
             allow_unavailable,
             max_source_files,
             timeout_secs,
+            upload_facts,
         } => {
             if fail_on_unknown_reachability && allow_unknown_reachability {
                 eprintln!(
@@ -1452,13 +1474,6 @@ pub async fn run() {
                                     crate::types::EpssSource::FirstOrg
                                     | crate::types::EpssSource::Cache => {
                                         (epss.score >= thresh, false)
-                                    }
-                                    crate::types::EpssSource::Heuristic => {
-                                        if epss_allow_heuristic {
-                                            (epss.score >= thresh, false)
-                                        } else {
-                                            (true, true) // fail-closed: retain findings without authoritative EPSS
-                                        }
                                     }
                                     crate::types::EpssSource::Unavailable => (true, true), // fail-closed: retain
                                 },
@@ -1757,6 +1772,20 @@ pub async fn run() {
                         QualityGate::print_terminal_summary(&gate_res);
                     }
 
+                    if upload_facts {
+                        if let Ok(detection) = crate::parsers::detector::detect_and_parse(&path, !prod_only) {
+                            let facts = crate::reporters::export::generate_workspace_facts(&path, &detection, None);
+                            let facts_path = path.join(".vexa.facts.json");
+                            if let Ok(serialized) = serde_json::to_string_pretty(&facts) {
+                                if let Err(e) = std::fs::write(&facts_path, serialized) {
+                                    eprintln!("{} Failed to write .vexa.facts.json: {}", "Warning:".yellow(), e);
+                                } else {
+                                    eprintln!("{} Exported Zero-Code-Retention scan facts to {}", "✔".green().bold(), facts_path.display());
+                                }
+                            }
+                        }
+                    }
+
                     // Strict precedence contract:
                     // 3 (incomplete scan data) takes precedence over finding quality gate failure (1).
                     if incomplete_scan_requires_exit3(&output.scan_result, allow_unavailable) {
@@ -1817,12 +1846,13 @@ pub async fn run() {
             fail_on_licenses,
             fail_on_unmaintained,
             epss_threshold,
-            epss_allow_heuristic,
+            epss_allow_heuristic: _epss_allow_heuristic,
             strict_epss,
             no_fail,
             allow_unavailable,
             max_source_files,
             timeout_secs,
+            upload_facts,
         } => {
             if fail_on_unknown_reachability && allow_unknown_reachability {
                 eprintln!(
@@ -1859,13 +1889,6 @@ pub async fn run() {
                                     crate::types::EpssSource::FirstOrg
                                     | crate::types::EpssSource::Cache => {
                                         (epss.score >= thresh, false)
-                                    }
-                                    crate::types::EpssSource::Heuristic => {
-                                        if epss_allow_heuristic {
-                                            (epss.score >= thresh, false)
-                                        } else {
-                                            (true, true)
-                                        }
                                     }
                                     crate::types::EpssSource::Unavailable => (true, true),
                                 },
@@ -2111,6 +2134,20 @@ pub async fn run() {
 
                     if !json && !sarif && sbom.is_none() {
                         QualityGate::print_terminal_summary(&gate_res);
+                    }
+
+                    if upload_facts {
+                        if let Ok(detection) = crate::parsers::detector::detect_and_parse(&path, !prod_only) {
+                            let facts = crate::reporters::export::generate_workspace_facts(&path, &detection, None);
+                            let facts_path = path.join(".vexa.facts.json");
+                            if let Ok(serialized) = serde_json::to_string_pretty(&facts) {
+                                if let Err(e) = std::fs::write(&facts_path, serialized) {
+                                    eprintln!("{} Failed to write .vexa.facts.json: {}", "Warning:".yellow(), e);
+                                } else {
+                                    eprintln!("{} Exported Zero-Code-Retention scan facts to {}", "✔".green().bold(), facts_path.display());
+                                }
+                            }
+                        }
                     }
 
                     // Strict precedence contract:
@@ -2450,6 +2487,25 @@ ignore:
                 );
                 println!("──────────────────────────────────────────────────\n");
             }
+        }
+
+        Commands::Wrap { pm, args } => {
+            let cache_dir = PathBuf::from(".sca-cache");
+            match crate::firewall::FirewallWrapper::execute_wrapped(&pm, &args, &cache_dir).await {
+                Ok(code) => exit(code),
+                Err(e) => {
+                    eprintln!("{} {}", "Firewall error:".red().bold(), e);
+                    exit(1);
+                }
+            }
+        }
+
+        Commands::Mcp => {
+            if let Err(e) = crate::mcp::McpServer::run().await {
+                eprintln!("{} {}", "MCP server error:".red().bold(), e);
+                exit(1);
+            }
+            exit(0);
         }
     }
 }

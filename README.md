@@ -2,7 +2,7 @@
 
 [![Release](https://img.shields.io/badge/Release-v1.2.0%20GA-brightgreen.svg?logo=github)](https://github.com/noviqtechnologies/vexa-sca/releases)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg?logo=githubactions)](https://github.com/noviqtechnologies/vexa-sca/actions)
-[![Tests](https://img.shields.io/badge/Tests-153%20Passing-success.svg)](#automated-tests--verification)
+[![Tests](https://img.shields.io/badge/Tests-177%20Passing-success.svg)](#automated-tests--verification)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/Rust-2021%20%7C%20MSRV%201.99.1%2B-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-brightgreen.svg)](#cross-platform-installation--setup)
@@ -13,13 +13,6 @@
 <a href="https://vexasec.io" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Website-vexasec.io-blue" alt="Website" /></a>
 
 **Vexa SCA** (`vexa-sca`) is an open-source, high-performance Software Composition Analysis (SCA) engine built in Rust. Engineered specifically for enterprise DevSecOps pipelines and modern pull-request automation, Vexa SCA delivers ultra-fast, reproducible vulnerability triage, deep transitive dependency graphing, positive-proof verdict integrity, and authoritative CI result surfaces.
-
-> [!IMPORTANT]
-> **Release Status: General Availability (GA) — Release v1.2.0**
-> - **Tier 1 (GA / Production Ready):** Node.js / JavaScript / TypeScript (`package-lock.json` v2 & v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9), Repository Usage Signals (heuristic AST single-pass import/call matching), PR-differential gating (`--baseline`), GitHub Actions native CI integration (`vexa-sca ci`, `vexa-sca init`), reviewed same-major remediation proposals with byte-for-byte rollback guarantees (`vexa-sca fix`), strict policy-as-code (`.vexa-sca`), and deterministic exit code contracts (`0`, `1`, `2`, `3`).
-> - **Tier 2 (Experimental / Community Preview):** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn (`yarn.lock`), Cargo (`Cargo.lock`), Go (`go.sum`), Container OS packages (`vexa-sca container`), and Copyleft license auditing (`vexa-sca licenses`).
->
-> **Verdict Integrity Rule:** Repository Usage Signals are heuristic syntactic triage aids. Verdict integrity mandates that missing AST signals never certify runtime safety or suppress unverified findings.
 
 <p align="center">
   <a href="#quick-start"><b>Quick Start</b></a> •
@@ -50,6 +43,11 @@
 | 📋 [**CycloneDX & SPDX SBOM Generator**](#5-software-bill-of-materials-sbom-cyclonedx--spdx) | Export compliant **CycloneDX v1.5 JSON** (with VEX status) and **SPDX v2.3 JSON** with package URLs (PURLs) and vulnerability metadata. | `vexa-sca scan --sbom cyclonedx` |
 | 🛡️ [**Policy-as-Code & Suppression Engine**](#3-policy--suppression-engine-vexa-sca) | Define accepted risks in `.vexa-sca` YAML/JSON with mandatory expiration dates and alias matching (CVE/GHSA/Package). | `vexa-sca scan --policy .vexa-sca` |
 | 📈 [**EPSS Exploit Prediction**](#epss-exploit-prediction-likelihood) | Prioritizes CVEs by real-world 30-day exploit likelihood (FIRST.org EPSS) with fail-closed retention during upstream outages. | `vexa-sca scan --epss-threshold 0.50` |
+| 🚨 [**CISA KEV Integration**](#9-supply-chain-behavioral-analysis) | Flags CVEs confirmed exploited in the wild via the CISA Known Exploited Vulnerabilities catalog (cached, 24h TTL, +35 priority score boost). | `vexa-sca scan` |
+| 🔬 [**Supply Chain Behavioral Analysis**](#9-supply-chain-behavioral-analysis) | 15 static-analysis rules (SC-001–SC-015) detecting typosquatting, CI/CD poisoning, secrets, reverse shells, and MCP prompt-injection in manifests and workflows. | `vexa-sca scan` |
+| 🔥 [**Package Manager Firewall (`wrap`)**](#10-package-manager-firewall-wrap) | Pre-installation zero-shell security gate for npm, pnpm, yarn, bun, pip, uv, and cargo. Blocks typosquatted packages, CISA KEV hits, and OSV advisories before install. | `vexa-sca wrap npm install lodash` |
+| 🤖 [**MCP Server (`mcp`)**](#11-mcp-server-integration-mcp) | JSON-RPC 2.0 MCP server exposing 4 tools to AI coding assistants (Cursor, Claude Code, Windsurf, GitHub Copilot). | `vexa-sca mcp` |
+| 📤 [**Zero-Code-Retention Facts Export**](#1-vexa-sca-scan) | Generates `.vexa.facts.json` with workspace dependency graph and import facts for team upload without transmitting source code. | `vexa-sca scan --upload-facts` |
 | 🚦 [**Process Exit Code Contract**](#process-exit-code-contract) | Deterministic automation contract: `0` (clean/pass), `1` (quality gate failure), `2` (config error), `3` (advisory outage / incomplete data). | `vexa-sca ci` |
 
 > [!TIP]
@@ -98,6 +96,9 @@
   - [6. Standalone Interactive HTML Audit Dashboard](#6-standalone-interactive-html-audit-dashboard)
   - [7. CI/CD Quality Gates & Policy Enforcement](#7-cicd-quality-gates--policy-enforcement)
   - [8. Container & OS Package Scanner (`container`)](#8-container--os-package-scanner-container)
+  - [9. Supply Chain Behavioral Analysis](#9-supply-chain-behavioral-analysis)
+  - [10. Package Manager Firewall (`wrap`)](#10-package-manager-firewall-wrap)
+  - [11. MCP Server Integration (`mcp`)](#11-mcp-server-integration-mcp)
 - [CLI Reference](#cli-reference)
   - [`vexa-sca scan`](#1-vexa-sca-scan)
   - [`vexa-sca fix`](#2-vexa-sca-fix)
@@ -105,6 +106,8 @@
   - [`vexa-sca graph`](#4-vexa-sca-graph)
   - [`vexa-sca test`](#5-vexa-sca-test)
   - [`vexa-sca container`](#6-vexa-sca-container)
+  - [`vexa-sca wrap`](#9-vexa-sca-wrap)
+  - [`vexa-sca mcp`](#10-vexa-sca-mcp)
 - [Documentation & Workflow Guides](#-documentation--workflow-guides)
   - [🛡️ Open Source SCA Guide (`docs/open-source-sca.md`)](docs/open-source-sca.md)
   - [💻 CLI Usage Guide (`docs/cli-usage.md`)](docs/cli-usage.md)
@@ -363,11 +366,14 @@ Standard SCA tools flag every dependency in a tree equally, creating alert fatig
 Vexa SCA replaces binary reachability assumptions with **Repository Usage Signals** and strict **Positive Proof Rules**:
 
 - **Repository Usage Classification**:
-  - `IMPORTED_SOURCE`: The package is directly imported or required in first-party JavaScript, TypeScript, or Python code.
+  - `IMPORTED_SOURCE`: The package is directly imported or required in first-party JavaScript, TypeScript, Python, Rust, or Go code.
   - `REFERENCED_CONFIG_OR_SCRIPT`: The package is referenced in `package.json` scripts (`build`, `test`), `bin` entries, or tool configurations.
-  - `NO_REFERENCE_FOUND_WITHIN_SCOPE`: No direct lexical reference was found within scanned source files (scans up to 1,000 files by default).
-  - `UNKNOWN`: Symbol data is unavailable or the finding resides on a transitive dependency not directly referenced.
-- **Positive Proof Rule**: A finding is **never** certified as `NOT_REACHABLE` simply because no call site was detected. If symbol metadata is absent or a dependency is transitive, the finding is conservatively classified as `UNKNOWN` with an explicit reason code (`NO_SYMBOL_DATA`, `TRANSITIVE_NOT_ANALYZED`, `FILE_LIMIT_HIT`).
+  - `NO_REFERENCE_FOUND_WITHIN_SCOPE`: No direct lexical reference was found within scanned source files (scans up to 10,000 files by default).
+  - `UNKNOWN`: Symbol data is unavailable, the finding resides on a transitive dependency not directly referenced, or AST coverage could not be completed.
+  - `UNREACHABLE` *(v2.0)*: **Positive-proof absence**: the workspace index was fully built, no file-limit or parse-failure guard tripped, and no import or call site for the vulnerable symbol was found across all source files. This is a strict no-false-safe verdict — dynamic constructs, barrel re-exports, and transitive chains block this classification.
+- **Positive Proof Rule**: A finding is **never** certified as `UNREACHABLE` unless all guards are cleared. If symbol metadata is absent, a dependency is transitive, the file limit was hit, any parse failed, or an unresolved dynamic import exists, the finding remains `UNKNOWN` with an explicit reason code (`NO_SYMBOL_DATA`, `TRANSITIVE_NOT_ANALYZED`, `FILE_LIMIT_HIT`, `PARSE_FAILURE`, `DYNAMIC_IMPORT`).
+- **Single-Pass `WorkspaceAstIndex` *(v2.0)***: All source files are indexed once at engine startup across JS/TS (via `oxc` AST), Python, Rust, Go, and Java — eliminating the O(F×V) re-parse overhead from v1.x. Non-JS files are analyzed with language-appropriate regex analyzers, never fed to `oxc_parser`.
+- **Multi-Language Call-Site Detection *(v2.0)***: Rust `use crate::pkg::fn;` imports followed by direct `fn(...)` calls, Python `import pkg as alias; alias.fn()` patterns, and JS/TS ESM/CJS/dynamic-import chains are all resolved through the same index.
 - **Priority Scoring**: Findings are ranked by a deterministic 10-point priority score combining CVSS severity, usage signal, EPSS exploit likelihood, and direct vs transitive depth.
 
 ```bash
@@ -577,6 +583,52 @@ vexa-sca container /var/chroot/alpine --fail-on high
 
 ---
 
+### 9. Supply Chain Behavioral Analysis
+
+Vexa SCA v2.0 includes a **static supply chain behavioral analyzer** that scans manifests, GitHub Actions workflows, MCP configuration files, and source code for 15 classes of supply chain attack patterns — with no runtime execution required.
+
+**Supply Chain Rules (SC-001 – SC-015):**
+
+| Rule | Signal Name | Severity | What It Detects |
+| :--- | :--- | :--- | :--- |
+| SC-001 | `install_script_execution` | 🔴 High | `preinstall` / `install` / `postinstall` lifecycle scripts in `package.json`; `cmdclass` overrides in `setup.py` |
+| SC-002 | `install_script_network_egress` | 🔴 Critical | Install hooks that initiate network egress (`curl`, `wget`, `fetch()`, `Invoke-WebRequest`, `net.connect`) |
+| SC-003 | `dynamic_code_eval` | 🔴 High | Dynamic code evaluation: `eval()`, `new Function()`, `vm.runInNewContext()`, `exec(b64decode(...))` |
+| SC-004 | `child_process_shell` | 🔴 High | Child process spawned with shell interpolation: `child_process.exec/execSync`, `subprocess.Popen(shell=True)`, `os.system()` |
+| SC-005 | `high_entropy_obfuscation` | 🔴 High | String literals > 256 bytes with Shannon entropy > 5.85 bits/byte and obfuscation markers (`_0x`, `Buffer.from`, `base64`, `atob`) |
+| SC-006 | `env_credential_harvesting` | 🔴 Critical | Module reads secret env vars (`AWS_SECRET`, `GITHUB_TOKEN`, `OPENAI_API_KEY`, etc.) while also importing network socket primitives |
+| SC-007 | `sensitive_filesystem_access` | 🔴 Critical | Reads host credential files: `.ssh/id_rsa`, `.aws/credentials`, `.kube/config`, `/etc/shadow`, `/proc/self/mem` |
+| SC-008 | `trojan_source_bidi` | 🔴 Critical | Unicode Bidirectional Override characters (U+202A–U+202E, U+2066–U+2069) in source files (CVE-2021-42574) |
+| SC-009 | `unpinned_git_or_http_tarball` | 🟠 Medium | Lockfile dependency resolves from unpinned `git+ssh://`, `git+https://`, or plain `http://` URL (non-registry source) |
+| SC-010 | `typosquat_top_10k` | 🔴 High | Package name within Damerau-Levenshtein edit distance ≤ 1 from a curated popular-package list (e.g. `loadsh` → `lodash`) |
+| SC-011 | `native_addon_binary_blob` | 🟠 Medium | Repository contains precompiled native binary blobs: `.node`, `.dylib`, `.so`, `.dll`, `.exe` files |
+| SC-012 | `crypto_miner_stratum` | 🔴 Critical | Cryptocurrency miner signatures: `stratum+tcp://`, `stratum+ssl://`, `xmrig`, `cryptonight` |
+| SC-013 | `reverse_shell_signature` | 🔴 Critical | Reverse shell patterns: `/bin/bash -i`, `bash -i >& /dev/tcp/`, `nc -e`, `sh -i >& /dev/tcp/`, `pty.spawn('/bin/bash')` |
+| SC-014 | `github_actions_unpinned_ref` | 🔴 High | GitHub Actions `uses:` references not pinned to immutable 40-hex-char commit SHA (e.g. `@v2`, `@main`, `@latest`); dangerous `pull_request_target` + head checkout |
+| SC-015 | `mcp_unsafe_tool_config` | 🔴 High | MCP server config executes `npx -y <unpinned-pkg>`, or grants unrestricted host filesystem root (`/`, `C:\`) |
+
+```bash
+# Supply chain analysis runs automatically during a normal scan
+vexa-sca scan
+
+# Output supply chain findings as JSON
+vexa-sca scan --json | jq '.supply_chain_findings'
+```
+
+---
+
+### 10. Package Manager Firewall (`wrap`)
+
+See [`vexa-sca wrap`](#9-vexa-sca-wrap) in the CLI Reference for full details and examples.
+
+---
+
+### 11. MCP Server Integration (`mcp`)
+
+See [`vexa-sca mcp`](#10-vexa-sca-mcp) in the CLI Reference for full details and client configuration.
+
+---
+
 ## CLI Reference
 
 All commands support relative and absolute paths, cross-platform path separators (`/` or `\`), and default to the current working directory (`.`). You can use `vexa-sca`, `vexa`, or `sca` interchangeably.
@@ -612,6 +664,7 @@ vexa-sca scan [PATH] [OPTIONS]
 | `--epss-threshold <FLOAT>` | Option | Filter vulnerabilities by minimum EPSS probability (0.0 to 1.0) |
 | `--allow-unavailable` | Flag | Allow scan to succeed (exit 0) even if OSV database is unreachable |
 | `--usage` | Flag | Display open engine license and scan status |
+| `--upload-facts` | Flag | Generate `.vexa.facts.json` Zero-Code-Retention workspace facts file (dependency graph + import facts) for team upload |
 
 ---
 
@@ -765,6 +818,74 @@ vexa-sca usage
 # Output structured JSON for automation or dashboards
 vexa-sca usage --json
 ```
+
+---
+
+### 9. `vexa-sca wrap`
+Pre-installation package manager firewall with zero-shell command execution. Intercepts package installations and evaluates each requested package for typosquatting, CISA KEV exposure, and OSV advisories **before** the install runs.
+
+```bash
+vexa-sca wrap <PACKAGE_MANAGER> [ARGS...]
+```
+
+Supported package managers: `npm`, `pnpm`, `yarn`, `bun`, `pip`, `uv`, `cargo`.
+
+**Examples:**
+```bash
+# Intercept npm install and scan all requested packages
+vexa-sca wrap npm install express lodash
+
+# Intercept pnpm add and block any typosquatted or KEV-flagged packages
+vexa-sca wrap pnpm add react
+
+# Intercept cargo add
+vexa-sca wrap cargo add serde tokio
+
+# Intercept pip install (Team+ mode requires VEXA_SCA_API_KEY)
+vexa-sca wrap pip install flask requests
+```
+
+**What the firewall checks:**
+| Check | Rule | Action on Fail |
+| :--- | :--- | :--- |
+| Typosquatting detection | SC-010 — Damerau-Levenshtein distance ≤1 from known popular packages | Exit code 1, print `[FIREWALL BLOCKED]` |
+| CISA KEV exposure | Any requested package version has a KEV-listed CVE | Exit code 1, print KEV CVE and date added |
+| OSV advisory scan | Any requested package has a published OSV advisory | Exit code 1, print advisory summary |
+
+> [!IMPORTANT]
+> `vexa-sca wrap` uses `std::process::Command` with array arguments — **zero shell interpolation**. The original package manager command runs only when all security checks pass (exit code 0). In Team+ mode, authenticated scans use `VEXA_SCA_API_KEY`.
+
+---
+
+### 10. `vexa-sca mcp`
+Start a **Model Context Protocol (MCP)** JSON-RPC 2.0 server over `stdin`/`stdout`. Exposes Vexa SCA security tools to AI coding assistants including **Cursor**, **Claude Code**, **Windsurf**, and **GitHub Copilot**.
+
+```bash
+vexa-sca mcp
+```
+
+**Available MCP tools:**
+| Tool | Description |
+| :--- | :--- |
+| `vexa_check_package` | Check a single package name + version for vulnerabilities, CISA KEV status, and supply chain risks |
+| `vexa_scan_workspace` | Scan an entire workspace directory and return structured findings |
+| `vexa_explain_finding` | Explain a vulnerability finding or supply chain rule in plain English |
+| `vexa_remediate_manifest` | Propose a remediated version for a vulnerable dependency in a manifest |
+
+**MCP client configuration** (e.g. Cursor `mcp.json`):
+```json
+{
+  "mcpServers": {
+    "vexa-sca": {
+      "command": "vexa-sca",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+> [!NOTE]
+> The MCP server uses blocking `stdin`/`stdout` JSON-RPC 2.0 framing (one JSON object per line). It does not require network access or cloud credentials for the open-source tier.
 
 ---
 
@@ -961,10 +1082,10 @@ fi
 
 ## Automated Tests & Release Verification
 
-Vexa SCA enforces rigorous quality gates with 153 automated tests covering all core engines, lockfile parsers, reporters, rollback mechanisms, and CLI contracts:
+Vexa SCA enforces rigorous quality gates with **177 automated tests** covering all core engines, lockfile parsers, reporters, rollback mechanisms, supply chain analyzer, package firewall, MCP server, and CLI contracts:
 
 ```bash
-# 1. Run all unit and integration tests (153 tests: 130 lib + 23 E2E)
+# 1. Run all unit and integration tests (177 tests: 151 lib + 26 E2E)
 cargo test
 
 # 2. Run schema validation against pinned official SARIF 2.1.0, CycloneDX 1.5, and SPDX 2.3 schemas
@@ -985,6 +1106,10 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 - **Remediation & Fixer**: Same-major upgrade preference, `overrides` injection, backup restoration, and PR template generation.
 - **Interactive HTML Dashboard**: Offline zero-dependency HTML generator, glassmorphism dark theme, live search/filter, and XSS HTML entity escaping.
 - **Container Scanner**: Alpine Linux `apk` database parsing, Debian/Ubuntu `dpkg` status parsing, `/etc/os-release` identification, and tarball extraction.
+- **Supply Chain Analyzer**: All 15 SC rules (SC-001–SC-015) including typosquatting (Damerau-Levenshtein), reverse shell detection, Trojan Source (bidi chars), MCP prompt injection, and CI/CD poisoning.
+- **Package Manager Firewall (`wrap`)**: Zero-shell arg extraction for npm, pip, and cargo; typosquatting block; CISA KEV block; OSV scan gate.
+- **MCP Server**: JSON-RPC 2.0 initialize handshake, tools/list enumeration, and `vexa_explain_finding` tool dispatch.
+- **Zero-Code-Retention Facts Export**: `--upload-facts` generates `.vexa.facts.json` with workspace dependency graph and AST import facts.
 
 For complete audit and verification records, see [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md).
 

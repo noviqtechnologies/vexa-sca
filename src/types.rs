@@ -350,6 +350,16 @@ pub struct VulnerabilityFinding {
     pub severity: SeverityInfo,
     pub cve: Option<String>,
     pub cwes: Vec<String>,
+    #[serde(default)]
+    pub cwe_ids: Vec<String>,
+    #[serde(default)]
+    pub owasp_category: Option<String>,
+    #[serde(default)]
+    pub is_kev: bool,
+    #[serde(default)]
+    pub kev_date_added: Option<String>,
+    #[serde(default)]
+    pub affected_symbols: Vec<String>,
     pub fixed_in: Vec<String>,
     pub is_transitive: bool,
     pub paths: Vec<Vec<String>>,
@@ -426,6 +436,10 @@ impl VulnerabilityFinding {
             score += 10.0;
         }
 
+        if self.is_kev {
+            score += 35.0;
+        }
+
         if let Some(epss) = &self.epss {
             if epss.source == EpssSource::FirstOrg || epss.source == EpssSource::Cache {
                 score += epss.score * 15.0;
@@ -440,14 +454,25 @@ impl VulnerabilityFinding {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PackageResolutionState {
+    Pinned(String),
+    UnpinnedRange { constraint: String },
+    Unconstrained,
+}
+
+impl PackageResolutionState {
+    pub fn is_pinned(&self) -> bool {
+        matches!(self, Self::Pinned(_))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum EpssSource {
     #[serde(rename = "first.org")]
     FirstOrg,
     #[serde(rename = "cache")]
     Cache,
-    #[serde(rename = "heuristic")]
-    Heuristic,
     #[serde(rename = "unavailable")]
     #[default]
     Unavailable,
@@ -458,7 +483,6 @@ impl EpssSource {
         match self {
             Self::FirstOrg => "first.org",
             Self::Cache => "cache",
-            Self::Heuristic => "heuristic",
             Self::Unavailable => "unavailable",
         }
     }
@@ -488,6 +512,11 @@ impl Default for VulnerabilityFinding {
             },
             cve: None,
             cwes: vec![],
+            cwe_ids: vec![],
+            owasp_category: None,
+            is_kev: false,
+            kev_date_added: None,
+            affected_symbols: vec![],
             fixed_in: vec![],
             is_transitive: false,
             paths: vec![],
@@ -519,3 +548,56 @@ pub struct RemediationAction {
     #[serde(default)]
     pub highest_severity: Option<SeverityLevel>,
 }
+
+/// Zero-Code-Retention scan facts extracted locally for cloud sync or offline review (.vexa.facts.json).
+/// Encodes only package coordinates, dependency trees, and redacted file/line call coordinates.
+/// Strictly excludes first-party source code lines.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceScanFacts {
+    pub schema_version: String,
+    pub repository: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub manifests: Vec<ManifestFact>,
+    pub ast_facts: AstFacts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestFact {
+    pub path: String,
+    pub ecosystem: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lockfile_blob_sha256: Option<String>,
+    pub dependencies: Vec<FactDependency>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FactDependency {
+    pub purl: String,
+    pub is_direct: bool,
+    pub scope: String,
+    pub parents: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AstFacts {
+    pub coverage_complete: bool,
+    pub files_analyzed: usize,
+    pub imported_packages: std::collections::HashMap<String, ImportedPackageFact>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportedPackageFact {
+    pub imported_symbols: Vec<String>,
+    pub call_locations: Vec<FactCallLocation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FactCallLocation {
+    pub file: String,
+    pub line: usize,
+    pub symbol: String,
+}
+

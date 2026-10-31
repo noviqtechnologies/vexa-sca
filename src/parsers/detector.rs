@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use crate::core::dep_graph::DepGraph;
 use crate::parsers::cargo_lock::CargoLockParser;
 use crate::parsers::go_sum::GoLockParser;
@@ -6,8 +8,72 @@ use crate::parsers::pnpm_lock::PnpmLockParser;
 use crate::parsers::pom_xml::PomXmlParser;
 use crate::parsers::python_reqs::PythonRequirementsParser;
 use crate::parsers::yarn_lock::YarnLockParser;
+use crate::types::Ecosystem;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+const MAX_MANIFEST_SIZE_BYTES: u64 = 15 * 1024 * 1024; // 15 MB payload cap
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub enum ManifestEcosystem {
+    Npm,
+    Python,
+    Rust,
+    Go,
+    Maven,
+}
+
+impl From<ManifestEcosystem> for Ecosystem {
+    fn from(eco: ManifestEcosystem) -> Self {
+        match eco {
+            ManifestEcosystem::Npm => Ecosystem::Npm,
+            ManifestEcosystem::Python => Ecosystem::PyPi,
+            ManifestEcosystem::Rust => Ecosystem::CratesIo,
+            ManifestEcosystem::Go => Ecosystem::Go,
+            ManifestEcosystem::Maven => Ecosystem::Maven,
+        }
+    }
+}
+
+pub fn ecosystem_for_manifest_name(file_name: &str) -> Option<ManifestEcosystem> {
+    match file_name {
+        "npm-shrinkwrap.json" | "package-lock.json" | "yarn.lock" | "pnpm-lock.yaml" | "pnpm-lock.yml" => {
+            Some(ManifestEcosystem::Npm)
+        }
+        "requirements.txt" | "uv.lock" | "poetry.lock" | "Pipfile.lock" => {
+            Some(ManifestEcosystem::Python)
+        }
+        "Cargo.lock" => Some(ManifestEcosystem::Rust),
+        "go.mod" | "go.sum" => Some(ManifestEcosystem::Go),
+        "pom.xml" | "gradle.lockfile" => Some(ManifestEcosystem::Maven),
+        _ => None,
+    }
+}
+
+pub fn manifest_priority_rank(file_name: &str) -> usize {
+    match file_name {
+        "npm-shrinkwrap.json" => 1,
+        "package-lock.json" => 2,
+        "pnpm-lock.yaml" | "pnpm-lock.yml" => 3,
+        "yarn.lock" => 4,
+
+        "uv.lock" => 1,
+        "poetry.lock" => 2,
+        "Pipfile.lock" => 3,
+        "requirements.txt" => 4,
+
+        "Cargo.lock" => 1,
+
+        "go.mod" => 1,
+        "go.sum" => 2,
+
+        "gradle.lockfile" => 1,
+        "pom.xml" => 2,
+
+        _ => 99,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum ManifestType {
@@ -53,6 +119,35 @@ pub struct WorkspaceProject {
     pub parser_errors: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DiscoveredManifest {
+    pub path: PathBuf,
+    pub ecosystem: Ecosystem,
+    pub manifest_type: ManifestType,
+    pub graph: DepGraph,
+}
+
+#[derive(Debug, Clone)]
+pub enum ParseError {
+    NotFound(String),
+    Io(String),
+    Malformed(String),
+    Unsupported(String),
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound(s) => write!(f, "Manifest not found: {}", s),
+            Self::Io(s) => write!(f, "I/O error reading manifest: {}", s),
+            Self::Malformed(s) => write!(f, "Malformed manifest: {}", s),
+            Self::Unsupported(s) => write!(f, "Unsupported manifest: {}", s),
+        }
+    }
+}
+
+impl std::error::Error for ParseError {}
+
 pub struct DetectionResult {
     pub manifest_type: ManifestType,
     pub graph: DepGraph,
@@ -81,7 +176,11 @@ fn discover_recursive(dir: &Path, depth: usize, max_depth: usize, results: &mut 
         "pnpm-lock.yaml",
         "pnpm-lock.yml",
         "requirements.txt",
+        "uv.lock",
+        "poetry.lock",
+        "Pipfile.lock",
         "Cargo.lock",
+        "go.mod",
         "go.sum",
         "pom.xml",
     ];
@@ -123,6 +222,15 @@ pub fn parse_manifest_at(
     manifest_path: &Path,
     include_dev: bool,
 ) -> Result<(ManifestType, DepGraph), String> {
+    if let Ok(metadata) = std::fs::metadata(manifest_path) {
+        if metadata.len() > MAX_MANIFEST_SIZE_BYTES {
+            return Err(format!(
+                "Manifest {} exceeds maximum size limit of 15 MB",
+                manifest_path.display()
+            ));
+        }
+    }
+
     let file_name = manifest_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -146,7 +254,7 @@ pub fn parse_manifest_at(
             let graph = PnpmLockParser::parse(parent_dir, include_dev)?;
             Ok((ManifestType::PnpmLock, graph))
         }
-        "requirements.txt" => {
+        "requirements.txt" | "uv.lock" | "poetry.lock" | "Pipfile.lock" => {
             let graph = PythonRequirementsParser::parse(manifest_path)?;
             Ok((ManifestType::PythonRequirements, graph))
         }
@@ -175,6 +283,7 @@ fn collect_additional_discovered_projects(
     primary_graph: &mut DepGraph,
     projects: &mut Vec<WorkspaceProject>,
     failed_manifests: &mut Vec<(PathBuf, String)>,
+    skipped_manifests: &mut Vec<PathBuf>,
     include_dev: bool,
 ) {
     let primary_canon = primary_manifest
@@ -185,32 +294,175 @@ fn collect_additional_discovered_projects(
         .and_then(|d| d.canonicalize().ok())
         .unwrap_or_else(|| primary_manifest.to_path_buf());
 
+    let primary_name = primary_manifest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let primary_eco = ecosystem_for_manifest_name(primary_name);
+
+    // Group candidates by (canonical_dir, ecosystem) to pick highest priority per ecosystem
+    let mut selected_by_dir_eco: HashMap<PathBuf, HashMap<ManifestEcosystem, (PathBuf, usize)>> =
+        HashMap::new();
+
+    if let Some(eco) = primary_eco {
+        let mut map = HashMap::new();
+        map.insert(eco, (primary_canon.clone(), manifest_priority_rank(primary_name)));
+        selected_by_dir_eco.insert(primary_dir, map);
+    }
+
+    // Pass 1: Select highest-priority manifest per (dir, ecosystem)
     for p in discovered_projects {
         let p_canon = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
         if p_canon == primary_canon {
             continue;
         }
-        let p_dir = p.parent().and_then(|d| d.canonicalize().ok());
-        if p_dir == Some(primary_dir.clone()) {
-            continue; // Skip lower-precedence manifest in the exact same root directory
-        }
+        let Some(p_dir) = p.parent().and_then(|d| d.canonicalize().ok()) else {
+            continue;
+        };
+        let p_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let Some(p_eco) = ecosystem_for_manifest_name(p_name) else {
+            continue;
+        };
+        let p_rank = manifest_priority_rank(p_name);
 
-        match parse_manifest_at(p, include_dev) {
-            Ok((mtype, g)) => {
-                primary_graph.merge(&g);
-                projects.push(WorkspaceProject {
-                    manifest_file: p.clone(),
-                    manifest_type: mtype,
-                    workspace_name: None,
-                    graph: g,
-                    parser_errors: vec![],
-                });
+        let dir_map = selected_by_dir_eco.entry(p_dir).or_default();
+        match dir_map.get(&p_eco) {
+            Some((_curr_path, curr_rank)) if *curr_rank <= p_rank => {
+                // Keep the higher or equal precedence manifest for this ecosystem in this dir
             }
-            Err(e) => {
-                failed_manifests.push((p.clone(), e));
+            _ => {
+                dir_map.insert(p_eco, (p_canon.clone(), p_rank));
             }
         }
     }
+
+    // Pass 2: Parse all selected manifests, record skipped ones
+    for p in discovered_projects {
+        let p_canon = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        if p_canon == primary_canon {
+            continue;
+        }
+        let Some(p_dir) = p.parent().and_then(|d| d.canonicalize().ok()) else {
+            continue;
+        };
+        let p_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let Some(p_eco) = ecosystem_for_manifest_name(p_name) else {
+            continue;
+        };
+
+        if let Some(dir_map) = selected_by_dir_eco.get(&p_dir) {
+            if let Some((selected_path, _)) = dir_map.get(&p_eco) {
+                if selected_path == &p_canon {
+                    // Selected manifest for this ecosystem in this directory -> parse and merge
+                    match parse_manifest_at(p, include_dev) {
+                        Ok((mtype, g)) => {
+                            primary_graph.merge(&g);
+                            projects.push(WorkspaceProject {
+                                manifest_file: p.clone(),
+                                manifest_type: mtype,
+                                workspace_name: None,
+                                graph: g,
+                                parser_errors: vec![],
+                            });
+                        }
+                        Err(e) => {
+                            failed_manifests.push((p.clone(), e));
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+
+        // Otherwise skipped due to lower precedence for the same ecosystem in this directory
+        skipped_manifests.push(p.clone());
+    }
+}
+
+/// Discovers and parses all workspace manifests grouped by directory and ecosystem (DDD §3.1.1, BUG-001)
+pub fn detect_workspace_manifests(root: &Path) -> Result<Vec<DiscoveredManifest>, ParseError> {
+    let abs_path = root
+        .canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf());
+
+    if abs_path.is_file() {
+        let (manifest_type, graph) = parse_manifest_at(&abs_path, false)
+            .map_err(|e| ParseError::Malformed(e))?;
+        let name = abs_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let ecosystem = ecosystem_for_manifest_name(name)
+            .map(Ecosystem::from)
+            .unwrap_or(Ecosystem::Other("unknown".to_string()));
+        return Ok(vec![DiscoveredManifest {
+            path: abs_path,
+            ecosystem,
+            manifest_type,
+            graph,
+        }]);
+    }
+
+    let discovered = discover_manifests(&abs_path, 4);
+    if discovered.is_empty() {
+        return Err(ParseError::NotFound(format!(
+            "No supported lockfile manifests found in {}",
+            root.display()
+        )));
+    }
+
+    let mut selected_by_dir_eco: HashMap<PathBuf, HashMap<ManifestEcosystem, (PathBuf, usize)>> =
+        HashMap::new();
+
+    for p in &discovered {
+        let p_canon = p.canonicalize().unwrap_or_else(|_| p.clone());
+        let Some(p_dir) = p.parent().and_then(|d| d.canonicalize().ok()) else {
+            continue;
+        };
+        let p_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let Some(p_eco) = ecosystem_for_manifest_name(p_name) else {
+            continue;
+        };
+        let p_rank = manifest_priority_rank(p_name);
+
+        let dir_map = selected_by_dir_eco.entry(p_dir).or_default();
+        match dir_map.get(&p_eco) {
+            Some((_curr_path, curr_rank)) if *curr_rank <= p_rank => {}
+            _ => {
+                dir_map.insert(p_eco, (p_canon.clone(), p_rank));
+            }
+        }
+    }
+
+    let mut manifests = Vec::new();
+    for (_dir, eco_map) in selected_by_dir_eco {
+        for (eco, (selected_path, _)) in eco_map {
+            match parse_manifest_at(&selected_path, false) {
+                Ok((manifest_type, graph)) => {
+                    manifests.push(DiscoveredManifest {
+                        path: selected_path,
+                        ecosystem: Ecosystem::from(eco),
+                        manifest_type,
+                        graph,
+                    });
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to parse manifest {}: {}",
+                        selected_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    if manifests.is_empty() {
+        return Err(ParseError::Malformed(format!(
+            "Failed to parse any discovered manifests in {}",
+            root.display()
+        )));
+    }
+
+    manifests.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(manifests)
 }
 
 pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<DetectionResult, String> {
@@ -242,310 +494,101 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
     let abs_dir = abs_path;
     let discovered_projects = discover_manifests(&abs_dir, 4);
 
-    // Rule 3: npm-shrinkwrap.json takes authoritative precedence over package-lock.json
-    let shrinkwrap = abs_dir.join("npm-shrinkwrap.json");
-    if shrinkwrap.exists() {
-        let mut graph = PackageLockParser::parse_file(&shrinkwrap, include_dev)?;
+    // Look for root manifest candidates in canonical precedence order
+    let root_candidates = [
+        "npm-shrinkwrap.json",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "pnpm-lock.yml",
+        "yarn.lock",
+        "uv.lock",
+        "poetry.lock",
+        "Pipfile.lock",
+        "requirements.txt",
+        "Cargo.lock",
+        "go.mod",
+        "go.sum",
+        "pom.xml",
+    ];
+
+    let mut primary_manifest_path: Option<PathBuf> = None;
+    for cand in &root_candidates {
+        let p = abs_dir.join(cand);
+        if p.exists() {
+            primary_manifest_path = Some(p);
+            break;
+        }
+    }
+
+    if let Some(primary) = primary_manifest_path {
+        let (primary_type, mut graph) = parse_manifest_at(&primary, include_dev)?;
         let mut projects = vec![WorkspaceProject {
-            manifest_file: shrinkwrap.clone(),
-            manifest_type: ManifestType::NpmShrinkwrap,
+            manifest_file: primary.clone(),
+            manifest_type: primary_type.clone(),
             workspace_name: None,
             graph: graph.clone(),
             parser_errors: vec![],
         }];
         let mut failed_manifests = Vec::new();
+        let mut skipped_manifests = Vec::new();
+
         collect_additional_discovered_projects(
             &discovered_projects,
-            &shrinkwrap,
+            &primary,
             &mut graph,
             &mut projects,
             &mut failed_manifests,
+            &mut skipped_manifests,
             include_dev,
         );
+
         return Ok(DetectionResult {
-            manifest_type: ManifestType::NpmShrinkwrap,
+            manifest_type: primary_type,
             graph,
-            manifest_file: shrinkwrap,
+            manifest_file: primary,
             discovered_projects,
             projects,
             failed_manifests,
-            skipped_manifests: vec![],
+            skipped_manifests,
         });
     }
 
-    let npm_lock = abs_dir.join("package-lock.json");
-    if npm_lock.exists() {
-        let mut graph = PackageLockParser::parse(&abs_dir, include_dev)?;
-        let mut projects = vec![WorkspaceProject {
-            manifest_file: npm_lock.clone(),
-            manifest_type: ManifestType::NpmPackageLock,
-            workspace_name: None,
-            graph: graph.clone(),
-            parser_errors: vec![],
-        }];
-        let mut failed_manifests = Vec::new();
-        collect_additional_discovered_projects(
-            &discovered_projects,
-            &npm_lock,
-            &mut graph,
-            &mut projects,
-            &mut failed_manifests,
-            include_dev,
-        );
-        return Ok(DetectionResult {
-            manifest_type: ManifestType::NpmPackageLock,
-            graph,
-            manifest_file: npm_lock,
-            discovered_projects,
-            projects,
-            failed_manifests,
-            skipped_manifests: vec![],
-        });
-    }
-
-    let yarn_lock = abs_dir.join("yarn.lock");
-    if yarn_lock.exists() {
-        let mut graph = YarnLockParser::parse(&abs_dir, include_dev)?;
-        let mut projects = vec![WorkspaceProject {
-            manifest_file: yarn_lock.clone(),
-            manifest_type: ManifestType::YarnLock,
-            workspace_name: None,
-            graph: graph.clone(),
-            parser_errors: vec![],
-        }];
-        let mut failed_manifests = Vec::new();
-        collect_additional_discovered_projects(
-            &discovered_projects,
-            &yarn_lock,
-            &mut graph,
-            &mut projects,
-            &mut failed_manifests,
-            include_dev,
-        );
-        return Ok(DetectionResult {
-            manifest_type: ManifestType::YarnLock,
-            graph,
-            manifest_file: yarn_lock,
-            discovered_projects,
-            projects,
-            failed_manifests,
-            skipped_manifests: vec![],
-        });
-    }
-
-    let pnpm_lock_yaml = abs_dir.join("pnpm-lock.yaml");
-    let pnpm_lock_yml = abs_dir.join("pnpm-lock.yml");
-    if pnpm_lock_yaml.exists() || pnpm_lock_yml.exists() {
-        let main_file = if pnpm_lock_yaml.exists() {
-            pnpm_lock_yaml
-        } else {
-            pnpm_lock_yml
-        };
-        let mut graph = PnpmLockParser::parse(&abs_dir, include_dev)?;
-        let mut projects = vec![WorkspaceProject {
-            manifest_file: main_file.clone(),
-            manifest_type: ManifestType::PnpmLock,
-            workspace_name: None,
-            graph: graph.clone(),
-            parser_errors: vec![],
-        }];
-        let mut failed_manifests = Vec::new();
-        collect_additional_discovered_projects(
-            &discovered_projects,
-            &main_file,
-            &mut graph,
-            &mut projects,
-            &mut failed_manifests,
-            include_dev,
-        );
-        return Ok(DetectionResult {
-            manifest_type: ManifestType::PnpmLock,
-            graph,
-            manifest_file: main_file,
-            discovered_projects,
-            projects,
-            failed_manifests,
-            skipped_manifests: vec![],
-        });
-    }
-
-    let req_txt = abs_dir.join("requirements.txt");
-    if req_txt.exists() {
-        let mut graph = PythonRequirementsParser::parse(&req_txt)?;
-        let mut projects = vec![WorkspaceProject {
-            manifest_file: req_txt.clone(),
-            manifest_type: ManifestType::PythonRequirements,
-            workspace_name: None,
-            graph: graph.clone(),
-            parser_errors: vec![],
-        }];
-        let mut failed_manifests = Vec::new();
-        collect_additional_discovered_projects(
-            &discovered_projects,
-            &req_txt,
-            &mut graph,
-            &mut projects,
-            &mut failed_manifests,
-            include_dev,
-        );
-        return Ok(DetectionResult {
-            manifest_type: ManifestType::PythonRequirements,
-            graph,
-            manifest_file: req_txt,
-            discovered_projects,
-            projects,
-            failed_manifests,
-            skipped_manifests: vec![],
-        });
-    }
-
-    let cargo_lock = abs_dir.join("Cargo.lock");
-    if cargo_lock.exists() {
-        let mut graph = CargoLockParser::parse(&cargo_lock)?;
-        let mut projects = vec![WorkspaceProject {
-            manifest_file: cargo_lock.clone(),
-            manifest_type: ManifestType::RustCargoLock,
-            workspace_name: None,
-            graph: graph.clone(),
-            parser_errors: vec![],
-        }];
-        let mut failed_manifests = Vec::new();
-        collect_additional_discovered_projects(
-            &discovered_projects,
-            &cargo_lock,
-            &mut graph,
-            &mut projects,
-            &mut failed_manifests,
-            include_dev,
-        );
-        return Ok(DetectionResult {
-            manifest_type: ManifestType::RustCargoLock,
-            graph,
-            manifest_file: cargo_lock,
-            discovered_projects,
-            projects,
-            failed_manifests,
-            skipped_manifests: vec![],
-        });
-    }
-
-    let go_sum = abs_dir.join("go.sum");
-    let go_mod = abs_dir.join("go.mod");
-    if go_sum.exists() || go_mod.exists() {
-        let main_file = if go_sum.exists() { go_sum } else { go_mod };
-        let mut graph = GoLockParser::parse(&abs_dir)?;
-        let mut projects = vec![WorkspaceProject {
-            manifest_file: main_file.clone(),
-            manifest_type: ManifestType::GoModSum,
-            workspace_name: None,
-            graph: graph.clone(),
-            parser_errors: vec![],
-        }];
-        let mut failed_manifests = Vec::new();
-        collect_additional_discovered_projects(
-            &discovered_projects,
-            &main_file,
-            &mut graph,
-            &mut projects,
-            &mut failed_manifests,
-            include_dev,
-        );
-        return Ok(DetectionResult {
-            manifest_type: ManifestType::GoModSum,
-            graph,
-            manifest_file: main_file,
-            discovered_projects,
-            projects,
-            failed_manifests,
-            skipped_manifests: vec![],
-        });
-    }
-
-    let pom_xml = abs_dir.join("pom.xml");
-    if pom_xml.exists() {
-        let mut graph = PomXmlParser::parse(&pom_xml)?;
-        let mut projects = vec![WorkspaceProject {
-            manifest_file: pom_xml.clone(),
-            manifest_type: ManifestType::JavaMavenPom,
-            workspace_name: None,
-            graph: graph.clone(),
-            parser_errors: vec![],
-        }];
-        let mut failed_manifests = Vec::new();
-        collect_additional_discovered_projects(
-            &discovered_projects,
-            &pom_xml,
-            &mut graph,
-            &mut projects,
-            &mut failed_manifests,
-            include_dev,
-        );
-        return Ok(DetectionResult {
-            manifest_type: ManifestType::JavaMavenPom,
-            graph,
-            manifest_file: pom_xml,
-            discovered_projects,
-            projects,
-            failed_manifests,
-            skipped_manifests: vec![],
-        });
-    }
-
-    // Monorepo / subproject fallback: Parse all discovered manifests and capture failures
+    // Monorepo subproject fallback: no manifest at root, but discovered in subdirectories
     if !discovered_projects.is_empty() {
-        let mut parsed_projects = Vec::new();
+        let primary = discovered_projects[0].clone();
+        let (primary_type, mut graph) = parse_manifest_at(&primary, include_dev)?;
+        let mut projects = vec![WorkspaceProject {
+            manifest_file: primary.clone(),
+            manifest_type: primary_type.clone(),
+            workspace_name: None,
+            graph: graph.clone(),
+            parser_errors: vec![],
+        }];
         let mut failed_manifests = Vec::new();
-        let mut merged_graph: Option<DepGraph> = None;
-        let mut primary_manifest_type = ManifestType::NpmPackageLock;
-        let mut primary_manifest_file = discovered_projects[0].clone();
+        let mut skipped_manifests = Vec::new();
 
-        for manifest_path in &discovered_projects {
-            match parse_manifest_at(manifest_path, include_dev) {
-                Ok((mtype, graph)) => {
-                    if parsed_projects.is_empty() {
-                        primary_manifest_type = mtype.clone();
-                        primary_manifest_file = manifest_path.clone();
-                        merged_graph = Some(graph.clone());
-                    } else if let Some(ref mut mg) = merged_graph {
-                        mg.merge(&graph);
-                    }
-                    parsed_projects.push(WorkspaceProject {
-                        manifest_file: manifest_path.clone(),
-                        manifest_type: mtype,
-                        workspace_name: None,
-                        graph,
-                        parser_errors: vec![],
-                    });
-                }
-                Err(e) => {
-                    failed_manifests.push((manifest_path.clone(), e));
-                }
-            }
-        }
+        collect_additional_discovered_projects(
+            &discovered_projects,
+            &primary,
+            &mut graph,
+            &mut projects,
+            &mut failed_manifests,
+            &mut skipped_manifests,
+            include_dev,
+        );
 
-        if let Some(graph) = merged_graph {
-            return Ok(DetectionResult {
-                manifest_type: primary_manifest_type,
-                graph,
-                manifest_file: primary_manifest_file,
-                discovered_projects,
-                projects: parsed_projects,
-                failed_manifests,
-                skipped_manifests: vec![],
-            });
-        }
-
-        if !failed_manifests.is_empty() {
-            let first_err = &failed_manifests[0];
-            return Err(format!(
-                "Failed to parse manifest at {}: {}",
-                first_err.0.display(),
-                first_err.1
-            ));
-        }
+        return Ok(DetectionResult {
+            manifest_type: primary_type,
+            graph,
+            manifest_file: primary,
+            discovered_projects,
+            projects,
+            failed_manifests,
+            skipped_manifests,
+        });
     }
 
-    // Check if subdirectories contain manifests to provide helpful monorepo guidance
+    // Helpful guidance when no supported manifest was found
     let mut sub_hints = Vec::new();
     let unbuilt_manifest_names = [
         "package.json",
@@ -696,5 +739,90 @@ mod tests {
             pkg_names.contains(&"minimist"),
             "Graph must contain nested dependency minimist"
         );
+    }
+
+    #[test]
+    fn test_root_multi_ecosystem_npm_plus_cargo_merging() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("vexa_multi_eco_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let package_lock_json = r#"{
+            "name": "fullstack-app",
+            "version": "1.0.0",
+            "lockfileVersion": 2,
+            "packages": {
+                "": { "name": "fullstack-app", "version": "1.0.0" },
+                "node_modules/lodash": { "version": "4.17.21" }
+            }
+        }"#;
+
+        let cargo_lock = r#"# This file is automatically @generated by Cargo.
+version = 3
+
+[[package]]
+name = "fullstack-backend"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "serde"
+version = "1.0.197"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fb1c873e1b9b056a4dc4c0c198b24c3ffa059243875552b2bd0933b1aee4ce2"
+"#;
+
+        std::fs::write(temp_dir.join("package.json"), r#"{"name":"fullstack-app"}"#).unwrap();
+        std::fs::write(temp_dir.join("package-lock.json"), package_lock_json).unwrap();
+        std::fs::write(temp_dir.join("Cargo.lock"), cargo_lock).unwrap();
+
+        let res = detect_and_parse(&temp_dir, true)
+            .expect("should detect and parse multi-ecosystem root manifests");
+
+        // Both ecosystems must be detected and preserved in projects
+        assert_eq!(res.projects.len(), 2, "Both root npm and root Cargo must be scanned");
+        let project_types: Vec<ManifestType> = res
+            .projects
+            .iter()
+            .map(|p| p.manifest_type.clone())
+            .collect();
+        assert!(project_types.contains(&ManifestType::NpmPackageLock));
+        assert!(project_types.contains(&ManifestType::RustCargoLock));
+
+        // Both packages should be present in the merged dependency graph
+        let pkgs = res.graph.get_all_pkgs();
+        let pkg_names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        assert!(pkg_names.contains(&"lodash"), "Merged graph must contain lodash from npm");
+        assert!(pkg_names.contains(&"serde"), "Merged graph must contain serde from crates.io");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_detect_workspace_manifests_contract() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("vexa_ws_manifests_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let package_lock_json = r#"{
+            "name": "sample-app",
+            "version": "1.0.0",
+            "lockfileVersion": 2,
+            "packages": {
+                "": { "name": "sample-app", "version": "1.0.0" },
+                "node_modules/lodash": { "version": "4.17.21" }
+            }
+        }"#;
+        std::fs::write(temp_dir.join("package.json"), r#"{"name":"sample-app"}"#).unwrap();
+        std::fs::write(temp_dir.join("package-lock.json"), package_lock_json).unwrap();
+
+        let manifests = detect_workspace_manifests(&temp_dir).expect("should discover manifests");
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0].ecosystem, Ecosystem::Npm);
+        assert_eq!(manifests[0].manifest_type, ManifestType::NpmPackageLock);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

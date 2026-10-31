@@ -1,13 +1,16 @@
+#![forbid(unsafe_code)]
+
 use crate::types::{EpssInfo, EpssSource, VulnerabilityFinding};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const EPSS_CACHE_TTL_MS: u64 = 86_400_000; // 24 hours
+const EPSS_BATCH_CHUNK_SIZE: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FirstOrgEpssData {
@@ -36,7 +39,6 @@ pub struct EpssResolver {
     pub api_base_url: String,
     pub client: Client,
     pub cache: Mutex<HashMap<String, CachedEpssRecord>>,
-    pub allow_heuristic_fallback: bool,
 }
 
 impl Default for EpssResolver {
@@ -51,7 +53,7 @@ impl EpssResolver {
         let initial_cache = Self::load_cache(&cache_path).unwrap_or_default();
 
         let client = Client::builder()
-            .timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(5))
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -60,7 +62,6 @@ impl EpssResolver {
             api_base_url: "https://api.first.org/data/v1/epss".to_string(),
             client,
             cache: Mutex::new(initial_cache),
-            allow_heuristic_fallback: true,
         }
     }
 
@@ -107,111 +108,174 @@ impl EpssResolver {
         }
     }
 
-    /// Resolve EPSS score for a CVE, checking memory -> disk cache -> FIRST.org API -> fallback
-    pub async fn resolve_epss(&self, cve: &str, cvss_score: f64) -> EpssInfo {
-        let cve_clean = cve.trim().to_uppercase();
-
-        // 1. Missing or non-CVE identifier: EPSS is unavailable
-        if !cve_clean.starts_with("CVE-") {
-            return EpssInfo {
-                score: 0.0,
-                percentile: 0.0,
-                source: EpssSource::Unavailable,
-            };
-        }
+    /// Batch resolve EPSS scores for a slice of CVE IDs, chunking up to 100 CVEs per request
+    pub async fn resolve_epss_batch(&self, cve_ids: &[String]) -> HashMap<String, EpssInfo> {
+        let mut results: HashMap<String, EpssInfo> = HashMap::new();
+        let mut uncached_cves: Vec<String> = Vec::new();
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
-        // 2. Check in-memory/loaded cache (enforce TTL)
+        // 1. Check in-memory/loaded cache
         if let Ok(guard) = self.cache.lock() {
-            if let Some(rec) = guard.get(&cve_clean) {
-                if now.saturating_sub(rec.timestamp) < EPSS_CACHE_TTL_MS {
-                    return EpssInfo {
-                        score: rec.score,
-                        percentile: rec.percentile,
-                        source: EpssSource::Cache,
-                    };
+            for cve in cve_ids {
+                let cve_clean = cve.trim().to_uppercase();
+                if !cve_clean.starts_with("CVE-") {
+                    results.insert(
+                        cve_clean,
+                        EpssInfo {
+                            score: 0.0,
+                            percentile: 0.0,
+                            source: EpssSource::Unavailable,
+                        },
+                    );
+                    continue;
                 }
+                if let Some(rec) = guard.get(&cve_clean) {
+                    if now.saturating_sub(rec.timestamp) < EPSS_CACHE_TTL_MS {
+                        results.insert(
+                            cve_clean,
+                            EpssInfo {
+                                score: rec.score,
+                                percentile: rec.percentile,
+                                source: EpssSource::Cache,
+                            },
+                        );
+                        continue;
+                    }
+                }
+                uncached_cves.push(cve_clean);
             }
         }
 
-        // 3. Attempt online fetch from FIRST.org EPSS API (timeout 3s)
-        let url = format!("{}?cve={}", self.api_base_url, cve_clean);
-        match self.client.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(api_data) = resp.json::<FirstOrgApiResponse>().await {
-                    if let Some(data_list) = api_data.data {
-                        if let Some(first_entry) = data_list.first() {
-                            if let (Ok(score), Ok(percentile)) = (
-                                first_entry.epss.parse::<f64>(),
-                                first_entry.percentile.parse::<f64>(),
-                            ) {
-                                let info = EpssInfo {
-                                    score,
-                                    percentile,
-                                    source: EpssSource::FirstOrg,
-                                };
-                                if let Ok(mut guard) = self.cache.lock() {
-                                    guard.insert(
-                                        cve_clean.clone(),
+        uncached_cves.sort();
+        uncached_cves.dedup();
+
+        if uncached_cves.is_empty() {
+            return results;
+        }
+
+        // 2. Query FIRST.org in batches of up to 100 CVEs
+        let mut new_cache_entries: Vec<(String, CachedEpssRecord)> = Vec::new();
+
+        for chunk in uncached_cves.chunks(EPSS_BATCH_CHUNK_SIZE) {
+            let cve_param = chunk.join(",");
+            let url = format!("{}?cve={}", self.api_base_url, cve_param);
+
+            let mut fetched_cves = HashSet::new();
+
+            match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
+                Ok(Ok(resp)) if resp.status().is_success() => {
+                    if let Ok(api_data) = resp.json::<FirstOrgApiResponse>().await {
+                        if let Some(data_list) = api_data.data {
+                            for entry in data_list {
+                                let cve_key = entry.cve.trim().to_uppercase();
+                                if let (Ok(score), Ok(percentile)) = (
+                                    entry.epss.parse::<f64>(),
+                                    entry.percentile.parse::<f64>(),
+                                ) {
+                                    results.insert(
+                                        cve_key.clone(),
+                                        EpssInfo {
+                                            score,
+                                            percentile,
+                                            source: EpssSource::FirstOrg,
+                                        },
+                                    );
+                                    new_cache_entries.push((
+                                        cve_key.clone(),
                                         CachedEpssRecord {
                                             score,
                                             percentile,
                                             source: EpssSource::FirstOrg,
                                             timestamp: now,
                                         },
-                                    );
+                                    ));
+                                    fetched_cves.insert(cve_key);
                                 }
-                                self.save_cache();
-                                return info;
                             }
-                        } else {
-                            // Empty data list: CVE is not indexed in FIRST.org EPSS
-                            return EpssInfo {
-                                score: 0.0,
-                                percentile: 0.0,
-                                source: EpssSource::Unavailable,
-                            };
                         }
                     }
                 }
+                _ => {
+                    // Network timeout or non-success
+                }
             }
-            _ => {
-                // Request timed out, connection failed, or API returned error
+
+            // Fill in missing entries from this chunk as Unavailable (strictly no heuristic fallback per DDD §3.3)
+            for cve in chunk {
+                if !fetched_cves.contains(cve) && !results.contains_key(cve) {
+                    let info = EpssInfo {
+                        score: 0.0,
+                        percentile: 0.0,
+                        source: EpssSource::Unavailable,
+                    };
+                    results.insert(cve.clone(), info.clone());
+                    new_cache_entries.push((
+                        cve.clone(),
+                        CachedEpssRecord {
+                            score: info.score,
+                            percentile: info.percentile,
+                            source: info.source,
+                            timestamp: now,
+                        },
+                    ));
+                }
             }
         }
 
-        // 4. Fallback: If heuristic fallback is allowed, produce clearly labeled heuristic estimate.
-        // Otherwise, declare EPSS unavailable.
-        if self.allow_heuristic_fallback {
-            let fallback = Self::estimate_fallback_epss(&cve_clean, cvss_score);
+        // 3. Save new records into cache
+        if !new_cache_entries.is_empty() {
             if let Ok(mut guard) = self.cache.lock() {
-                guard.insert(
-                    cve_clean,
-                    CachedEpssRecord {
-                        score: fallback.score,
-                        percentile: fallback.percentile,
-                        source: EpssSource::Heuristic,
-                        timestamp: now,
-                    },
-                );
+                for (k, rec) in new_cache_entries {
+                    guard.insert(k, rec);
+                }
             }
             self.save_cache();
-            fallback
-        } else {
-            EpssInfo {
+        }
+
+        results
+    }
+
+    /// Resolve EPSS score for a single CVE
+    pub async fn resolve_epss(&self, cve: &str, _cvss_score: f64) -> EpssInfo {
+        let clean = cve.trim().to_uppercase();
+        if !clean.starts_with("CVE-") {
+            return EpssInfo {
                 score: 0.0,
                 percentile: 0.0,
                 source: EpssSource::Unavailable,
-            }
+            };
         }
+        let batch = self.resolve_epss_batch(&[clean.clone()]).await;
+        batch.get(&clean).cloned().unwrap_or(EpssInfo {
+            score: 0.0,
+            percentile: 0.0,
+            source: EpssSource::Unavailable,
+        })
     }
 
     /// Enriches vulnerability findings with EPSS exploit prediction likelihood
+    /// Batches all unique CVE queries into chunks of up to 100 for optimal latency
     pub async fn enrich_findings(&self, findings: &mut [VulnerabilityFinding]) {
+        let mut unique_cves = Vec::new();
+        for finding in findings.iter() {
+            let cve_id = finding.cve.clone().or_else(|| {
+                finding
+                    .aliases
+                    .iter()
+                    .find(|a| a.starts_with("CVE-"))
+                    .cloned()
+            });
+            if let Some(cve) = cve_id {
+                unique_cves.push(cve);
+            }
+        }
+
+        let resolved_map = self.resolve_epss_batch(&unique_cves).await;
+
         for finding in findings.iter_mut() {
             let cve_id = finding.cve.clone().or_else(|| {
                 finding
@@ -222,10 +286,17 @@ impl EpssResolver {
             });
 
             if let Some(cve) = cve_id {
-                let epss = self.resolve_epss(&cve, finding.severity.score).await;
-                finding.epss = Some(epss);
+                let clean = cve.trim().to_uppercase();
+                if let Some(info) = resolved_map.get(&clean) {
+                    finding.epss = Some(info.clone());
+                } else {
+                    finding.epss = Some(EpssInfo {
+                        score: 0.0,
+                        percentile: 0.0,
+                        source: EpssSource::Unavailable,
+                    });
+                }
             } else {
-                // Non-CVE advisories do not have EPSS data available
                 finding.epss = Some(EpssInfo {
                     score: 0.0,
                     percentile: 0.0,
@@ -234,66 +305,11 @@ impl EpssResolver {
             }
         }
     }
-
-    /// Statistical local exploit likelihood estimation (clearly labeled as heuristic)
-    pub fn estimate_fallback_epss(cve: &str, cvss_score: f64) -> EpssInfo {
-        let score: f64 = if cvss_score >= 9.0 {
-            let base = 0.65 + ((cvss_score - 9.0) * 0.25);
-            base.min(0.96)
-        } else if cvss_score >= 7.0 {
-            let base = 0.25 + ((cvss_score - 7.0) * 0.18);
-            base.min(0.64)
-        } else if cvss_score >= 4.0 {
-            let base = 0.05 + ((cvss_score - 4.0) * 0.06);
-            base.min(0.24)
-        } else {
-            0.008
-        };
-
-        let percentile: f64 = if score >= 0.70 {
-            0.982
-        } else if score >= 0.40 {
-            0.945
-        } else if score >= 0.20 {
-            0.880
-        } else if score >= 0.05 {
-            0.720
-        } else {
-            0.450
-        };
-
-        let _ = cve;
-
-        EpssInfo {
-            score: (score * 1000.0).round() / 1000.0,
-            percentile: (percentile * 1000.0).round() / 1000.0,
-            source: EpssSource::Heuristic,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_epss_fallback_estimation() {
-        let critical_epss = EpssResolver::estimate_fallback_epss("CVE-2021-44906", 9.8);
-        assert!(
-            critical_epss.score >= 0.70,
-            "Critical CVSS should have high heuristic estimate"
-        );
-        assert!(critical_epss.percentile >= 0.95);
-        assert_eq!(critical_epss.source, EpssSource::Heuristic);
-
-        let high_epss = EpssResolver::estimate_fallback_epss("CVE-2020-8203", 7.4);
-        assert!(high_epss.score >= 0.20 && high_epss.score <= 0.65);
-        assert_eq!(high_epss.source, EpssSource::Heuristic);
-
-        let low_epss = EpssResolver::estimate_fallback_epss("CVE-2021-1234", 3.2);
-        assert!(low_epss.score < 0.05);
-        assert_eq!(low_epss.source, EpssSource::Heuristic);
-    }
 
     #[test]
     fn test_epss_info_serialization() {
@@ -351,12 +367,9 @@ mod tests {
         fs::write(&cache_file, serde_json::to_string(&stale_map).unwrap()).unwrap();
 
         let mut resolver = EpssResolver::new(&temp_dir);
-        // Point to invalid endpoint with heuristic disabled to check cache freshness
         resolver.api_base_url = "http://127.0.0.1:9/epss".to_string();
-        resolver.allow_heuristic_fallback = false;
 
         let res = resolver.resolve_epss("CVE-2020-8203", 7.5).await;
-        // Stale cache should NOT be returned as valid cache
         assert_ne!(res.source, EpssSource::Cache);
         assert_eq!(res.source, EpssSource::Unavailable);
 
@@ -368,13 +381,11 @@ mod tests {
         let temp_dir =
             std::env::temp_dir().join(format!("vexa_epss_test_timeout_{}", std::process::id()));
         let mut resolver = EpssResolver::new(&temp_dir);
-        // Use an unroutable IP with a tiny timeout
         resolver.api_base_url = "http://192.0.2.1/epss".to_string();
         resolver.client = Client::builder()
             .timeout(Duration::from_millis(50))
             .build()
             .unwrap();
-        resolver.allow_heuristic_fallback = false;
 
         let res = resolver.resolve_epss("CVE-2023-12345", 8.0).await;
         assert_eq!(res.source, EpssSource::Unavailable);
@@ -383,17 +394,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_epss_malformed_api_response() {
+    async fn test_epss_batch_query_chunks() {
         let temp_dir =
-            std::env::temp_dir().join(format!("vexa_epss_test_malformed_{}", std::process::id()));
+            std::env::temp_dir().join(format!("vexa_epss_test_batch_{}", std::process::id()));
         let mut resolver = EpssResolver::new(&temp_dir);
-        // Even if API returns malformed or non-epss data, fall back gracefully
-        resolver.api_base_url = "https://httpbin.org/status/500".to_string();
-        resolver.allow_heuristic_fallback = true;
+        resolver.api_base_url = "http://192.0.2.1/epss".to_string();
+        resolver.client = Client::builder()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .unwrap();
 
-        let res = resolver.resolve_epss("CVE-2023-12345", 8.0).await;
-        assert_eq!(res.source, EpssSource::Heuristic);
-        assert!(res.score > 0.0);
+        let cves: Vec<String> = (1..=150).map(|i| format!("CVE-2024-{:04}", i)).collect();
+        let res = resolver.resolve_epss_batch(&cves).await;
+        assert_eq!(res.len(), 150);
+        assert_eq!(res.get("CVE-2024-0001").unwrap().source, EpssSource::Unavailable);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

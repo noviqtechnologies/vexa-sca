@@ -369,13 +369,6 @@ pub fn render_terminal_report(
                         let epss_pct = epss.score * 100.0;
                         format!("CVSS {:.1} | EPSS {:.1}%", v.severity.score, epss_pct)
                     }
-                    crate::types::EpssSource::Heuristic => {
-                        let epss_pct = epss.score * 100.0;
-                        format!(
-                            "CVSS {:.1} | Est. Exploit {:.1}% (heuristic)",
-                            v.severity.score, epss_pct
-                        )
-                    }
                     crate::types::EpssSource::Unavailable => {
                         format!("CVSS {:.1} | EPSS unavailable", v.severity.score)
                     }

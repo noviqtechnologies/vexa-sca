@@ -1,14 +1,14 @@
 use crate::reachability::js_ast_analyzer::{
     analyze_file, source_type_for_path, ImportResolutionState,
 };
+use crate::reachability::workspace_index::WorkspaceAstIndex;
 use crate::types::{
-    CallSite, ReachabilityResult, ReachabilityStatus, ReasonCode, UsageSignal, VulnerabilityFinding,
+    ReachabilityResult, ReachabilityStatus, ReasonCode, UsageSignal, VulnerabilityFinding,
 };
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
 pub struct IndexedFile {
@@ -27,6 +27,7 @@ pub struct ReachabilityEngine {
     pub source_dir: PathBuf,
     pub source_files: Vec<PathBuf>,
     pub indexed_files: Vec<IndexedFile>,
+    pub ast_index: WorkspaceAstIndex,
     pub known_functions: HashMap<&'static str, Vec<&'static str>>,
     pub max_files: usize,
     pub files_discovered: usize,
@@ -84,8 +85,7 @@ impl ReachabilityEngine {
     }
 
     pub fn new_with_limit(source_dir: &Path, max_files: usize) -> Self {
-        let (source_files, files_discovered, files_skipped, file_limit_hit, mut files_failed) =
-            Self::find_source_files_detailed(source_dir, max_files);
+        let ast_index = WorkspaceAstIndex::build(source_dir, max_files);
         let config_referenced_pkgs = Self::find_config_referenced_pkgs(source_dir);
 
         let mut known = HashMap::new();
@@ -126,68 +126,35 @@ impl ReachabilityEngine {
         known.insert("CVE-2024-35195", vec!["Session", "request"]);
         known.insert("GHSA-9wx4-h78v-vm56", vec!["Session", "request"]);
 
-        // Perform Single-Pass AST Indexing (P2 Item 6)
-        let mut indexed_files = Vec::new();
-        let mut has_any_parse_failure = false;
-        let mut has_any_unresolved_dynamic = false;
+        let files_discovered = ast_index.files_discovered;
+        let files_skipped = ast_index.files_skipped;
+        let file_limit_hit = ast_index.file_limit_hit;
+        let files_failed = ast_index.files_failed;
+        let has_any_parse_failure = ast_index.has_any_parse_failure;
+        let has_any_unresolved_dynamic = ast_index.has_any_unresolved_dynamic;
+        let source_files: Vec<PathBuf> = ast_index.files.keys().cloned().collect();
 
-        for file_path in &source_files {
-            let content = match fs::read_to_string(file_path) {
-                Ok(c) => c,
-                Err(_) => {
-                    files_failed += 1;
-                    continue;
-                }
-            };
-
-            let relative_path = file_path
-                .strip_prefix(source_dir)
-                .unwrap_or(file_path)
-                .to_string_lossy()
-                .to_string();
-
-            let is_test = is_test_path(&relative_path);
-
-            if let Some(source_type) = source_type_for_path(file_path) {
-                // Parse once with general analysis
-                let analysis = analyze_file(&content, source_type, "", None);
-                if analysis.parse_failed {
-                    has_any_parse_failure = true;
-                }
-                if analysis.has_unresolved_dynamic {
-                    has_any_unresolved_dynamic = true;
-                }
-
-                indexed_files.push(IndexedFile {
-                    path: file_path.clone(),
-                    relative_path,
-                    is_test,
-                    content,
-                    parse_failed: analysis.parse_failed,
-                    has_dynamic_construct: analysis.has_dynamic_construct,
-                    has_unresolved_dynamic: analysis.has_unresolved_dynamic,
-                    has_reexports: analysis.has_reexports,
-                    import_states: analysis.import_states,
-                });
-            } else {
-                indexed_files.push(IndexedFile {
-                    path: file_path.clone(),
-                    relative_path,
-                    is_test,
-                    content,
-                    parse_failed: false,
-                    has_dynamic_construct: false,
-                    has_unresolved_dynamic: false,
-                    has_reexports: false,
-                    import_states: Vec::new(),
-                });
-            }
-        }
+        let indexed_files: Vec<IndexedFile> = ast_index
+            .files
+            .iter()
+            .map(|(path, facts)| IndexedFile {
+                path: path.clone(),
+                relative_path: facts.relative_path.clone(),
+                is_test: facts.is_test,
+                content: String::new(),
+                parse_failed: facts.parse_failed,
+                has_dynamic_construct: facts.has_dynamic_loading,
+                has_unresolved_dynamic: facts.has_dynamic_loading,
+                has_reexports: facts.has_reexports || !facts.barrel_reexports.is_empty(),
+                import_states: Vec::new(),
+            })
+            .collect();
 
         Self {
             source_dir: source_dir.to_path_buf(),
             source_files,
             indexed_files,
+            ast_index,
             known_functions: known,
             max_files,
             files_discovered,
@@ -270,88 +237,6 @@ impl ReachabilityEngine {
         referenced
     }
 
-    pub fn find_source_files(
-        source_dir: &Path,
-        max_files: usize,
-    ) -> (Vec<PathBuf>, usize, usize, bool) {
-        let (files, discovered, skipped, hit_limit, _) =
-            Self::find_source_files_detailed(source_dir, max_files);
-        (files, discovered, skipped, hit_limit)
-    }
-
-    fn find_source_files_detailed(
-        source_dir: &Path,
-        max_files: usize,
-    ) -> (Vec<PathBuf>, usize, usize, bool, usize) {
-        let valid_exts = [
-            "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "py", "go", "java",
-        ];
-        let ignore_dirs: HashSet<&str> = [
-            "node_modules",
-            "target",
-            "vendor",
-            ".git",
-            "dist",
-            "build",
-            ".next",
-            ".nuxt",
-            ".cache",
-            "coverage",
-            "inputs",
-            "outputs",
-            "completed",
-            "fixtures",
-            "test-fixtures",
-            ".work",
-        ]
-        .iter()
-        .cloned()
-        .collect();
-
-        let mut files = Vec::new();
-        let mut discovered_count: usize = 0;
-        let mut traversal_errors: usize = 0;
-
-        for entry in WalkDir::new(source_dir).into_iter().filter_entry(|e| {
-            if e.file_type().is_dir() {
-                let name = e.file_name().to_string_lossy().to_ascii_lowercase();
-                !ignore_dirs.contains(name.as_str())
-            } else {
-                true
-            }
-        }) {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => {
-                    traversal_errors += 1;
-                    continue;
-                }
-            };
-            if entry.file_type().is_file() {
-                if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
-                    let lower_ext = ext.to_lowercase();
-                    if valid_exts.contains(&lower_ext.as_str()) {
-                        discovered_count += 1;
-                        if max_files == 0 || files.len() < max_files {
-                            files.push(entry.path().to_path_buf());
-                        }
-                    }
-                }
-            }
-        }
-
-        let files_skipped = discovered_count.saturating_sub(files.len());
-        let hit_limit = files_skipped > 0;
-
-        (
-            files,
-            discovered_count,
-            files_skipped,
-            hit_limit,
-            traversal_errors,
-        )
-    }
-
     pub fn evaluate_reachability(
         &self,
         mut vulnerabilities: Vec<VulnerabilityFinding>,
@@ -394,88 +279,124 @@ impl ReachabilityEngine {
                     .map(|list| list.iter().map(|s| s.to_string()).collect())
             })
         })
+        .or_else(|| {
+            if !vuln.affected_symbols.is_empty() {
+                Some(vuln.affected_symbols.clone())
+            } else {
+                None
+            }
+        })
         .or_else(|| self.infer_functions_from_details(vuln));
 
-        let pkg_name = if let Some(idx) = vuln.package.find(':') {
+        let raw_pkg = if let Some(idx) = vuln.package.find(':') {
             &vuln.package[idx + 1..]
         } else {
             &vuln.package
         };
 
-        let mut prod_call_sites = Vec::new();
-        let mut test_call_sites = Vec::new();
+        let pkg_name = if let Some(idx) = raw_pkg.find('@') {
+            if idx > 0 {
+                &raw_pkg[..idx]
+            } else {
+                raw_pkg
+            }
+        } else {
+            raw_pkg
+        };
+
+        let mut candidates = vec![pkg_name.to_string()];
+        let lower = pkg_name.to_lowercase();
+        if lower != pkg_name {
+            candidates.push(lower.clone());
+        }
+        let hyphen = pkg_name.replace('_', "-");
+        if hyphen != pkg_name {
+            candidates.push(hyphen);
+        }
+        let under = pkg_name.replace('-', "_");
+        if under != pkg_name {
+            candidates.push(under);
+        }
+        match lower.as_str() {
+            "pyyaml" | "yaml" => candidates.push("pyyaml".to_string()),
+            "beautifulsoup4" | "bs4" => candidates.push("beautifulsoup4".to_string()),
+            "pillow" | "pil" => candidates.push("pillow".to_string()),
+            "opencv-python" | "cv2" => candidates.push("opencv-python".to_string()),
+            _ => {}
+        }
+
         let mut imported_in_prod = false;
         let mut imported_in_test = false;
-        let mut parse_failed = self.has_any_parse_failure;
         let mut dynamic_construct_detected = false;
         let mut has_reexports = false;
-        let mut has_unresolved_dynamic = self.has_any_unresolved_dynamic;
+        let mut parse_failed = self.has_any_parse_failure;
 
-        for indexed in &self.indexed_files {
-            if let Some(source_type) = source_type_for_path(&indexed.path) {
-                let analysis = analyze_file(
-                    &indexed.content,
-                    source_type,
-                    pkg_name,
-                    target_functions.as_deref(),
-                );
-
-                if analysis.is_imported {
-                    if indexed.is_test {
-                        imported_in_test = true;
-                    } else {
-                        imported_in_prod = true;
+        for cand in &candidates {
+            if let Some(files) = self.ast_index.package_importers.get(cand) {
+                for fpath in files {
+                    if let Some(facts) = self.ast_index.files.get(fpath) {
+                        if facts.is_test {
+                            imported_in_test = true;
+                        } else {
+                            imported_in_prod = true;
+                        }
+                        if facts.has_dynamic_loading {
+                            dynamic_construct_detected = true;
+                        }
+                        if facts.has_reexports || !facts.barrel_reexports.is_empty() {
+                            has_reexports = true;
+                        }
+                        if facts.parse_failed {
+                            parse_failed = true;
+                        }
                     }
                 }
-                if analysis.parse_failed {
-                    parse_failed = true;
-                }
-                if analysis.has_dynamic_construct {
-                    dynamic_construct_detected = true;
-                }
-                if analysis.has_unresolved_dynamic {
-                    has_unresolved_dynamic = true;
-                }
-                if analysis.has_reexports {
-                    has_reexports = true;
-                }
+            }
+        }
 
-                for m in analysis.call_sites {
-                    let site = CallSite {
-                        file: indexed.relative_path.clone(),
-                        line: m.0,
-                        code: m.1,
-                        matched_function: m.2,
-                        is_specific_function_match: m.3,
-                    };
-                    if indexed.is_test {
-                        test_call_sites.push(site);
-                    } else {
-                        prod_call_sites.push(site);
+        let mut prod_call_sites = Vec::new();
+        let mut test_call_sites = Vec::new();
+        let mut seen_sites: HashSet<(String, usize)> = HashSet::new();
+
+        for cand in &candidates {
+            if let Some(ref targets) = target_functions {
+                for t in targets {
+                    if let Some(sites) = self.ast_index.symbol_calls.get(&(cand.clone(), t.clone())) {
+                        for s in sites {
+                            if seen_sites.insert((s.file.clone(), s.line)) {
+                                if is_test_path(&s.file) {
+                                    test_call_sites.push(s.clone());
+                                } else {
+                                    prod_call_sites.push(s.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                // Check wildcard symbol
+                if let Some(sites) = self.ast_index.symbol_calls.get(&(cand.clone(), "*".to_string())) {
+                    for s in sites {
+                        if seen_sites.insert((s.file.clone(), s.line)) {
+                            if is_test_path(&s.file) {
+                                test_call_sites.push(s.clone());
+                            } else {
+                                prod_call_sites.push(s.clone());
+                            }
+                        }
                     }
                 }
             } else {
-                let (file_imported, matches) =
-                    self.inspect_file(&indexed.content, pkg_name, target_functions.as_deref());
-                if file_imported {
-                    if indexed.is_test {
-                        imported_in_test = true;
-                    } else {
-                        imported_in_prod = true;
-                    }
-                }
-                for m in matches {
-                    let site = CallSite {
-                        file: indexed.relative_path.clone(),
-                        line: m.0,
-                        code: m.1,
-                        matched_function: m.2,
-                        is_specific_function_match: m.3,
-                    };
-                    if indexed.is_test {
-                        test_call_sites.push(site);
-                    } else {
-                        prod_call_sites.push(site);
+                for ((p, _sym), sites) in &self.ast_index.symbol_calls {
+                    if p == cand {
+                        for s in sites {
+                            if seen_sites.insert((s.file.clone(), s.line)) {
+                                if is_test_path(&s.file) {
+                                    test_call_sites.push(s.clone());
+                                } else {
+                                    prod_call_sites.push(s.clone());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -499,7 +420,7 @@ impl ReachabilityEngine {
             UsageSignal::NoReferenceFoundWithinScope
         };
 
-        // Determine Reachability Verdict under conservative proof scope (P0 Item 1)
+        // Determine Reachability Verdict under conservative positive-proof scope (DDD Section 3.2.3)
         let (status, reason_code) = if has_prod_call_sites {
             // Proven syntactic usage signal found in production code path
             (
@@ -511,7 +432,7 @@ impl ReachabilityEngine {
         } else if parse_failed {
             // Syntax error prevented complete verification
             (ReachabilityStatus::Unknown, Some(ReasonCode::ParseError))
-        } else if has_unresolved_dynamic {
+        } else if self.has_any_unresolved_dynamic {
             // Unresolved variable or dynamic import where package cannot be ruled out
             (
                 ReachabilityStatus::Unknown,
@@ -531,13 +452,6 @@ impl ReachabilityEngine {
                 ReachabilityStatus::Unknown,
                 Some(ReasonCode::CrossFileUnresolved),
             )
-        } else if target_functions.is_none() {
-            (ReachabilityStatus::Unknown, Some(ReasonCode::NoSymbolData))
-        } else if vuln.is_transitive {
-            (
-                ReachabilityStatus::Unknown,
-                Some(ReasonCode::TransitiveNotAnalyzed),
-            )
         } else if self.file_limit_hit {
             (ReachabilityStatus::Unknown, Some(ReasonCode::FileLimitHit))
         } else if self.source_files.is_empty() {
@@ -545,12 +459,19 @@ impl ReachabilityEngine {
                 ReachabilityStatus::Unknown,
                 Some(ReasonCode::SourceUnavailable),
             )
-        } else {
-            // No syntactic usage signal is not proof of runtime unreachability. The analyzer does
-            // not model lexical scopes, cross-file dataflow, module-resolution rules, or all dynamic
-            // loading forms; conservatively preserve the finding as UNKNOWN.
+        } else if vuln.is_transitive {
             (
                 ReachabilityStatus::Unknown,
+                Some(ReasonCode::TransitiveNotAnalyzed),
+            )
+        } else if imported_in_prod && target_functions.is_none() {
+            // Package is imported in production, but no structured symbol data is available
+            (ReachabilityStatus::Unknown, Some(ReasonCode::NoSymbolData))
+        } else {
+            // Positive proof of unreachability under complete coverage (BUG-004):
+            // Either package has NO_REFERENCE_FOUND_WITHIN_SCOPE, or imported but target vulnerable symbols are not called
+            (
+                ReachabilityStatus::Unreachable,
                 Some(ReasonCode::AnalysisCompleteNoUsage),
             )
         };
@@ -584,21 +505,68 @@ impl ReachabilityEngine {
         None
     }
 
+    pub fn inspect_file_path(
+        &self,
+        path: &Path,
+        content: &str,
+        pkg_name: &str,
+        target_functions: Option<&[String]>,
+    ) -> (bool, Vec<(usize, String, String, bool)>) {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        // 1. JS / TS: dispatch via oxc_parser with source type derived from path (BUG-003)
+        if let Some(source_type) = source_type_for_path(path) {
+            let ast_res = analyze_file(content, source_type, pkg_name, target_functions);
+            if !ast_res.parse_failed && ast_res.is_imported {
+                return (true, ast_res.call_sites);
+            }
+        } else if ext == "rs" || ext == "py" || ext == "go" || ext == "java" {
+            // Non-JS languages: do NOT pass to oxc_parser (BUG-003)
+        } else {
+            // Unknown extensions: do NOT pass to oxc_parser or map to mjs (BUG-003)
+            return (false, Vec::new());
+        }
+
+        self.inspect_file_fallback(content, pkg_name, target_functions)
+    }
+
     pub fn inspect_file(
         &self,
         content: &str,
         pkg_name: &str,
         target_functions: Option<&[String]>,
     ) -> (bool, Vec<(usize, String, String, bool)>) {
-        let ast_res = analyze_file(
-            content,
-            oxc_span::SourceType::mjs(),
-            pkg_name,
-            target_functions,
-        );
-        if ast_res.is_imported {
-            return (true, ast_res.call_sites);
+        // Only attempt oxc_parser if content looks like JS/TS, NOT Rust/Python/Go/Java (BUG-003)
+        let is_rust = content.contains("fn ") || content.contains("use ") || content.contains("pub mod ");
+        let is_python = content.contains("def ") || content.contains("import ") && content.contains(":\n");
+        let is_go = content.contains("package ") || content.contains("func ");
+        let is_java = content.contains("public class ") || content.contains("package ");
+
+        if !is_rust && !is_python && !is_go && !is_java {
+            let ast_res = analyze_file(
+                content,
+                oxc_span::SourceType::mjs(),
+                pkg_name,
+                target_functions,
+            );
+            if !ast_res.parse_failed && ast_res.is_imported {
+                return (true, ast_res.call_sites);
+            }
         }
+
+        self.inspect_file_fallback(content, pkg_name, target_functions)
+    }
+
+    fn inspect_file_fallback(
+        &self,
+        content: &str,
+        pkg_name: &str,
+        target_functions: Option<&[String]>,
+    ) -> (bool, Vec<(usize, String, String, bool)>) {
 
         if !content.contains(pkg_name) {
             return (false, Vec::new());
@@ -783,7 +751,8 @@ mod tests {
         };
 
         let res2 = engine.check_vulnerability(&unset_vuln);
-        assert_eq!(res2.status, ReachabilityStatus::Unknown);
+        assert_eq!(res2.status, ReachabilityStatus::Unreachable);
+        assert_eq!(res2.reason_code, Some(ReasonCode::AnalysisCompleteNoUsage));
         assert!(res2.call_sites.is_empty());
     }
 
@@ -922,7 +891,7 @@ async function run() {
     }
 
     #[test]
-    fn missing_syntactic_match_yields_unknown_never_unreachable() {
+    fn missing_syntactic_match_when_coverage_complete_yields_unreachable() {
         // Safe app with no lodash references
         let dir = temp_project(
             "console.log('completely unrelated application code');",
@@ -930,9 +899,8 @@ async function run() {
         );
         let engine = ReachabilityEngine::new_with_limit(&dir, 100);
         let (result, usage) = engine.check_vulnerability_and_usage(&lodash_template_finding());
-        // Absence of evidence is NOT evidence of unreachability or safety
-        assert_ne!(result.status, ReachabilityStatus::Unreachable);
-        assert_eq!(result.status, ReachabilityStatus::Unknown);
+        // BUG-004: Direct dependency with complete coverage and no references -> proven Unreachable
+        assert_eq!(result.status, ReachabilityStatus::Unreachable);
         assert_eq!(
             result.reason_code,
             Some(crate::types::ReasonCode::AnalysisCompleteNoUsage)
@@ -979,6 +947,109 @@ async function run() {
             result.reason_code,
             Some(crate::types::ReasonCode::FileLimitHit)
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_rust_ast_reachability() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("vexa-rust-reach-{}", unique));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("main.rs"),
+            r#"
+use serde_json::from_str;
+
+fn main() {
+    let _ = serde_json::from_str::<serde_json::Value>("{}");
+}
+"#,
+        )
+        .unwrap();
+
+        let engine = ReachabilityEngine::new_with_limit(&dir, 100);
+        let serde_vuln = VulnerabilityFinding {
+            id: "RUSTSEC-2023-0001".to_string(),
+            title: "Denial of Service in serde_json".to_string(),
+            package: "serde-json".to_string(),
+            version: "1.0.80".to_string(),
+            ecosystem: "Cargo".to_string(),
+            pkg_id: "serde-json@1.0.80".to_string(),
+            affected_symbols: vec!["from_str".to_string()],
+            ..Default::default()
+        };
+
+        let result = engine.check_vulnerability(&serde_vuln);
+        assert_eq!(result.status, ReachabilityStatus::Reachable);
+        assert!(!result.call_sites.is_empty());
+
+        let unused_vuln = VulnerabilityFinding {
+            id: "RUSTSEC-2023-0002".to_string(),
+            title: "Flaw in to_vec".to_string(),
+            package: "serde-json".to_string(),
+            version: "1.0.80".to_string(),
+            ecosystem: "Cargo".to_string(),
+            pkg_id: "serde-json@1.0.80".to_string(),
+            affected_symbols: vec!["to_vec".to_string()],
+            ..Default::default()
+        };
+
+        let result2 = engine.check_vulnerability(&unused_vuln);
+        assert_eq!(result2.status, ReachabilityStatus::Unreachable);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_python_ast_reachability() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("vexa-python-reach-{}", unique));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("app.py"),
+            r#"
+import yaml
+
+def load_config():
+    return yaml.load("a: 1")
+"#,
+        )
+        .unwrap();
+
+        let engine = ReachabilityEngine::new_with_limit(&dir, 100);
+        let pyyaml_vuln = VulnerabilityFinding {
+            id: "PYSEC-2020-001".to_string(),
+            title: "Code Execution in PyYAML load".to_string(),
+            package: "pyyaml".to_string(),
+            version: "5.3.1".to_string(),
+            ecosystem: "PyPI".to_string(),
+            pkg_id: "pyyaml@5.3.1".to_string(),
+            affected_symbols: vec!["load".to_string()],
+            ..Default::default()
+        };
+
+        let result = engine.check_vulnerability(&pyyaml_vuln);
+        assert_eq!(result.status, ReachabilityStatus::Reachable);
+        assert!(!result.call_sites.is_empty());
+
+        let unused_vuln = VulnerabilityFinding {
+            id: "PYSEC-2020-002".to_string(),
+            title: "Flaw in dump".to_string(),
+            package: "pyyaml".to_string(),
+            version: "5.3.1".to_string(),
+            ecosystem: "PyPI".to_string(),
+            pkg_id: "pyyaml@5.3.1".to_string(),
+            affected_symbols: vec!["dump".to_string()],
+            ..Default::default()
+        };
+
+        let result2 = engine.check_vulnerability(&unused_vuln);
+        assert_eq!(result2.status, ReachabilityStatus::Unreachable);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
