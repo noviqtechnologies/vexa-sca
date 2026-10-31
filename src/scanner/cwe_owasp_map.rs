@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
-/// Static catalog and classifier for CWE Top 25 (2025/2026) and OWASP Top 10 (2021).
-/// Enables deterministic classification and posture reporting in CLI reports and dashboards.
+//! Static catalog and classifier for CWE Top 25 (2025/2026) and OWASP Top 10 (2021).
+//! Enables deterministic classification and posture reporting in CLI reports and dashboards.
 
 pub const CWE_TOP_25: &[&str] = &[
     "CWE-787", // Out-of-bounds Write

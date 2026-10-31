@@ -248,7 +248,7 @@ impl EpssResolver {
                 source: EpssSource::Unavailable,
             };
         }
-        let batch = self.resolve_epss_batch(&[clean.clone()]).await;
+        let batch = self.resolve_epss_batch(std::slice::from_ref(&clean)).await;
         batch.get(&clean).cloned().unwrap_or(EpssInfo {
             score: 0.0,
             percentile: 0.0,

@@ -390,7 +390,7 @@ pub fn detect_workspace_manifests(root: &Path) -> Result<Vec<DiscoveredManifest>
 
     if abs_path.is_file() {
         let (manifest_type, graph) =
-            parse_manifest_at(&abs_path, false).map_err(|e| ParseError::Malformed(e))?;
+            parse_manifest_at(&abs_path, false).map_err(ParseError::Malformed)?;
         let name = abs_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let ecosystem = ecosystem_for_manifest_name(name)
             .map(Ecosystem::from)

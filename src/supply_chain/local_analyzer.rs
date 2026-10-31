@@ -190,27 +190,25 @@ impl LocalSupplyChainAnalyzer {
                                     .unwrap_or_default();
 
                                 // Rule SC-015: npx -y without pinned version
-                                if command == "npx" || args.contains(&"npx") {
-                                    if args.contains(&"-y") || args.contains(&"--yes") {
-                                        let unpinned = args.iter().any(|arg| {
-                                            !arg.starts_with('-')
-                                                && !arg.contains('@')
-                                                && *arg != "npx"
+                                if (command == "npx" || args.contains(&"npx"))
+                                    && (args.contains(&"-y") || args.contains(&"--yes"))
+                                {
+                                    let unpinned = args.iter().any(|arg| {
+                                        !arg.starts_with('-') && !arg.contains('@') && *arg != "npx"
+                                    });
+                                    if unpinned {
+                                        findings.push(SupplyChainFinding {
+                                            rule_id: "SC-015".to_string(),
+                                            signal_name: "mcp_unsafe_tool_config".to_string(),
+                                            severity: SeverityLevel::High,
+                                            message: format!(
+                                                "MCP server '{}' configures dynamic unpinned package execution via 'npx -y'",
+                                                srv_name
+                                            ),
+                                            file_path: Some(rel.clone()),
+                                            line: None,
+                                            snippet: Some(srv_val.to_string()),
                                         });
-                                        if unpinned {
-                                            findings.push(SupplyChainFinding {
-                                                rule_id: "SC-015".to_string(),
-                                                signal_name: "mcp_unsafe_tool_config".to_string(),
-                                                severity: SeverityLevel::High,
-                                                message: format!(
-                                                    "MCP server '{}' configures dynamic unpinned package execution via 'npx -y'",
-                                                    srv_name
-                                                ),
-                                                file_path: Some(rel.clone()),
-                                                line: None,
-                                                snippet: Some(srv_val.to_string()),
-                                            });
-                                        }
                                     }
                                 }
 
@@ -591,21 +589,19 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Check for SC-006 components
-            if trimmed.contains("process.env")
+            if (trimmed.contains("process.env")
                 || trimmed.contains("os.environ")
-                || trimmed.contains("std::env::var")
-            {
-                if trimmed.contains("AWS_SECRET")
+                || trimmed.contains("std::env::var"))
+                && (trimmed.contains("AWS_SECRET")
                     || trimmed.contains("GITHUB_TOKEN")
                     || trimmed.contains("NPM_TOKEN")
                     || trimmed.contains("OPENAI_API_KEY")
                     || trimmed.contains("PRIVATE_KEY")
-                    || trimmed.contains("ACCESS_KEY")
-                {
-                    has_env_secret_access = true;
-                    env_secret_line = line_num;
-                    env_secret_snippet = trimmed.to_string();
-                }
+                    || trimmed.contains("ACCESS_KEY"))
+            {
+                has_env_secret_access = true;
+                env_secret_line = line_num;
+                env_secret_snippet = trimmed.to_string();
             }
 
             if trimmed.contains("require('net')")
@@ -756,6 +752,7 @@ pub fn compute_shannon_entropy(s: &str) -> f64 {
     entropy
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn damerau_levenshtein_distance(a: &str, b: &str) -> usize {
     let a_chars: Vec<char> = a.chars().collect();
     let b_chars: Vec<char> = b.chars().collect();

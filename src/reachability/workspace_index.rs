@@ -510,7 +510,7 @@ impl WorkspaceAstIndex {
             let trimmed = line.trim();
             if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.contains('/') {
                 let pkg = trimmed.trim_matches('"');
-                let pkg_name = pkg.split('/').last().unwrap_or(pkg);
+                let pkg_name = pkg.split('/').next_back().unwrap_or(pkg);
                 external_imports
                     .entry(pkg_name.to_string())
                     .or_default()
@@ -521,7 +521,7 @@ impl WorkspaceAstIndex {
                     .insert("*".to_string());
             }
 
-            for (pkg, _) in &external_imports {
+            for pkg in external_imports.keys() {
                 if line.contains(&format!("{}.", pkg)) {
                     let site = CallSite {
                         file: rel_path.to_string(),

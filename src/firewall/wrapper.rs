@@ -303,8 +303,8 @@ impl FirewallWrapper {
                 }
             } else {
                 // npm / pnpm / yarn / bun: scoped packages like @foo/bar@1.2.3 or bar@1.2.3
-                if trimmed.starts_with('@') {
-                    if let Some(second_at) = trimmed[1..].find('@') {
+                if let Some(stripped) = trimmed.strip_prefix('@') {
+                    if let Some(second_at) = stripped.find('@') {
                         let name = &trimmed[..second_at + 1];
                         let ver = &trimmed[second_at + 2..];
                         packages.push(PackageToEvaluate {
