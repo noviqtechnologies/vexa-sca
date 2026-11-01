@@ -635,7 +635,267 @@ impl LicenseScanner {
             map.extend(cargo_licenses);
         }
 
+        // 3. pnpm / Yarn / node_modules(.pnpm)
+        for p in crate::parsers::detector::discover_manifests(base_dir, 4) {
+            let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            match fname {
+                "pnpm-lock.yaml" | "pnpm-lock.yml" | "yarn.lock" => {
+                    if let Some(dir) = p.parent() {
+                        Self::read_node_modules_licenses(dir, &mut map);
+                    }
+                }
+                "uv.lock" | "poetry.lock" => {
+                    Self::read_python_toml_licenses(&p, &mut map);
+                }
+                "Pipfile.lock" => {
+                    Self::read_pipfile_licenses(&p, &mut map);
+                }
+                "requirements.txt" => {
+                    if let Some(dir) = p.parent() {
+                        Self::read_python_dist_info_licenses(dir, &mut map);
+                    }
+                }
+                "pom.xml" => {
+                    Self::read_pom_xml_licenses(&p, &mut map);
+                }
+                "go.mod" | "go.sum" => {
+                    if let Some(dir) = p.parent() {
+                        Self::read_go_vendor_licenses(dir, &mut map);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         map
+    }
+
+    fn read_node_modules_licenses(dir: &Path, map: &mut HashMap<String, String>) {
+        let nm = dir.join("node_modules");
+        if !nm.is_dir() {
+            return;
+        }
+        for entry in walkdir::WalkDir::new(&nm)
+            .max_depth(5)
+            .into_iter()
+            .flatten()
+        {
+            if entry.file_type().is_file() && entry.file_name() == "package.json" {
+                if let Ok(content) = fs::read_to_string(entry.path()) {
+                    if let Ok(val) = serde_json::from_str::<Value>(&content) {
+                        let name = val.get("name").and_then(|n| n.as_str());
+                        let version = val.get("version").and_then(|v| v.as_str());
+                        let lic = val
+                            .get("license")
+                            .and_then(|l| {
+                                l.as_str()
+                                    .or_else(|| l.get("type").and_then(|t| t.as_str()))
+                            })
+                            .map(|s| s.to_string());
+                        if let (Some(n), Some(l)) = (name, lic) {
+                            if let Some(v) = version {
+                                map.insert(format!("{}@{}", n, v), l.clone());
+                            }
+                            map.entry(n.to_string()).or_insert(l);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn read_python_toml_licenses(lock_path: &Path, map: &mut HashMap<String, String>) {
+        if let Ok(content) = fs::read_to_string(lock_path) {
+            if let Ok(parsed) = toml::from_str::<toml::Value>(&content) {
+                if let Some(packages) = parsed.get("package").and_then(|p| p.as_array()) {
+                    for pkg in packages {
+                        let name = pkg.get("name").and_then(|n| n.as_str());
+                        let version = pkg.get("version").and_then(|v| v.as_str());
+                        let license = pkg.get("license").and_then(|l| l.as_str());
+                        if let (Some(n), Some(lic)) = (name, license) {
+                            if let Some(v) = version {
+                                map.insert(format!("{}@{}", n, v), lic.to_string());
+                            }
+                            map.insert(n.to_string(), lic.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(dir) = lock_path.parent() {
+            let pyproj = dir.join("pyproject.toml");
+            if let Ok(content) = fs::read_to_string(&pyproj) {
+                if let Ok(parsed) = toml::from_str::<toml::Value>(&content) {
+                    if let Some(proj) = parsed.get("project") {
+                        let name = proj.get("name").and_then(|n| n.as_str());
+                        let lic = proj.get("license").and_then(|l| {
+                            l.as_str()
+                                .or_else(|| l.get("text").and_then(|t| t.as_str()))
+                        });
+                        if let (Some(n), Some(l)) = (name, lic) {
+                            map.entry(n.to_string()).or_insert_with(|| l.to_string());
+                        }
+                    }
+                }
+            }
+            Self::read_python_dist_info_licenses(dir, map);
+        }
+    }
+
+    fn read_pipfile_licenses(lock_path: &Path, map: &mut HashMap<String, String>) {
+        if let Ok(content) = fs::read_to_string(lock_path) {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&content) {
+                for section in ["default", "develop"] {
+                    if let Some(pkgs) = parsed.get(section).and_then(|s| s.as_object()) {
+                        for (name, details) in pkgs {
+                            if let Some(lic) = details.get("license").and_then(|l| l.as_str()) {
+                                let ver = details
+                                    .get("version")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .trim_start_matches("==");
+                                if !ver.is_empty() {
+                                    map.insert(format!("{}@{}", name, ver), lic.to_string());
+                                }
+                                map.insert(name.clone(), lic.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn read_python_dist_info_licenses(dir: &Path, map: &mut HashMap<String, String>) {
+        for venv_name in [".venv", "venv", "site-packages"] {
+            let venv = dir.join(venv_name);
+            if !venv.is_dir() {
+                continue;
+            }
+            for entry in walkdir::WalkDir::new(&venv)
+                .max_depth(6)
+                .into_iter()
+                .flatten()
+            {
+                if entry.file_type().is_file() && entry.file_name() == "METADATA" {
+                    if let Ok(content) = fs::read_to_string(entry.path()) {
+                        let mut pkg_name = None;
+                        let mut pkg_ver = None;
+                        let mut license = None;
+                        for line in content.lines() {
+                            if let Some(n) = line.strip_prefix("Name: ") {
+                                pkg_name = Some(n.trim().to_string());
+                            } else if let Some(v) = line.strip_prefix("Version: ") {
+                                pkg_ver = Some(v.trim().to_string());
+                            } else if let Some(l) = line.strip_prefix("License: ") {
+                                let trimmed = l.trim();
+                                if !trimmed.is_empty() && trimmed != "UNKNOWN" {
+                                    license = Some(trimmed.to_string());
+                                }
+                            } else if line.is_empty() {
+                                break;
+                            }
+                        }
+                        if let (Some(n), Some(lic)) = (pkg_name, license) {
+                            if let Some(v) = pkg_ver {
+                                map.insert(format!("{}@{}", n, v), lic.clone());
+                            }
+                            map.entry(n).or_insert(lic);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn read_pom_xml_licenses(pom_path: &Path, map: &mut HashMap<String, String>) {
+        if let Ok(content) = fs::read_to_string(pom_path) {
+            if let Ok(doc) = roxmltree::Document::parse(&content) {
+                let root = doc.root_element();
+                let group = root
+                    .children()
+                    .find(|n| n.is_element() && n.tag_name().name() == "groupId")
+                    .and_then(|n| n.text())
+                    .unwrap_or("com.example")
+                    .trim();
+                let artifact = root
+                    .children()
+                    .find(|n| n.is_element() && n.tag_name().name() == "artifactId")
+                    .and_then(|n| n.text())
+                    .unwrap_or("")
+                    .trim();
+                if let Some(licenses_node) = root
+                    .children()
+                    .find(|n| n.is_element() && n.tag_name().name() == "licenses")
+                {
+                    let mut lic_names = Vec::new();
+                    for lic_node in licenses_node
+                        .children()
+                        .filter(|n| n.is_element() && n.tag_name().name() == "license")
+                    {
+                        if let Some(name_node) = lic_node
+                            .children()
+                            .find(|n| n.is_element() && n.tag_name().name() == "name")
+                        {
+                            if let Some(txt) = name_node.text() {
+                                lic_names.push(txt.trim().to_string());
+                            }
+                        }
+                    }
+                    if !lic_names.is_empty() && !artifact.is_empty() {
+                        let joined = lic_names.join(" OR ");
+                        map.insert(format!("{}:{}", group, artifact), joined.clone());
+                        map.insert(artifact.to_string(), joined);
+                    }
+                }
+            }
+        }
+    }
+
+    fn read_go_vendor_licenses(dir: &Path, map: &mut HashMap<String, String>) {
+        let vendor = dir.join("vendor");
+        if !vendor.is_dir() {
+            return;
+        }
+        for entry in walkdir::WalkDir::new(&vendor)
+            .max_depth(5)
+            .into_iter()
+            .flatten()
+        {
+            if entry.file_type().is_file() {
+                let fname = entry.file_name().to_string_lossy().to_uppercase();
+                if fname == "LICENSE" || fname == "LICENSE.TXT" || fname == "LICENSE.MD" {
+                    if let Ok(content) = fs::read_to_string(entry.path()) {
+                        let upper = content.to_uppercase();
+                        let detected = if upper.contains("APACHE LICENSE")
+                            && upper.contains("VERSION 2.0")
+                        {
+                            Some("Apache-2.0")
+                        } else if upper.contains("PERMISSION IS HEREBY GRANTED, FREE OF CHARGE") {
+                            Some("MIT")
+                        } else if upper
+                            .contains("REDISTRIBUTION AND USE IN SOURCE AND BINARY FORMS")
+                        {
+                            Some("BSD-3-Clause")
+                        } else if upper.contains("MOZILLA PUBLIC LICENSE") {
+                            Some("MPL-2.0")
+                        } else if upper.contains("GNU GENERAL PUBLIC LICENSE") {
+                            Some("GPL-3.0-only")
+                        } else {
+                            None
+                        };
+                        if let Some(lic) = detected {
+                            if let Some(pkg_dir) = entry.path().parent() {
+                                if let Ok(rel) = pkg_dir.strip_prefix(&vendor) {
+                                    let mod_name = rel.to_string_lossy().replace('\\', "/");
+                                    map.insert(mod_name, lic.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn read_cargo_licenses(base_dir: &Path) -> HashMap<String, String> {

@@ -323,16 +323,17 @@ impl LockfilePatcher {
 
         #[cfg(windows)]
         let output = {
-            // npm, pnpm, and Corepack commonly install Windows .cmd shims rather than .exe files.
-            // The command and arguments above are fixed by this function, not user-supplied text.
-            let mut command = Command::new("cmd.exe");
-            command
-                .arg("/d")
-                .arg("/s")
-                .arg("/c")
-                .arg(&cmd_display)
-                .current_dir(project_dir);
-            command.output()
+            let program_cmd = format!("{}.cmd", program);
+            Command::new(&program_cmd)
+                .args(args)
+                .current_dir(project_dir)
+                .output()
+                .or_else(|_| {
+                    Command::new(program)
+                        .args(args)
+                        .current_dir(project_dir)
+                        .output()
+                })
         }
         .map_err(|e| {
             format!(
@@ -578,39 +579,10 @@ fn atomic_replace_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         temp.write_all(bytes)?;
         temp.sync_all()?;
 
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStrExt;
-            #[link(name = "kernel32")]
-            extern "system" {
-                fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
-            }
-            const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
-            const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
-            let existing: Vec<u16> = temp_path
-                .as_os_str()
-                .encode_wide()
-                .chain(std::iter::once(0))
-                .collect();
-            let new: Vec<u16> = path
-                .as_os_str()
-                .encode_wide()
-                .chain(std::iter::once(0))
-                .collect();
-            let ok = unsafe {
-                MoveFileExW(
-                    existing.as_ptr(),
-                    new.as_ptr(),
-                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-                )
-            };
-            if ok == 0 {
-                return Err(std::io::Error::last_os_error());
-            }
+        if let Err(_e) = std::fs::rename(&temp_path, path) {
+            std::fs::copy(&temp_path, path)?;
+            let _ = std::fs::remove_file(&temp_path);
         }
-
-        #[cfg(not(windows))]
-        std::fs::rename(&temp_path, path)?;
 
         Ok(())
     })();

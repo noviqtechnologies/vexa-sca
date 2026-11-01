@@ -1,0 +1,94 @@
+name: 'Vexa SCA - Software Composition Analysis & Vulnerability Firewall'
+description: 'Zero-false-positive AST reachability SCA, behavioral package firewall, license compliance & CISA KEV exploitation scanner.'
+author: 'Vexa Security'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  path:
+    description: 'Path to target workspace directory containing dependency manifests or lockfiles'
+    required: false
+    default: '.'
+  fail-on:
+    description: 'Quality gate failure threshold (low, medium, high, critical, reachable, reachable-critical)'
+    required: false
+    default: 'critical'
+  reachable-only:
+    description: 'Only report and evaluate vulnerabilities with confirmed AST execution reachability'
+    required: false
+    default: 'false'
+  fail-on-reachable:
+    description: 'Fail CI/CD quality gate if any vulnerability has confirmed AST reachability'
+    required: false
+    default: 'false'
+  sarif-file:
+    description: 'Output path for OASIS SARIF v2.1.0 security report'
+    required: false
+    default: 'vexa-results.sarif'
+  upload-sarif:
+    description: 'Upload SARIF results to GitHub Code Scanning Security tab'
+    required: false
+    default: 'true'
+  upload-facts:
+    description: 'Stream Zero-Code-Retention .vexa.facts.json to Vexa SCA Cloud dashboard'
+    required: false
+    default: 'false'
+  token:
+    description: 'Vexa SCA Cloud Personal Access Token (or pass secret VEXA_TOKEN)'
+    required: false
+    default: ''
+  version:
+    description: 'Vexa SCA CLI binary version to execute'
+    required: false
+    default: 'v2.0.0'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Vexa SCA Environment
+      shell: bash
+      run: |
+        echo "VEXA_SCA_PATH=${{ inputs.path }}" >> $GITHUB_ENV
+        if [ -n "${{ inputs.token }}" ]; then
+          echo "VEXA_TOKEN=${{ inputs.token }}" >> $GITHUB_ENV
+        fi
+
+    - name: Run Vexa SCA Audit
+      shell: bash
+      run: |
+        ARGS=("ci" "${{ inputs.path }}" "--sarif-file" "${{ inputs.sarif-file }}")
+        
+        if [ -n "${{ inputs.fail-on }}" ]; then
+          ARGS+=("--fail-on" "${{ inputs.fail-on }}")
+        fi
+
+        if [ "${{ inputs.reachable-only }}" = "true" ]; then
+          ARGS+=("--reachable-only")
+        fi
+
+        if [ "${{ inputs.fail-on-reachable }}" = "true" ]; then
+          ARGS+=("--fail-on-reachable")
+        fi
+
+        if [ "${{ inputs.upload-facts }}" = "true" ]; then
+          ARGS+=("--upload")
+        fi
+
+        if command -v vexa-sca &> /dev/null; then
+          vexa-sca "${ARGS[@]}"
+        elif command -v cargo &> /dev/null; then
+          cargo run --release --bin vexa-sca -- "${ARGS[@]}"
+        else
+          echo "Error: Neither vexa-sca binary nor cargo build toolchain found on runner."
+          exit 1
+        fi
+
+    - name: Upload SARIF to GitHub Code Scanning
+      if: inputs.upload-sarif == 'true' && hashFiles(inputs.sarif-file) != ''
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+        category: 'vexa-sca'
+

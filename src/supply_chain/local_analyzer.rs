@@ -242,8 +242,11 @@ impl LocalSupplyChainAnalyzer {
             .max_depth(5)
             .into_iter()
             .filter_entry(|e| {
+                if e.depth() == 0 {
+                    return true;
+                }
                 let name = e.file_name().to_string_lossy();
-                name != "node_modules" && name != "target" && name != ".git" && name != "dist"
+                !(e.file_type().is_dir() && is_ignored_scan_dir(&name))
             })
             .flatten()
         {
@@ -416,12 +419,11 @@ impl LocalSupplyChainAnalyzer {
             .max_depth(10)
             .into_iter()
             .filter_entry(|e| {
+                if e.depth() == 0 {
+                    return true;
+                }
                 let name = e.file_name().to_string_lossy();
-                name != "node_modules"
-                    && name != "target"
-                    && name != ".git"
-                    && name != "dist"
-                    && name != ".sca-cache"
+                !(e.file_type().is_dir() && is_ignored_scan_dir(&name))
             })
             .flatten()
         {
@@ -731,6 +733,17 @@ impl LocalSupplyChainAnalyzer {
 
         findings
     }
+}
+
+/// Directories never walked by workspace supply-chain scans (vendored, generated, cache, VCS).
+/// Skipping hidden dirs also avoids the multi-thousand-file `.sca-cache` and `.work` trees.
+fn is_ignored_scan_dir(name: &str) -> bool {
+    // `.github` and `.cursor`/`.vscode` configs are scanned by dedicated rules, not this walk.
+    name.starts_with('.')
+        || matches!(
+            name,
+            "node_modules" | "target" | "dist" | "build" | "vendor" | "inputs" | "outputs"
+        )
 }
 
 pub fn compute_shannon_entropy(s: &str) -> f64 {

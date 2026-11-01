@@ -1,4 +1,7 @@
+#![forbid(unsafe_code)]
+
 use crate::core::dep_graph::{DepGraph, NodeInfo, PkgManagerInfo};
+use crate::parsers::MAX_MANIFEST_SIZE_BYTES;
 use crate::types::PkgInfo;
 use std::collections::HashSet;
 use std::fs;
@@ -75,6 +78,9 @@ impl GoLockParser {
     fn parse_go_sum(graph: &mut DepGraph, go_sum_path: &Path) -> Result<(), String> {
         let content =
             fs::read_to_string(go_sum_path).map_err(|e| format!("Failed to read go.sum: {}", e))?;
+        if content.len() > MAX_MANIFEST_SIZE_BYTES {
+            return Err("go.sum exceeds maximum size limit of 15 MB".to_string());
+        }
         let mut seen = HashSet::new();
 
         for line in content.lines() {
@@ -154,6 +160,9 @@ impl GoLockParser {
     fn parse_go_mod(graph: &mut DepGraph, go_mod_path: &Path) -> Result<(), String> {
         let content =
             fs::read_to_string(go_mod_path).map_err(|e| format!("Failed to read go.mod: {}", e))?;
+        if content.len() > MAX_MANIFEST_SIZE_BYTES {
+            return Err("go.mod exceeds maximum size limit of 15 MB".to_string());
+        }
 
         let mut in_require = false;
         let mut in_replace = false;

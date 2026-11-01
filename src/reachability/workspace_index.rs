@@ -134,20 +134,10 @@ impl WorkspaceAstIndex {
             let mut propagated = Vec::new();
             for (file_path, facts) in &files {
                 for rel_reexport in &facts.barrel_reexports {
-                    let reexport_dir = file_path.parent().unwrap_or(source_dir);
-                    let candidate1 = reexport_dir.join(rel_reexport);
-                    let candidate_js = reexport_dir.join(format!("{}.js", rel_reexport));
-                    let candidate_ts = reexport_dir.join(format!("{}.ts", rel_reexport));
-                    let target_path = if candidate1.exists() {
-                        Some(candidate1)
-                    } else if candidate_js.exists() {
-                        Some(candidate_js)
-                    } else if candidate_ts.exists() {
-                        Some(candidate_ts)
-                    } else {
-                        None
-                    };
-                    if let Some(target) = target_path {
+                    if let Some(target) = Self::resolve_local_reexport_path(
+                        file_path.parent().unwrap_or(source_dir),
+                        rel_reexport,
+                    ) {
                         if let Some(target_facts) = files.get(&target) {
                             for (pkg, syms) in &target_facts.external_imports {
                                 propagated.push((file_path.clone(), pkg.clone(), syms.clone()));
@@ -173,6 +163,22 @@ impl WorkspaceAstIndex {
             }
             if !any_new {
                 break;
+            }
+        }
+
+        // Re-evaluate call sites and clear local barrel re-exports that were fully resolved in workspace
+        let known_files: HashSet<PathBuf> = files.keys().cloned().collect();
+        for (file_path, facts) in files.iter_mut() {
+            if !facts.barrel_reexports.is_empty() {
+                let reexport_dir = file_path.parent().unwrap_or(source_dir);
+                let all_local_resolved = facts.barrel_reexports.iter().all(|rel| {
+                    Self::resolve_local_reexport_path(reexport_dir, rel)
+                        .map(|t| known_files.contains(&t))
+                        .unwrap_or(false)
+                });
+                if all_local_resolved && !facts.has_reexports {
+                    facts.barrel_reexports.clear();
+                }
             }
         }
 
@@ -302,20 +308,34 @@ impl WorkspaceAstIndex {
             }
         }
 
-        let has_reexports = general_analysis.has_reexports || !barrel_reexports.is_empty();
+        // Only mark has_reexports when external package re-exports exist that are not resolved local barrels
+        let has_external_reexport = general_analysis.has_reexports && barrel_reexports.is_empty();
 
         FileAstFacts {
             relative_path: rel_path.to_string(),
             language: SourceLanguage::JavaScriptOrTypeScript,
             external_imports,
             barrel_reexports,
-            has_reexports,
+            has_reexports: has_external_reexport,
             call_sites,
             has_dynamic_loading: general_analysis.has_dynamic_construct
                 || general_analysis.has_unresolved_dynamic,
             parse_failed: general_analysis.parse_failed,
             is_test,
         }
+    }
+
+    fn resolve_local_reexport_path(reexport_dir: &Path, rel_reexport: &str) -> Option<PathBuf> {
+        let candidates = [
+            reexport_dir.join(rel_reexport),
+            reexport_dir.join(format!("{}.js", rel_reexport)),
+            reexport_dir.join(format!("{}.ts", rel_reexport)),
+            reexport_dir.join(format!("{}.mjs", rel_reexport)),
+            reexport_dir.join(format!("{}.cjs", rel_reexport)),
+            reexport_dir.join(format!("{}/index.js", rel_reexport)),
+            reexport_dir.join(format!("{}/index.ts", rel_reexport)),
+        ];
+        candidates.into_iter().find(|c| c.is_file())
     }
 
     fn analyze_rust_file(content: &str, rel_path: &str, is_test: bool) -> FileAstFacts {

@@ -297,6 +297,18 @@ pub enum Commands {
         /// Generate Zero-Code-Retention .vexa.facts.json for cloud sync or offline review
         #[arg(long, visible_alias = "facts")]
         upload_facts: bool,
+
+        /// Upload scan facts to Vexa SCA Cloud dashboard (requires auth login or VEXA_TOKEN)
+        #[arg(long, visible_alias = "upload")]
+        upload: bool,
+
+        /// Automatically open the cloud dashboard in your browser on upload completion
+        #[arg(long)]
+        open: bool,
+
+        /// Path to local signed offline database bundle (.vexadb)
+        #[arg(long)]
+        offline_db: Option<PathBuf>,
     },
 
     /// Automated scan profile for CI/CD pipelines (fails closed on incomplete data/advisory outage)
@@ -421,6 +433,18 @@ pub enum Commands {
         /// Generate Zero-Code-Retention .vexa.facts.json for cloud sync or offline review
         #[arg(long, visible_alias = "facts")]
         upload_facts: bool,
+
+        /// Upload scan facts to Vexa SCA Cloud dashboard (requires auth login or VEXA_TOKEN)
+        #[arg(long, visible_alias = "upload")]
+        upload: bool,
+
+        /// Automatically open the cloud dashboard in your browser on upload completion
+        #[arg(long)]
+        open: bool,
+
+        /// Path to local signed offline database bundle (.vexadb)
+        #[arg(long)]
+        offline_db: Option<PathBuf>,
     },
 
     /// Initialize pinned GitHub Actions workflow for Vexa SCA in .github/workflows/vexa-sca.yml
@@ -604,6 +628,79 @@ pub enum Commands {
 
     /// Launch Model Context Protocol (MCP) JSON-RPC server over stdin/stdout for Cursor, Claude Code, and Copilot
     Mcp,
+
+    /// Explain a finding (by id, CVE, alias, or fingerprint): severity, KEV/EPSS, CWE/OWASP, reachability, dependency paths, and fix
+    Explain {
+        /// Finding ID (GHSA-*, CVE-*, RUSTSEC-*, or fingerprint)
+        finding_id: String,
+
+        /// Target path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+
+    /// Show findings introduced between two git refs (compares base-ref against head-ref or working tree)
+    Diff {
+        /// Base git ref (e.g. main, origin/main, a commit SHA)
+        base_ref: String,
+
+        /// Head git ref (defaults to the current working tree)
+        head_ref: Option<String>,
+
+        /// Target path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+
+    /// Manage Vexa SCA Cloud authentication and API tokens
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommands,
+    },
+
+    /// Manage and verify offline advisory database bundles (.vexadb)
+    Db {
+        #[command(subcommand)]
+        command: DbCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AuthCommands {
+    /// Log in to Vexa SCA Cloud using a personal access token (vexa_pat_...)
+    Login {
+        /// Personal Access Token (starts with vexa_pat_)
+        #[arg(long)]
+        token: Option<String>,
+
+        /// API base URL override
+        #[arg(long)]
+        api_url: Option<String>,
+    },
+
+    /// Check active authentication status and account details
+    Status {
+        /// API base URL override
+        #[arg(long)]
+        api_url: Option<String>,
+    },
+
+    /// Log out and delete local stored credentials
+    Logout,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DbCommands {
+    /// Verify Ed25519 cryptographic signature of an offline advisory bundle (.vexadb)
+    Verify {
+        /// Path to .vexadb bundle file
+        #[arg(long)]
+        offline_db: PathBuf,
+
+        /// Root public key override in hex
+        #[arg(long)]
+        pubkey: Option<String>,
+    },
 }
 
 pub async fn run() {
@@ -1438,7 +1535,31 @@ pub async fn run() {
             max_source_files,
             timeout_secs,
             upload_facts,
+            upload,
+            open,
+            offline_db,
         } => {
+            if let Some(db_path) = &offline_db {
+                match crate::cloud::OfflineBundleVerifier::verify_bundle_file(db_path, None) {
+                    Ok((verified, _)) => {
+                        println!(
+                            "{} Verified offline advisory bundle: {} ({} advisories)",
+                            "✔".green().bold(),
+                            db_path.display(),
+                            verified.advisory_count
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{} Offline advisory bundle verification failed: {}",
+                            "Error:".red().bold(),
+                            e
+                        );
+                        exit(2);
+                    }
+                }
+            }
+
             if fail_on_unknown_reachability && allow_unknown_reachability {
                 eprintln!(
                     "{} Cannot specify both --fail-on-unknown-reachability and --allow-unknown-reachability.",
@@ -1772,7 +1893,7 @@ pub async fn run() {
                         QualityGate::print_terminal_summary(&gate_res);
                     }
 
-                    if upload_facts {
+                    if upload || upload_facts {
                         if let Ok(detection) =
                             crate::parsers::detector::detect_and_parse(&path, !prod_only)
                         {
@@ -1788,11 +1909,37 @@ pub async fn run() {
                                         e
                                     );
                                 } else {
-                                    eprintln!(
+                                    println!(
                                         "{} Exported Zero-Code-Retention scan facts to {}",
                                         "✔".green().bold(),
                                         facts_path.display()
                                     );
+                                }
+                            }
+                        }
+
+                        let should_upload = upload || open;
+                        if should_upload {
+                            let facts_payload = crate::cloud::CloudClient::extract_facts(
+                                &output.dep_graph,
+                                &output.scan_result,
+                            );
+                            match crate::cloud::CloudClient::upload_facts(&facts_payload, None)
+                                .await
+                            {
+                                Ok(sync_res) => {
+                                    println!(
+                                        "{} Successfully streamed facts to Vexa SCA Cloud!\n  Dashboard URL: {}",
+                                        "✔".green().bold(),
+                                        sync_res.dashboard_url.cyan().bold()
+                                    );
+                                    if open {
+                                        println!("  Opening dashboard in browser...");
+                                        crate::cloud::auth::open_browser(&sync_res.dashboard_url);
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("{} Cloud upload: {}", "Warning:".yellow().bold(), e);
                                 }
                             }
                         }
@@ -1865,7 +2012,31 @@ pub async fn run() {
             max_source_files,
             timeout_secs,
             upload_facts,
+            upload,
+            open,
+            offline_db,
         } => {
+            if let Some(db_path) = &offline_db {
+                match crate::cloud::OfflineBundleVerifier::verify_bundle_file(db_path, None) {
+                    Ok((verified, _)) => {
+                        println!(
+                            "{} Verified offline advisory bundle: {} ({} advisories)",
+                            "✔".green().bold(),
+                            db_path.display(),
+                            verified.advisory_count
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{} Offline advisory bundle verification failed: {}",
+                            "Error:".red().bold(),
+                            e
+                        );
+                        exit(2);
+                    }
+                }
+            }
+
             if fail_on_unknown_reachability && allow_unknown_reachability {
                 eprintln!(
                     "{} Cannot specify both --fail-on-unknown-reachability and --allow-unknown-reachability.",
@@ -2148,7 +2319,7 @@ pub async fn run() {
                         QualityGate::print_terminal_summary(&gate_res);
                     }
 
-                    if upload_facts {
+                    if upload || upload_facts {
                         if let Ok(detection) =
                             crate::parsers::detector::detect_and_parse(&path, !prod_only)
                         {
@@ -2164,11 +2335,37 @@ pub async fn run() {
                                         e
                                     );
                                 } else {
-                                    eprintln!(
+                                    println!(
                                         "{} Exported Zero-Code-Retention scan facts to {}",
                                         "✔".green().bold(),
                                         facts_path.display()
                                     );
+                                }
+                            }
+                        }
+
+                        let should_upload = upload || open;
+                        if should_upload {
+                            let facts_payload = crate::cloud::CloudClient::extract_facts(
+                                &output.dep_graph,
+                                &output.scan_result,
+                            );
+                            match crate::cloud::CloudClient::upload_facts(&facts_payload, None)
+                                .await
+                            {
+                                Ok(sync_res) => {
+                                    println!(
+                                        "{} Successfully streamed facts to Vexa SCA Cloud!\n  Dashboard URL: {}",
+                                        "✔".green().bold(),
+                                        sync_res.dashboard_url.cyan().bold()
+                                    );
+                                    if open {
+                                        println!("  Opening dashboard in browser...");
+                                        crate::cloud::auth::open_browser(&sync_res.dashboard_url);
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("{} Cloud upload: {}", "Warning:".yellow().bold(), e);
                                 }
                             }
                         }
@@ -2531,5 +2728,229 @@ ignore:
             }
             exit(0);
         }
+
+        Commands::Explain { finding_id, path } => {
+            let output = match scan_project(&path, ScanOptions::default()).await {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("{} {}", "Error:".red().bold(), e);
+                    exit(2);
+                }
+            };
+            let needle = finding_id.to_lowercase();
+            let found = output.all_vulnerabilities.iter().find(|v| {
+                v.id.to_lowercase() == needle
+                    || v.fingerprint.to_lowercase() == needle
+                    || v.cve.as_deref().map(|c| c.to_lowercase()) == Some(needle.clone())
+                    || v.aliases.iter().any(|a| a.to_lowercase() == needle)
+            });
+            let Some(v) = found else {
+                eprintln!(
+                    "{} finding '{}' not found",
+                    "Error:".red().bold(),
+                    finding_id
+                );
+                exit(2);
+            };
+            println!("\n{} {}", v.id.cyan().bold(), v.title.bold());
+            println!(
+                "  Package      : {}@{} ({})",
+                v.package, v.version, v.ecosystem
+            );
+            println!(
+                "  Severity     : {} (CVSS {:.1})",
+                v.severity.level.as_str(),
+                v.severity.score
+            );
+            println!("  Priority     : {:.1}", v.priority_score);
+            if v.is_kev {
+                println!(
+                    "  CISA KEV     : {} (added {})",
+                    "YES".red().bold(),
+                    v.kev_date_added.as_deref().unwrap_or("unknown")
+                );
+            }
+            if let Some(e) = &v.epss {
+                println!(
+                    "  EPSS         : {:.1}% (p{:.0})",
+                    e.score * 100.0,
+                    e.percentile * 100.0
+                );
+            }
+            if let Some(o) = &v.owasp_category {
+                println!("  OWASP / CWE  : {} [{}]", o, v.cwe_ids.join(", "));
+            }
+            if let Some(r) = &v.reachability {
+                println!(
+                    "  Reachability : {} ({})",
+                    r.status.as_str(),
+                    r.reason_code.map(|c| c.as_str()).unwrap_or("-")
+                );
+                for cs in r.call_sites.iter().take(5) {
+                    println!("    ↳ {}:{} ({})", cs.file, cs.line, cs.matched_function);
+                }
+            }
+            for p in v.paths.iter().take(3) {
+                println!("  Path         : {}", p.join(" ➔ "));
+            }
+            if v.fixed_in.is_empty() {
+                println!("  Fix          : no patch published");
+            } else {
+                println!("  Fix          : upgrade to {}", v.fixed_in.join(", "));
+            }
+            for r in v.references.iter().take(4) {
+                println!("  Ref          : {}", r);
+            }
+        }
+
+        Commands::Diff {
+            base_ref,
+            head_ref,
+            path,
+        } => {
+            let valid_ref = |r: &str| {
+                !r.is_empty()
+                    && !r.starts_with('-')
+                    && r.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "/._-~^@".contains(c))
+            };
+            if !valid_ref(&base_ref) || head_ref.as_deref().map(|h| !valid_ref(h)).unwrap_or(false)
+            {
+                eprintln!("{} invalid git ref", "Error:".red().bold());
+                exit(2);
+            }
+            let tmp = std::env::temp_dir().join(format!("vexa-diff-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&tmp);
+            let base_dir = tmp.join("base");
+            let _ = std::fs::create_dir_all(&base_dir);
+            let archive = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(["archive", "--format=tar", &base_ref])
+                .output();
+            match archive {
+                Ok(out) if out.status.success() => {
+                    let mut ar = tar::Archive::new(std::io::Cursor::new(out.stdout));
+                    if let Err(e) = ar.unpack(&base_dir) {
+                        eprintln!("{} failed to unpack base ref: {}", "Error:".red().bold(), e);
+                        exit(2);
+                    }
+                }
+                _ => {
+                    eprintln!(
+                        "{} git archive failed for '{}'",
+                        "Error:".red().bold(),
+                        base_ref
+                    );
+                    exit(2);
+                }
+            }
+            let head_dir = if let Some(h) = &head_ref {
+                let d = tmp.join("head");
+                let _ = std::fs::create_dir_all(&d);
+                match std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&path)
+                    .args(["archive", "--format=tar", h])
+                    .output()
+                {
+                    Ok(out) if out.status.success() => {
+                        let mut ar = tar::Archive::new(std::io::Cursor::new(out.stdout));
+                        let _ = ar.unpack(&d);
+                    }
+                    _ => {
+                        eprintln!("{} git archive failed for '{}'", "Error:".red().bold(), h);
+                        exit(2);
+                    }
+                }
+                d
+            } else {
+                path.clone()
+            };
+
+            let base = scan_project(&base_dir, ScanOptions::default()).await;
+            let head = scan_project(&head_dir, ScanOptions::default()).await;
+            let _ = std::fs::remove_dir_all(&tmp);
+            let (Ok(base), Ok(head)) = (base, head) else {
+                eprintln!("{} scan failed for one of the refs", "Error:".red().bold());
+                exit(2);
+            };
+            let base_fps: std::collections::HashSet<_> = base
+                .all_vulnerabilities
+                .iter()
+                .map(|v| v.fingerprint.clone())
+                .collect();
+            let new: Vec<_> = head
+                .all_vulnerabilities
+                .iter()
+                .filter(|v| !base_fps.contains(&v.fingerprint))
+                .collect();
+            println!(
+                "\nNew findings in {} vs {}: {}",
+                head_ref.as_deref().unwrap_or("working tree"),
+                base_ref,
+                new.len()
+            );
+            for v in &new {
+                println!(
+                    "  [{}] {} {}@{} (fix: {})",
+                    v.severity.level.as_str(),
+                    v.id,
+                    v.package,
+                    v.version,
+                    v.fixed_in.first().map(String::as_str).unwrap_or("none")
+                );
+            }
+            if !new.is_empty() {
+                exit(1);
+            }
+        }
+
+        Commands::Auth { command } => match command {
+            AuthCommands::Login { token, api_url } => {
+                if let Err(e) =
+                    crate::cloud::AuthManager::run_login(token, api_url.as_deref()).await
+                {
+                    eprintln!("{} {}", "Error:".red().bold(), e);
+                    exit(1);
+                }
+            }
+            AuthCommands::Status { api_url } => {
+                if let Err(e) = crate::cloud::AuthManager::run_status(api_url.as_deref()).await {
+                    eprintln!("{} {}", "Error:".red().bold(), e);
+                    exit(1);
+                }
+            }
+            AuthCommands::Logout => {
+                if let Err(e) = crate::cloud::AuthManager::run_logout() {
+                    eprintln!("{} {}", "Error:".red().bold(), e);
+                    exit(1);
+                }
+            }
+        },
+
+        Commands::Db { command } => match command {
+            DbCommands::Verify { offline_db, pubkey } => {
+                match crate::cloud::OfflineBundleVerifier::verify_bundle_file(
+                    &offline_db,
+                    pubkey.as_deref(),
+                ) {
+                    Ok((verified, _)) => {
+                        println!(
+                            "{} Advisory bundle verified successfully!",
+                            "✔".green().bold()
+                        );
+                        println!("  Issuer:         {}", verified.issuer.cyan());
+                        println!("  Created At:     {}", verified.created_at);
+                        println!("  Advisory Count: {}", verified.advisory_count);
+                        println!("  Payload SHA256: {}", verified.payload_sha256);
+                    }
+                    Err(e) => {
+                        eprintln!("{} {}", "Error:".red().bold(), e);
+                        exit(1);
+                    }
+                }
+            }
+        },
     }
 }

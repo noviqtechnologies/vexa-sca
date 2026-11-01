@@ -104,6 +104,7 @@ pub fn format_json_report(
             }),
         },
         "vulnerabilities": scan_result.vulnerabilities,
+        "supplyChainFindings": scan_result.supply_chain_findings,
         "suppressed": suppressed,
         "remediations": remediations,
         "licenses": license_audit.map(|a| &a.results),

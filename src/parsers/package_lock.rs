@@ -1,4 +1,7 @@
+#![forbid(unsafe_code)]
+
 use crate::core::dep_graph::{DepGraph, NodeInfo, PkgManagerInfo};
+use crate::parsers::{check_json_depth, MAX_MANIFEST_SIZE_BYTES};
 use crate::types::PkgInfo;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -32,10 +35,19 @@ impl PackageLockParser {
         let lockfile_str = fs::read_to_string(lockfile_path)
             .map_err(|e| format!("Failed to read package-lock.json: {}", e))?;
 
+        if manifest_str.len() > MAX_MANIFEST_SIZE_BYTES
+            || lockfile_str.len() > MAX_MANIFEST_SIZE_BYTES
+        {
+            return Err("Manifest payload exceeds maximum size limit of 15 MB".to_string());
+        }
+
         let manifest: Value = serde_json::from_str(&manifest_str)
             .map_err(|e| format!("Invalid JSON in package.json: {}", e))?;
         let lockfile: Value = serde_json::from_str(&lockfile_str)
             .map_err(|e| format!("Invalid JSON in package-lock.json: {}", e))?;
+
+        check_json_depth(&manifest, 0)?;
+        check_json_depth(&lockfile, 0)?;
 
         let project_name = manifest
             .get("name")
@@ -109,9 +121,22 @@ impl PackageLockParser {
                 continue;
             };
 
-            let version = match pkg_val.get("version").and_then(|v| v.as_str()) {
-                Some(v) => v.to_string(),
+            let raw_version = match pkg_val.get("version").and_then(|v| v.as_str()) {
+                Some(v) => v,
                 None => continue,
+            };
+
+            let (name, version) = if let Some(stripped) = raw_version.strip_prefix("npm:") {
+                if let Some(at_pos) = stripped[1..].find('@').map(|i| i + 1) {
+                    (
+                        stripped[..at_pos].to_string(),
+                        stripped[at_pos + 1..].to_string(),
+                    )
+                } else {
+                    (name, stripped.to_string())
+                }
+            } else {
+                (name, raw_version.to_string())
             };
 
             let pkg_info = PkgInfo::new(name.clone(), version.clone(), "npm");

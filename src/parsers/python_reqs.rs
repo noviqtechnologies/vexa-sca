@@ -56,6 +56,10 @@ impl PythonRequirementsParser {
         let content = fs::read_to_string(lock_path)
             .map_err(|e| format!("Failed to read {}: {}", lock_path.display(), e))?;
 
+        if content.len() > crate::parsers::MAX_MANIFEST_SIZE_BYTES {
+            return Err("Lockfile exceeds maximum size limit of 15 MB".to_string());
+        }
+
         let parsed: toml::Value = toml::from_str(&content)
             .map_err(|e| format!("Failed to parse TOML in {}: {}", lock_path.display(), e))?;
 
@@ -105,8 +109,14 @@ impl PythonRequirementsParser {
         let content = fs::read_to_string(lock_path)
             .map_err(|e| format!("Failed to read {}: {}", lock_path.display(), e))?;
 
+        if content.len() > crate::parsers::MAX_MANIFEST_SIZE_BYTES {
+            return Err("Pipfile.lock exceeds maximum size limit of 15 MB".to_string());
+        }
+
         let parsed: serde_json::Value = serde_json::from_str(&content)
             .map_err(|e| format!("Failed to parse JSON in {}: {}", lock_path.display(), e))?;
+
+        crate::parsers::check_json_depth(&parsed, 0)?;
 
         let root_name = project_dir
             .file_name()
@@ -169,6 +179,10 @@ impl PythonRequirementsParser {
 
         let content = fs::read_to_string(req_path)
             .map_err(|e| format!("Failed to read {}: {}", req_path.display(), e))?;
+
+        if content.len() > crate::parsers::MAX_MANIFEST_SIZE_BYTES {
+            return Err("requirements.txt exceeds maximum size limit of 15 MB".to_string());
+        }
 
         let root_name = project_dir
             .file_name()

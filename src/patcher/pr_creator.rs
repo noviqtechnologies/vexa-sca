@@ -216,6 +216,17 @@ impl PrCreator {
             )
         });
 
+        if branch.starts_with('-')
+            || !branch
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '-' || c == '_' || c == '.')
+        {
+            return Err(format!(
+                "Invalid branch name '{}': contains forbidden characters or leading flag",
+                branch
+            ));
+        }
+
         let title = "fix(deps): security vulnerability fixes by Vexa SCA".to_string();
         let body = Self::generate_pr_body(patch_res);
 

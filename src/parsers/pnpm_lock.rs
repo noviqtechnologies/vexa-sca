@@ -1,4 +1,7 @@
+#![forbid(unsafe_code)]
+
 use crate::core::dep_graph::{DepGraph, NodeInfo, PkgManagerInfo};
+use crate::parsers::{check_yaml_depth, validate_yaml_content_safety};
 use crate::types::PkgInfo;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -12,11 +15,13 @@ use std::path::Path;
 /// lockfiles containing both environment/config dependencies and project
 /// workspace dependencies). Returns all non-null documents in the stream.
 fn parse_pnpm_yaml_multidocs(content: &str) -> Result<Vec<YamlValue>, String> {
+    validate_yaml_content_safety(content)?;
     let mut docs: Vec<YamlValue> = Vec::new();
     for (idx, doc) in serde_yaml::Deserializer::from_str(content).enumerate() {
         let val = YamlValue::deserialize(doc)
             .map_err(|e| format!("Failed to parse YAML document {}: {}", idx, e))?;
         if !val.is_null() {
+            check_yaml_depth(&val, 0)?;
             docs.push(val);
         }
     }

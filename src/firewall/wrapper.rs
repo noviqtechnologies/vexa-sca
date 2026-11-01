@@ -72,6 +72,15 @@ impl FirewallWrapper {
             }
 
             for pkg in &packages {
+                // 0. Defense against Argument / Flag Injection (DDD §3.5 Pillar 4)
+                if !Self::is_valid_package_name(&pkg.name, &pkg.ecosystem) {
+                    blocked_reasons.push(format!(
+                        "[ARG-INJECTION] Forbidden package name '{}' detected (leading '-' flag or invalid shell characters)",
+                        pkg.name
+                    ));
+                    continue;
+                }
+
                 // 1. Typosquatting and Supply Chain static analysis (SC-010)
                 let sc_findings = LocalSupplyChainAnalyzer::check_package(
                     &pkg.name,
@@ -83,6 +92,11 @@ impl FirewallWrapper {
                         blocked_reasons
                             .push(format!("[{}] {}: {}", f.rule_id, f.signal_name, f.message));
                     }
+                }
+
+                // Static rules already blocked this install; skip the network round-trip.
+                if !blocked_reasons.is_empty() {
+                    continue;
                 }
 
                 // 2. Check CISA KEV and public OSV even when version is unpinned
@@ -145,7 +159,7 @@ impl FirewallWrapper {
                         });
 
                         if let Ok(resp) = client
-                            .post("https://api.vexasec.io/v1/firewall/evaluate")
+                            .post("https://api.vexasec.io/sca/v1/firewall/evaluate")
                             .header("Authorization", format!("Bearer {}", api_key.trim()))
                             .json(&payload)
                             .send()
@@ -196,6 +210,65 @@ impl FirewallWrapper {
             .map_err(|e| format!("Failed to spawn underlying package manager '{}': {}", pm, e))?;
 
         Ok(status.code().unwrap_or(0))
+    }
+
+    pub fn is_valid_package_name(name: &str, ecosystem: &str) -> bool {
+        if name.is_empty() || name.starts_with('-') || name.len() > 214 {
+            return false;
+        }
+        if name.chars().any(|c| {
+            c.is_control()
+                || c == '`'
+                || c == '|'
+                || c == ';'
+                || c == '$'
+                || c == '<'
+                || c == '>'
+                || c == '&'
+                || c == '\\'
+        }) {
+            return false;
+        }
+        match ecosystem {
+            "npm" => {
+                if let Some(rest) = name.strip_prefix('@') {
+                    if let Some((scope, pkg)) = rest.split_once('/') {
+                        !scope.is_empty()
+                            && !pkg.is_empty()
+                            && !scope.starts_with('-')
+                            && !pkg.starts_with('-')
+                            && scope.chars().all(|c| {
+                                c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'
+                            })
+                            && pkg.chars().all(|c| {
+                                c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'
+                            })
+                    } else {
+                        false
+                    }
+                } else {
+                    name.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+                }
+            }
+            "PyPI" => name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'),
+            "crates.io" => name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+            _ => {
+                !name.starts_with('-')
+                    && name.chars().all(|c| {
+                        c.is_ascii_alphanumeric()
+                            || c == '.'
+                            || c == '_'
+                            || c == '-'
+                            || c == '/'
+                            || c == ':'
+                    })
+            }
+        }
     }
 
     pub fn extract_packages_to_install(pm: &str, args: &[String]) -> Vec<PackageToEvaluate> {

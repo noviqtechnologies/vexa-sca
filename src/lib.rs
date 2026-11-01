@@ -1,4 +1,7 @@
+#![forbid(unsafe_code)]
+
 pub mod cli;
+pub mod cloud;
 pub mod container;
 pub mod core;
 pub mod firewall;
@@ -296,6 +299,19 @@ pub async fn scan_project(
     raw_scan_result.vulnerabilities_count = raw_scan_result.vulnerabilities.len();
     raw_scan_result.unreachable_count = unreachable_total;
 
+    // 5b. Run Local Supply Chain Analyzer (SC-001..SC-015) across workspace and packages
+    let mut sc_findings =
+        crate::supply_chain::local_analyzer::LocalSupplyChainAnalyzer::scan_workspace(project_dir);
+    for pkg in detection.graph.get_all_pkgs() {
+        let pkg_sc = crate::supply_chain::local_analyzer::LocalSupplyChainAnalyzer::check_package(
+            &pkg.name,
+            &pkg.version,
+            &pkg.ecosystem,
+        );
+        sc_findings.extend(pkg_sc);
+    }
+    raw_scan_result.supply_chain_findings = sc_findings;
+
     // Determine ScanStatus (FR-005, FR-010a)
     // reachable_only_has_unanalyzed: source was incomplete so we cannot claim
     // "nothing reachable" — that would be a false PASS.
@@ -303,7 +319,6 @@ pub async fn scan_project(
         || reachable_only_has_unanalyzed
         || reachability_engine.file_limit_hit
         || reachability_engine.files_failed > 0
-        || (multiple_project_scopes && !all_unsuppressed_findings.is_empty())
         || !detection.skipped_manifests.is_empty()
         || !detection.failed_manifests.is_empty()
     {
@@ -333,12 +348,6 @@ pub async fn scan_project(
     raw_scan_result.completeness.source_files_analysed = reachability_engine.indexed_files.len();
     raw_scan_result.completeness.source_files_skipped = reachability_engine.files_skipped;
     raw_scan_result.completeness.source_files_failed = reachability_engine.files_failed;
-    if multiple_project_scopes && !all_unsuppressed_findings.is_empty() {
-        raw_scan_result
-            .completeness
-            .limits_hit
-            .push("MONOREPO_REACHABILITY_SCOPE_UNRESOLVED".to_string());
-    }
     if reachable_only_has_unanalyzed {
         raw_scan_result
             .completeness

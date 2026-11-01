@@ -57,18 +57,30 @@ Our security team adheres to coordinated disclosure timelines:
 
 Vexa SCA enforces rigorous supply chain defenses across its build and release pipeline:
 
-1. **Zero External C / OpenSSL Dependencies:** Built purely in Rust using memory-safe `rustls-tls` and `miniz_oxide`. The scanner does not link against libssl, libcrypto, or unmanaged C libraries.
-2. **Cryptographic Build Attestations:** Official GitHub Releases are signed using GitHub Artifact Attestations (`actions/attest-build-provenance@v2`). You can verify release artifact provenance with the GitHub CLI:
+1. **Zero Unsafe Code Policy:** All source modules across `vexa-sca` are compiled with crate-root `#![forbid(unsafe_code)]`. Memory safety is enforced by the Rust compiler with zero `unsafe` blocks.
+2. **Job Zero Parser Hardening:**
+   - **Billion Laughs & ReDoS Protection:** Manifest and lockfile parsers reject recursive YAML entity expansion and cyclic references.
+   - **Manifest Size Guard:** Manifests exceeding 15MB (`MAX_MANIFEST_SIZE_BYTES`) are rejected immediately before parsing.
+   - **Recursion Depth Ceiling:** JSON/YAML parsing depth is strictly capped at 64 levels (`MAX_RECURSION_DEPTH`) to prevent stack overflow vulnerabilities.
+   - **Command Injection Guard:** All package names in the firewall wrapper are validated against ecosystem-aware regexes before package manager invocation.
+3. **Cryptographic Advisory Bundle Integrity:**
+   - Offline vulnerability databases (`.vexadb`) are signed with asymmetric Ed25519 signatures and SHA-256 digests.
+   - Bundles must pass `vexa-sca db verify` before ingestion, guaranteeing resistance to tampering or man-in-the-middle attacks.
+4. **Keyed BLAKE3 Authentication:**
+   - Personal Access Tokens (PATs) are hashed locally and in the cloud using keyed BLAKE3 (`TokenSecurity`), guaranteeing that plaintext tokens never exist at rest in any database.
+5. **Zero External C / OpenSSL Dependencies:** Built purely in Rust using memory-safe `rustls-tls` and `miniz_oxide`. The scanner does not link against libssl, libcrypto, or unmanaged C libraries.
+6. **Cryptographic Build Attestations:** Official GitHub Releases are signed using GitHub Artifact Attestations (`actions/attest-build-provenance@v2`). You can verify release artifact provenance with the GitHub CLI:
    ```bash
-   gh attestation verify vexa-sca-linux-x86_64.tar.gz --owner noviqtechnologies
+   gh attestation verify vexa-sca-linux-x86_64.tar.gz --owner vexasec
    ```
-3. **Immutable Workflow References:** All GitHub Actions workflows are strictly pinned to immutable full commit SHAs, preventing tag-mutation supply chain injection.
-4. **Reproducible Locked Builds:** All release builds enforce `cargo build --locked --release`, ensuring dependencies match `Cargo.lock` cryptographic digests exactly.
+7. **Immutable Workflow References:** All GitHub Actions workflows are strictly pinned to immutable full commit SHAs, preventing tag-mutation supply chain injection.
+8. **Reproducible Locked Builds:** All release builds enforce `cargo build --locked --release`, ensuring dependencies match `Cargo.lock` cryptographic digests exactly.
 
 ---
 
-## Data Handling, Privacy & Network Boundaries
+## Data Handling, Privacy & Zero-Code-Retention Protocol
 
 - **Advisory Enrichment:** Scans transmit only package coordinates (`ecosystem`, `name`, `version`) over TLS to the public OSV API (`api.osv.dev`).
 - **Zero First-Party Code Egress:** First-party source code, filenames, git commit histories, developer credentials, and environment variables are **never transmitted** over the network.
+- **Zero-Code-Retention Scan Facts (`.vexa.facts.json`):** When syncing to Vexa SCA Cloud (`--upload`), only dependency tree topology and redacted call-site line numbers are transmitted. No AST source tokens or code contents leave your machine.
 - **Local Disk Cache:** Lookups are cached locally under `.sca-cache/` using SHA-256 keys to minimize external network calls.

@@ -1,4 +1,7 @@
+#![forbid(unsafe_code)]
+
 use crate::core::dep_graph::{DepGraph, NodeInfo, PkgManagerInfo};
+use crate::parsers::MAX_MANIFEST_SIZE_BYTES;
 use crate::types::PkgInfo;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -39,6 +42,10 @@ impl CargoLockParser {
 
         let content = fs::read_to_string(&lock_path)
             .map_err(|e| format!("Failed to read Cargo.lock: {}", e))?;
+
+        if content.len() > MAX_MANIFEST_SIZE_BYTES {
+            return Err("Cargo.lock exceeds maximum size limit of 15 MB".to_string());
+        }
 
         let parsed: CargoLockToml = toml::from_str(&content)
             .map_err(|e| format!("Failed to parse Cargo.lock TOML: {}", e))?;

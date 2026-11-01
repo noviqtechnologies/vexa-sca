@@ -1,6 +1,9 @@
+#![forbid(unsafe_code)]
+
 use crate::core::dep_graph::{DepGraph, NodeInfo, PkgManagerInfo};
 use crate::types::PkgInfo;
 use serde_json::Value;
+use serde_yaml::Value as YamlValue;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -50,34 +53,46 @@ impl YarnLockParser {
             .and_then(|v| v.as_str())
             .unwrap_or("0.0.0");
 
+        let is_berry = lockfile_str.contains("__metadata:");
+        let yarn_ver = if is_berry { "berry" } else { "1.x" };
+
         let root_pkg = PkgInfo::new(project_name, project_version, "npm");
         let mut graph = DepGraph::new(
             root_pkg,
             PkgManagerInfo {
                 name: "yarn".to_string(),
-                version: "1.x".to_string(),
+                version: yarn_ver.to_string(),
             },
         );
 
-        let entries = Self::parse_yarn_lock_content(&lockfile_str);
+        let entries = if is_berry {
+            Self::parse_yarn_berry_content(&lockfile_str)?
+        } else {
+            Self::parse_yarn_lock_content(&lockfile_str)
+        };
+
         let mut spec_to_node_id: HashMap<String, String> = HashMap::new();
 
         for (spec, data) in &entries {
-            // spec e.g. "lodash@^4.17.15" -> extract name
-            let name = match spec.rfind('@') {
-                Some(idx) if idx > 0 => &spec[..idx],
-                _ => continue,
+            let name = match Self::extract_pkg_name_from_spec(spec) {
+                Some(n) => n,
+                None => continue,
             };
             let version = &data.version;
             if name.is_empty() || version.is_empty() {
                 continue;
             }
 
-            let pkg_info = PkgInfo::new(name, version, "npm");
+            let pkg_info = PkgInfo::new(&name, version, "npm");
             graph.add_pkg(pkg_info.clone());
 
             let node_id = format!("yarn:{}@{}", name, version);
             spec_to_node_id.insert(spec.clone(), node_id.clone());
+            // Also index without `@npm:` protocol for direct dependency lookup
+            let normalized_spec = spec.replace("@npm:", "@");
+            if normalized_spec != *spec {
+                spec_to_node_id.insert(normalized_spec, node_id.clone());
+            }
 
             graph.add_node(
                 node_id,
@@ -106,7 +121,12 @@ impl YarnLockParser {
         }
 
         for (dep_name, dep_range) in root_deps {
-            let query_spec = format!("{}@{}", dep_name, dep_range);
+            let clean_range = dep_range.strip_prefix("npm:").unwrap_or(&dep_range);
+            let query_spec = if dep_range.starts_with("npm:") {
+                clean_range.to_string()
+            } else {
+                format!("{}@{}", dep_name, clean_range)
+            };
             if let Some(child_node_id) = spec_to_node_id.get(&query_spec) {
                 let _ = graph.add_edge(&graph.root_node_id.clone(), child_node_id);
             }
@@ -120,7 +140,8 @@ impl YarnLockParser {
             };
 
             for (child_name, child_range) in &data.dependencies {
-                let child_spec = format!("{}@{}", child_name, child_range);
+                let clean_range = child_range.strip_prefix("npm:").unwrap_or(child_range);
+                let child_spec = format!("{}@{}", child_name, clean_range);
                 if let Some(child_node_id) = spec_to_node_id.get(&child_spec) {
                     let _ = graph.add_edge(&parent_node_id, child_node_id);
                 }
@@ -128,6 +149,102 @@ impl YarnLockParser {
         }
 
         Ok(graph)
+    }
+
+    /// Extracts canonical npm package name from a Yarn descriptor such as:
+    /// - `lodash@^4.17.15` -> `lodash`
+    /// - `lodash@npm:^4.17.15` -> `lodash`
+    /// - `@babel/core@npm:^7.20.0` -> `@babel/core`
+    /// - `my-lodash@npm:lodash@^4.17.15` -> `lodash`
+    pub fn extract_pkg_name_from_spec(spec: &str) -> Option<String> {
+        let trimmed = spec.trim().trim_matches('"');
+        if trimmed.is_empty() || trimmed == "__metadata" {
+            return None;
+        }
+
+        // Handle `alias@npm:real-pkg@range` or `pkg@npm:range`
+        if let Some(npm_idx) = trimmed.find("@npm:") {
+            let after_npm = &trimmed[npm_idx + 5..];
+            // If `after_npm` contains another `@` (not at index 0 for scoped pkg), it's `real-pkg@range`
+            if let Some(at_pos) = after_npm[1..].find('@').map(|i| i + 1) {
+                let real_pkg = &after_npm[..at_pos];
+                if !real_pkg.is_empty() {
+                    return Some(real_pkg.to_string());
+                }
+            }
+            let pkg_part = &trimmed[..npm_idx];
+            if !pkg_part.is_empty() {
+                return Some(pkg_part.to_string());
+            }
+        }
+
+        if let Some(idx) = trimmed.rfind('@') {
+            if idx > 0 {
+                return Some(trimmed[..idx].to_string());
+            }
+        }
+        None
+    }
+
+    fn parse_yarn_berry_content(content: &str) -> Result<HashMap<String, YarnEntry>, String> {
+        crate::parsers::validate_yaml_content_safety(content)?;
+        let parsed: YamlValue = serde_yaml::from_str(content)
+            .map_err(|e| format!("Invalid YAML in Yarn Berry lockfile: {}", e))?;
+        crate::parsers::check_yaml_depth(&parsed, 0)?;
+
+        let mut map: HashMap<String, YarnEntry> = HashMap::new();
+        let Some(root_map) = parsed.as_mapping() else {
+            return Ok(map);
+        };
+
+        for (k, v) in root_map {
+            let Some(key_str) = k.as_str() else {
+                continue;
+            };
+            if key_str == "__metadata" {
+                continue;
+            }
+            let Some(entry_map) = v.as_mapping() else {
+                continue;
+            };
+            let version = entry_map
+                .get(YamlValue::String("version".to_string()))
+                .and_then(|ver| ver.as_str())
+                .unwrap_or("")
+                .to_string();
+            if version.is_empty() || version == "0.0.0-use.local" {
+                continue;
+            }
+
+            let mut dependencies = HashMap::new();
+            if let Some(deps_map) = entry_map
+                .get(YamlValue::String("dependencies".to_string()))
+                .and_then(|d| d.as_mapping())
+            {
+                for (dk, dv) in deps_map {
+                    if let (Some(d_name), Some(d_ver)) = (dk.as_str(), dv.as_str()) {
+                        dependencies.insert(
+                            d_name.to_string(),
+                            d_ver.strip_prefix("npm:").unwrap_or(d_ver).to_string(),
+                        );
+                    }
+                }
+            }
+
+            let entry = YarnEntry {
+                version,
+                dependencies,
+            };
+
+            for spec in key_str.split(',') {
+                let clean_spec = spec.trim().trim_matches('"');
+                if !clean_spec.is_empty() {
+                    map.insert(clean_spec.to_string(), entry.clone());
+                }
+            }
+        }
+
+        Ok(map)
     }
 
     fn parse_yarn_lock_content(content: &str) -> HashMap<String, YarnEntry> {
@@ -196,5 +313,55 @@ impl YarnLockParser {
         }
 
         map
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_yarn_berry_v2_v4_and_npm_alias_parsing() {
+        let temp_dir = std::env::temp_dir().join(format!("vexa_yarn_berry_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let pkg_json = r#"{
+            "name": "berry-app",
+            "version": "1.0.0",
+            "dependencies": {
+                "lodash": "^4.17.15",
+                "custom-minimist": "npm:minimist@^1.2.5"
+            }
+        }"#;
+
+        let berry_lock = r#"# This file is generated by running "yarn install" inside your project.
+__metadata:
+  version: 8
+  cacheKey: 10c0
+
+"lodash@npm:^4.17.15":
+  version: 4.17.15
+  resolution: "lodash@npm:4.17.15"
+  checksum: 10c0/abcdef
+
+"custom-minimist@npm:minimist@^1.2.5":
+  version: 1.2.5
+  resolution: "minimist@npm:1.2.5"
+  checksum: 10c0/123456
+"#;
+
+        fs::write(temp_dir.join("package.json"), pkg_json).unwrap();
+        fs::write(temp_dir.join("yarn.lock"), berry_lock).unwrap();
+
+        let graph = YarnLockParser::parse(&temp_dir, true).expect("should parse Yarn Berry");
+        let pkgs = graph.get_all_pkgs();
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"lodash"));
+        assert!(
+            names.contains(&"minimist"),
+            "npm: alias must resolve to canonical package 'minimist'"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

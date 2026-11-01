@@ -184,6 +184,7 @@ fn discover_recursive(dir: &Path, depth: usize, max_depth: usize, results: &mut 
         "Cargo.lock",
         "go.mod",
         "go.sum",
+        "gradle.lockfile",
         "pom.xml",
     ];
 
@@ -268,7 +269,7 @@ pub fn parse_manifest_at(
             let graph = GoLockParser::parse(parent_dir)?;
             Ok((ManifestType::GoModSum, graph))
         }
-        "pom.xml" => {
+        "pom.xml" | "gradle.lockfile" => {
             let graph = PomXmlParser::parse(manifest_path)?;
             Ok((ManifestType::JavaMavenPom, graph))
         }
@@ -511,6 +512,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
         "Cargo.lock",
         "go.mod",
         "go.sum",
+        "gradle.lockfile",
         "pom.xml",
     ];
 

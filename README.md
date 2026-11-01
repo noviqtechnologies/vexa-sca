@@ -48,6 +48,8 @@
 | 🔥 [**Package Manager Firewall (`wrap`)**](#10-package-manager-firewall-wrap) | Pre-installation zero-shell security gate for npm, pnpm, yarn, bun, pip, uv, and cargo. Blocks typosquatted packages, CISA KEV hits, and OSV advisories before install. | `vexa-sca wrap npm install lodash` |
 | 🤖 [**MCP Server (`mcp`)**](#11-mcp-server-integration-mcp) | JSON-RPC 2.0 MCP server exposing 4 tools to AI coding assistants (Cursor, Claude Code, Windsurf, GitHub Copilot). | `vexa-sca mcp` |
 | 📤 [**Zero-Code-Retention Facts Export**](#1-vexa-sca-scan) | Generates `.vexa.facts.json` with workspace dependency graph and import facts for team upload without transmitting source code. | `vexa-sca scan --upload-facts` |
+| ☁️ [**Vexa SCA Cloud Sync**](#11-vexa-sca-auth) | Authenticate and stream zero-code scan facts to Vexa SCA Cloud self-serve dashboard with reachability reduction metrics. | `vexa-sca scan --upload` |
+| 📦 [**Offline Advisory Bundles (`.vexadb`)**](#12-vexa-sca-db) | Cryptographically verify and use signed offline database bundles via Ed25519 signatures for isolated or air-gapped CI/CD. | `vexa-sca db verify --offline-db bundle.vexadb` |
 | 🚦 [**Process Exit Code Contract**](#process-exit-code-contract) | Deterministic automation contract: `0` (clean/pass), `1` (quality gate failure), `2` (config error), `3` (advisory outage / incomplete data). | `vexa-sca ci` |
 
 > [!TIP]
@@ -886,6 +888,73 @@ vexa-sca mcp
 
 > [!NOTE]
 > The MCP server uses blocking `stdin`/`stdout` JSON-RPC 2.0 framing (one JSON object per line). It does not require network access or cloud credentials for the open-source tier.
+
+---
+
+### 11. `vexa-sca auth` (Cloud Authentication)
+
+Authenticate your local environment or CI runner with the Vexa SCA Cloud control plane:
+
+```bash
+# Log in interactively with a Personal Access Token (starts with vexa_pat_...)
+vexa-sca auth login --token vexa_pat_live_0123456789abcdef0123456789abcdef
+
+# Check current active authentication status and organization tier
+vexa-sca auth status
+
+# Log out and erase stored credentials from ~/.vexa/credentials.json
+vexa-sca auth logout
+```
+
+Once logged in, scan facts can be streamed to the cloud posture dashboard with zero source code exposure:
+```bash
+vexa-sca scan . --upload
+```
+
+---
+
+### 12. `vexa-sca db` (Offline Database Verification)
+
+Cryptographically verify offline vulnerability database bundles (`.vexadb`) signed with Ed25519:
+
+```bash
+# Verify bundle integrity and cryptographic signature before scanning
+vexa-sca db verify --offline-db /var/vexa/bundles/production-2026.11.01.vexadb
+
+# Scan using the verified offline database (no network requests required)
+vexa-sca scan . --offline-db /var/vexa/bundles/production-2026.11.01.vexadb
+```
+
+---
+
+### 13. Official GitHub Action (`vexasec/vexa-sca-action`)
+
+Automate Vexa SCA in any GitHub repository using the official composite action:
+
+```yaml
+name: Vexa SCA Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Vexa SCA
+        uses: vexasec/vexa-sca-action@v2
+        with:
+          fail-on: "high"
+          epss-threshold: "0.20"
+          sarif-file: "results.sarif"
+          html-file: "audit.html"
+          upload-facts: "true"
+          vexa-token: ${{ secrets.VEXA_TOKEN }}
+```
 
 ---
 

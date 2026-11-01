@@ -465,10 +465,17 @@ impl ReachabilityEngine {
                 Some(ReasonCode::SourceUnavailable),
             )
         } else if vuln.is_transitive {
-            (
-                ReachabilityStatus::Unknown,
-                Some(ReasonCode::TransitiveNotAnalyzed),
-            )
+            if self.are_all_transitive_parent_paths_unreachable(vuln) {
+                (
+                    ReachabilityStatus::Unreachable,
+                    Some(ReasonCode::AnalysisCompleteNoUsage),
+                )
+            } else {
+                (
+                    ReachabilityStatus::Unknown,
+                    Some(ReasonCode::TransitiveNotAnalyzed),
+                )
+            }
         } else if imported_in_prod && target_functions.is_none() {
             // Package is imported in production, but no structured symbol data is available
             (ReachabilityStatus::Unknown, Some(ReasonCode::NoSymbolData))
@@ -496,6 +503,39 @@ impl ReachabilityEngine {
         };
 
         (result, usage_signal)
+    }
+
+    fn are_all_transitive_parent_paths_unreachable(&self, vuln: &VulnerabilityFinding) -> bool {
+        if vuln.paths.is_empty() {
+            return false;
+        }
+        for path in &vuln.paths {
+            // path is [root_pkg@ver, direct_parent@ver, ..., transitive_pkg@ver]
+            let direct_parent_coord = if path.len() >= 2 {
+                &path[1]
+            } else if let Some(first) = path.first() {
+                first
+            } else {
+                return false;
+            };
+            let parent_name = if let Some(idx) = direct_parent_coord.rfind('@') {
+                if idx > 0 {
+                    &direct_parent_coord[..idx]
+                } else {
+                    direct_parent_coord.as_str()
+                }
+            } else {
+                direct_parent_coord.as_str()
+            };
+            let parent_name = parent_name.split(':').next_back().unwrap_or(parent_name);
+
+            if self.ast_index.package_importers.contains_key(parent_name)
+                || self.config_referenced_pkgs.contains(parent_name)
+            {
+                return false;
+            }
+        }
+        true
     }
 
     fn infer_functions_from_details(&self, vuln: &VulnerabilityFinding) -> Option<Vec<String>> {

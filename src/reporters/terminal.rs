@@ -413,6 +413,24 @@ pub fn render_terminal_report(
                 }
             );
 
+            if v.is_kev {
+                println!(
+                    "   CISA KEV    : {}",
+                    format!(
+                        "🚨 ACTIVELY EXPLOITED IN THE WILD (added {})",
+                        v.kev_date_added.as_deref().unwrap_or("known")
+                    )
+                    .red()
+                    .bold()
+                );
+            }
+            if let Some(owasp) = &v.owasp_category {
+                println!(
+                    "   CWE / OWASP : {} ({})",
+                    owasp.yellow(),
+                    v.cwe_ids.join(", ").dimmed()
+                );
+            }
             if !v.fixed_in.is_empty() {
                 println!("   Fixed in    : {}", v.fixed_in.join(", ").green().bold());
             } else {
@@ -494,6 +512,36 @@ pub fn render_terminal_report(
             " TIP ".on_green().white().bold(),
             "vexa fix".bold()
         );
+    }
+
+    // 5. Supply Chain Security Signals (SC-001..SC-015)
+    if !scan_result.supply_chain_findings.is_empty() {
+        println!("\n{}", "=".repeat(78));
+        println!(
+            " {}",
+            format!(
+                "Supply Chain & Behavioral Risk Signals ({} found):",
+                scan_result.supply_chain_findings.len()
+            )
+            .red()
+            .bold()
+        );
+        println!("{}", "=".repeat(78));
+        for sc in &scan_result.supply_chain_findings {
+            let loc = match (&sc.file_path, sc.line) {
+                (Some(f), Some(l)) => format!(" ({}:{})", f, l),
+                (Some(f), None) => format!(" ({})", f),
+                _ => String::new(),
+            };
+            println!(
+                " {} [{}] {}{}",
+                format_severity_badge(sc.severity),
+                sc.rule_id.cyan().bold(),
+                sc.signal_name.bold(),
+                loc.dimmed()
+            );
+            println!("   ↳ {}", sc.message);
+        }
     }
 
     println!("\n{}\n", "=".repeat(78));
