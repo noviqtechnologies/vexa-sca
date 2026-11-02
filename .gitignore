@@ -28,6 +28,8 @@ pnpm-debug.log*
 /dist/
 sca-report.*
 vexa-report.*
+*.vexa.facts.json
+**/.vexa-sca/
 *.sarif
 *.cyclonedx.json
 *.spdx.json
