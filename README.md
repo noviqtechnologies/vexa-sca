@@ -48,7 +48,7 @@
 | 🔥 [**Package Manager Firewall (`wrap`)**](#10-package-manager-firewall-wrap) | Pre-installation zero-shell security gate for npm, pnpm, yarn, bun, pip, uv, and cargo. Blocks typosquatted packages, CISA KEV hits, and OSV advisories before install. | `vexa-sca wrap npm install lodash` |
 | 🤖 [**MCP Server (`mcp`)**](#11-mcp-server-integration-mcp) | JSON-RPC 2.0 MCP server exposing 4 tools to AI coding assistants (Cursor, Claude Code, Windsurf, GitHub Copilot). | `vexa-sca mcp` |
 | 📤 [**Zero-Code-Retention Facts Export**](#1-vexa-sca-scan) | Generates `.vexa.facts.json` with workspace dependency graph and import facts for team upload without transmitting source code. | `vexa-sca scan --upload-facts` |
-| ☁️ [**Vexa SCA Cloud Sync**](#11-vexa-sca-auth) | Authenticate and stream zero-code scan facts to Vexa SCA Cloud self-serve dashboard with reachability reduction metrics. | `vexa-sca scan --upload` |
+| 🛡️ [**Vexa SCA Sync**](#11-vexa-sca-auth) | Authenticate and stream zero-code scan facts to Vexa SCA self-serve dashboard with reachability reduction metrics. | `vexa-sca scan --upload` |
 | 📦 [**Offline Advisory Bundles (`.vexadb`)**](#12-vexa-sca-db) | Cryptographically verify and use signed offline database bundles via Ed25519 signatures for isolated or air-gapped CI/CD. | `vexa-sca db verify --offline-db bundle.vexadb` |
 | 🚦 [**Process Exit Code Contract**](#process-exit-code-contract) | Deterministic automation contract: `0` (clean/pass), `1` (quality gate failure), `2` (config error), `3` (advisory outage / incomplete data). | `vexa-sca ci` |
 
@@ -891,9 +891,9 @@ vexa-sca mcp
 
 ---
 
-### 11. `vexa-sca auth` (Cloud Authentication)
+### 11. `vexa-sca auth` (Vexa SCA Dashboard Authentication)
 
-Authenticate your local environment or CI runner with the Vexa SCA Cloud control plane:
+Authenticate your local environment or CI runner with the Vexa SCA control plane:
 
 ```bash
 # Log in interactively with a Personal Access Token (starts with vexa_pat_...)
@@ -906,7 +906,7 @@ vexa-sca auth status
 vexa-sca auth logout
 ```
 
-Once logged in, scan facts can be streamed to the cloud posture dashboard with zero source code exposure:
+Once logged in, scan facts can be streamed to the Vexa SCA posture dashboard with zero source code exposure:
 ```bash
 vexa-sca scan . --upload
 ```

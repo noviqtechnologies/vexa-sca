@@ -68,6 +68,29 @@ pub fn open_browser(url: &str) -> bool {
 pub struct AuthManager;
 
 impl AuthManager {
+    /// Resolve the cloud API base URL from override argument, environment variables
+    /// (`VEXA_API_URL` or `VEXA_API_BASE_URL`), or fall back to `DEFAULT_API_BASE_URL`.
+    pub fn resolve_api_base_url(override_url: Option<&str>) -> String {
+        if let Some(url) = override_url {
+            let trimmed = url.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        if let Ok(url) = std::env::var("VEXA_API_URL") {
+            let trimmed = url.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        if let Ok(url) = std::env::var("VEXA_API_BASE_URL") {
+            let trimmed = url.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        DEFAULT_API_BASE_URL.to_string()
+    }
     /// Return the standard path to `~/.vexa/credentials.json`
     pub fn credentials_path() -> PathBuf {
         let home = std::env::var("USERPROFILE")
@@ -158,7 +181,7 @@ impl AuthManager {
             "token...".to_string()
         };
 
-        let base_url = api_base_url.unwrap_or(DEFAULT_API_BASE_URL);
+        let base_url = Self::resolve_api_base_url(api_base_url);
         let status_url = format!("{}/auth/status", base_url);
 
         let client = reqwest::Client::builder()
@@ -211,7 +234,7 @@ impl AuthManager {
         token_opt: Option<String>,
         api_base_url: Option<&str>,
     ) -> Result<(), String> {
-        let base_url = api_base_url.unwrap_or(DEFAULT_API_BASE_URL);
+        let base_url = Self::resolve_api_base_url(api_base_url);
 
         let token = if let Some(t) = token_opt {
             t.trim().to_string()
@@ -360,7 +383,7 @@ impl AuthManager {
             return Err("Invalid token format. Vexa API tokens start with 'vexa_pat_'".to_string());
         }
 
-        let base_url = api_base_url.unwrap_or(DEFAULT_API_BASE_URL);
+        let base_url = Self::resolve_api_base_url(api_base_url);
         let status_url = format!("{}/auth/status", base_url);
 
         let client = reqwest::Client::builder()

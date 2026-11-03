@@ -166,7 +166,7 @@ impl CloudClient {
             "Authentication required to upload scan facts. Run 'vexa-sca auth login' first or set VEXA_TOKEN.".to_string()
         })?;
 
-        let base_url = api_base_url.unwrap_or(crate::cloud::auth::DEFAULT_API_BASE_URL);
+        let base_url = crate::cloud::auth::AuthManager::resolve_api_base_url(api_base_url);
         let sync_url = format!("{}/facts/sync", base_url);
 
         let client = reqwest::Client::builder()
@@ -174,9 +174,16 @@ impl CloudClient {
             .build()
             .unwrap_or_default();
 
+        let org_slug = std::env::var("VEXA_ORG")
+            .or_else(|_| std::env::var("VEXA_ORG_SLUG"))
+            .ok()
+            .or_else(|| AuthManager::load_stored_credentials().and_then(|c| c.org_slug))
+            .unwrap_or_else(|| "vexadev".to_string());
+
         let resp = client
             .post(&sync_url)
             .header("Authorization", format!("Bearer {}", token))
+            .header("X-Vexa-Org", org_slug)
             .json(payload)
             .send()
             .await
