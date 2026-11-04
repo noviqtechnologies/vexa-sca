@@ -249,7 +249,7 @@ impl AuthManager {
                 .unwrap_or_default();
 
             let device_flow_result = async {
-                let resp = client
+                let resp = match client
                     .post(&device_code_url)
                     .json(&serde_json::json!({
                         "client_id": "vexa-sca-cli",
@@ -257,7 +257,13 @@ impl AuthManager {
                     }))
                     .send()
                     .await
-                    .ok()?;
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Device flow HTTP request failed: {e}");
+                        return None;
+                    }
+                };
 
                 if resp.status().is_success() {
                     resp.json::<DeviceCodeResponse>().await.ok()

@@ -309,6 +309,10 @@ pub enum Commands {
         /// Path to local signed offline database bundle (.vexadb)
         #[arg(long)]
         offline_db: Option<PathBuf>,
+
+        /// API base URL override for cloud facts upload
+        #[arg(long)]
+        api_url: Option<String>,
     },
 
     /// Automated scan profile for CI/CD pipelines (fails closed on incomplete data/advisory outage)
@@ -445,6 +449,10 @@ pub enum Commands {
         /// Path to local signed offline database bundle (.vexadb)
         #[arg(long)]
         offline_db: Option<PathBuf>,
+
+        /// API base URL override for cloud facts upload
+        #[arg(long)]
+        api_url: Option<String>,
     },
 
     /// Initialize pinned GitHub Actions workflow for Vexa SCA in .github/workflows/vexa-sca.yml
@@ -1538,6 +1546,7 @@ pub async fn run() {
             upload,
             open,
             offline_db,
+            api_url,
         } => {
             if let Some(db_path) = &offline_db {
                 match crate::cloud::OfflineBundleVerifier::verify_bundle_file(db_path, None) {
@@ -1924,7 +1933,7 @@ pub async fn run() {
                                 &output.dep_graph,
                                 &output.scan_result,
                             );
-                            match crate::cloud::CloudClient::upload_facts(&facts_payload, None)
+                            match crate::cloud::CloudClient::upload_facts(&facts_payload, api_url.as_deref())
                                 .await
                             {
                                 Ok(sync_res) => {
@@ -2015,6 +2024,7 @@ pub async fn run() {
             upload,
             open,
             offline_db,
+            api_url,
         } => {
             if let Some(db_path) = &offline_db {
                 match crate::cloud::OfflineBundleVerifier::verify_bundle_file(db_path, None) {
@@ -2350,7 +2360,7 @@ pub async fn run() {
                                 &output.dep_graph,
                                 &output.scan_result,
                             );
-                            match crate::cloud::CloudClient::upload_facts(&facts_payload, None)
+                            match crate::cloud::CloudClient::upload_facts(&facts_payload, api_url.as_deref())
                                 .await
                             {
                                 Ok(sync_res) => {
