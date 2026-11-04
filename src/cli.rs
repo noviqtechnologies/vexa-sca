@@ -1933,8 +1933,11 @@ pub async fn run() {
                                 &output.dep_graph,
                                 &output.scan_result,
                             );
-                            match crate::cloud::CloudClient::upload_facts(&facts_payload, api_url.as_deref())
-                                .await
+                            match crate::cloud::CloudClient::upload_facts(
+                                &facts_payload,
+                                api_url.as_deref(),
+                            )
+                            .await
                             {
                                 Ok(sync_res) => {
                                     println!(
@@ -2360,8 +2363,11 @@ pub async fn run() {
                                 &output.dep_graph,
                                 &output.scan_result,
                             );
-                            match crate::cloud::CloudClient::upload_facts(&facts_payload, api_url.as_deref())
-                                .await
+                            match crate::cloud::CloudClient::upload_facts(
+                                &facts_payload,
+                                api_url.as_deref(),
+                            )
+                            .await
                             {
                                 Ok(sync_res) => {
                                     println!(
