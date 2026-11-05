@@ -1361,3 +1361,33 @@ fn test_cli_mcp_initialize_and_tools_list() {
         "MCP tools/list must include vexa_scan_workspace"
     );
 }
+
+#[test]
+fn test_cli_score_command_json_and_terminal() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+
+    // Test JSON score output for legitimate package
+    let output = Command::new(&bin)
+        .args(["score", "lodash@4.17.21", "--eco", "npm", "--json"])
+        .output()
+        .expect("Failed to run vexa-sca score");
+    assert!(output.status.success(), "Score command should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let val: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Valid JSON output from score");
+    assert_eq!(val["package"], "lodash");
+    assert!(val["composite_score"].as_i64().unwrap_or(0) > 0);
+
+    // Test typosquat penalty in score
+    let typosquat_output = Command::new(&bin)
+        .args(["score", "fast1fy", "--json"])
+        .output()
+        .expect("Failed to run vexa-sca score for typosquat");
+    assert!(typosquat_output.status.success());
+    let t_stdout = String::from_utf8_lossy(&typosquat_output.stdout);
+    let t_val: serde_json::Value =
+        serde_json::from_str(&t_stdout).expect("Valid JSON output from score");
+    assert_eq!(t_val["is_typosquat"], true);
+    assert!(t_val["supply_chain_score"].as_i64().unwrap_or(100) < 50);
+}

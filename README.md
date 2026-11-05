@@ -110,6 +110,8 @@
   - [`vexa-sca container`](#6-vexa-sca-container)
   - [`vexa-sca wrap`](#9-vexa-sca-wrap)
   - [`vexa-sca mcp`](#10-vexa-sca-mcp)
+  - [`vexa-sca score`](#11-vexa-sca-score)
+  - [`vexa-sca diff`](#12-vexa-sca-diff)
 - [Documentation & Workflow Guides](#-documentation--workflow-guides)
   - [🛡️ Open Source SCA Guide (`docs/open-source-sca.md`)](docs/open-source-sca.md)
   - [💻 CLI Usage Guide (`docs/cli-usage.md`)](docs/cli-usage.md)
@@ -850,12 +852,13 @@ vexa-sca wrap pip install flask requests
 **What the firewall checks:**
 | Check | Rule | Action on Fail |
 | :--- | :--- | :--- |
-| Typosquatting detection | SC-010 — Damerau-Levenshtein distance ≤1 from known popular packages | Exit code 1, print `[FIREWALL BLOCKED]` |
+| Typosquatting detection | SC-010 — Damerau-Levenshtein distance ≤1 across 250+ popular packages (npm, PyPI, crates.io, Go, Maven) | Exit code 1, print `[FIREWALL BLOCKED]` |
+| Pre-flight Manifest & Lifecycle Scripts | Remote registry manifest inspection for preinstall/postinstall lifecycle scripts executing `curl`, `wget`, `powershell`, `Invoke-WebRequest`, reverse shells (`nc -e`, `sh -i`, `bash -i >& /dev/tcp`), or obfuscated `eval()` | Exit code 1, print `[FIREWALL BLOCKED] Malicious Lifecycle Script` |
 | CISA KEV exposure | Any requested package version has a KEV-listed CVE | Exit code 1, print KEV CVE and date added |
 | OSV advisory scan | Any requested package has a published OSV advisory | Exit code 1, print advisory summary |
 
 > [!IMPORTANT]
-> `vexa-sca wrap` uses `std::process::Command` with array arguments — **zero shell interpolation**. The original package manager command runs only when all security checks pass (exit code 0). In Team+ mode, authenticated scans use `VEXA_SCA_API_KEY`.
+> `vexa-sca wrap` uses `std::process::Command` with array arguments — **zero shell interpolation** across Windows, Linux, and macOS. The original package manager command runs only when all security checks pass (exit code 0). In Team+ mode, authenticated scans use `VEXA_SCA_API_KEY`.
 
 ---
 
@@ -888,6 +891,72 @@ vexa-sca mcp
 
 > [!NOTE]
 > The MCP server uses blocking `stdin`/`stdout` JSON-RPC 2.0 framing (one JSON object per line). It does not require network access or cloud credentials for the open-source tier.
+
+---
+
+### 11. `vexa-sca score`
+Evaluate any open-source package or workspace target across 4 holistic security and maintenance pillars: **Supply Chain Risk**, **Vulnerability Posture**, **Maintenance Cadence**, and **License Compliance**. Emits a composite score (0-100) and grade (`A+`, `A`, `B`, `C`, `F`).
+
+```bash
+vexa-sca score <TARGET> [--eco <ECOSYSTEM>] [--json]
+```
+
+**Examples:**
+```bash
+# Evaluate npm package health
+vexa-sca score express --eco npm
+
+# Evaluate PyPI package health
+vexa-sca score requests --eco pypi
+
+# Evaluate local workspace directory
+vexa-sca score .
+
+# Output machine-readable JSON
+vexa-sca score lodash --eco npm --json
+```
+
+**Sample Output:**
+```
+================================================================================
+  Vexa SCA Package Health & Security Score
+================================================================================
+  Package:        express
+  Ecosystem:      npm
+  Composite:      94/100
+  Grade:          A
+
+  Pillars:
+    - Supply Chain:   100%
+    - Vulnerability:  90%
+    - Maintenance:    95%
+    - License:        90%
+
+  Key Insights:
+    * Passed typosquatting checks against 250+ top registry packages.
+    * No known CISA KEV or critical OSV advisories detected.
+================================================================================
+```
+
+---
+
+### 12. `vexa-sca diff`
+Compare dependencies between two lockfiles (`<BASE_LOCKFILE>` vs `<HEAD_LOCKFILE>`) or commits. Detects removed, bumped, and newly added packages, highlighting **Capability Escalation & Supply Chain Warnings** on new additions.
+
+```bash
+vexa-sca diff <BASE_LOCKFILE> <HEAD_LOCKFILE>
+```
+
+**Examples:**
+```bash
+# Compare main branch lockfile vs PR lockfile
+vexa-sca diff base-package-lock.json head-package-lock.json
+
+# Diff Cargo.lock files
+vexa-sca diff base-Cargo.lock Cargo.lock
+```
+
+Outputs newly introduced dependencies, version changes, and warns if added dependencies match typosquatting patterns or contain sensitive network egress capabilities.
 
 ---
 

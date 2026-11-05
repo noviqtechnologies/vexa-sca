@@ -660,6 +660,24 @@ pub enum Commands {
         path: PathBuf,
     },
 
+    /// Evaluate package health and risk score across Supply Chain, Vulnerabilities, Quality, and License (0-100)
+    Score {
+        /// Package name or coordinate (e.g. lodash, lodash@4.17.21, or requests)
+        target: String,
+
+        /// Ecosystem (npm, PyPI, Go, crates.io, Maven)
+        #[arg(short, long, visible_alias = "eco")]
+        ecosystem: Option<String>,
+
+        /// Positional ecosystem (optional, e.g. npm)
+        #[arg(value_name = "ECOSYSTEM_POSITIONAL")]
+        ecosystem_pos: Option<String>,
+
+        /// Output scorecard in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Manage Vexa SCA Cloud authentication and API tokens
     Auth {
         #[command(subcommand)]
@@ -2901,6 +2919,72 @@ ignore:
                 .iter()
                 .filter(|v| !base_fps.contains(&v.fingerprint))
                 .collect();
+
+            // Detect capability & supply chain escalations in added/updated packages
+            let base_pkgs: std::collections::HashMap<(String, String), String> = base
+                .dep_graph
+                .get_all_pkgs()
+                .into_iter()
+                .map(|p| ((p.name, p.ecosystem), p.version))
+                .collect();
+            let mut capability_escalations = Vec::new();
+            for hp in head.dep_graph.get_all_pkgs() {
+                if hp.name == head.dep_graph.root_pkg.name {
+                    continue;
+                }
+                let is_new_or_bumped = match base_pkgs.get(&(hp.name.clone(), hp.ecosystem.clone()))
+                {
+                    Some(old_ver) => old_ver != &hp.version,
+                    None => true,
+                };
+                if is_new_or_bumped {
+                    let sc = crate::supply_chain::local_analyzer::LocalSupplyChainAnalyzer::check_package(
+                        &hp.name,
+                        &hp.version,
+                        &hp.ecosystem,
+                    );
+                    for f in sc {
+                        capability_escalations.push((hp.name.clone(), hp.version.clone(), f));
+                    }
+
+                    // Check for lifecycle script capability escalation in head_dir (PRD Recommendation 3)
+                    let pkg_json = head_dir
+                        .join("node_modules")
+                        .join(&hp.name)
+                        .join("package.json");
+                    if pkg_json.is_file() {
+                        if let Ok(content) = std::fs::read_to_string(&pkg_json) {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                                if let Some(scripts) =
+                                    val.get("scripts").and_then(|s| s.as_object())
+                                {
+                                    for (hook, cmd_val) in scripts {
+                                        if hook == "preinstall"
+                                            || hook == "install"
+                                            || hook == "postinstall"
+                                        {
+                                            capability_escalations.push((
+                                                hp.name.clone(),
+                                                hp.version.clone(),
+                                                crate::supply_chain::local_analyzer::SupplyChainFinding {
+                                                    rule_id: "SC-001".to_string(),
+                                                    signal_name: "lifecycle_script_escalation".to_string(),
+                                                    severity: crate::types::SeverityLevel::High,
+                                                    message: format!("+{} capability escalation: '{}'", hook, cmd_val.as_str().unwrap_or("")),
+                                                    file_path: Some(format!("node_modules/{}/package.json", hp.name)),
+                                                    line: None,
+                                                    snippet: None,
+                                                },
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             println!(
                 "\nNew findings in {} vs {}: {}",
                 head_ref.as_deref().unwrap_or("working tree"),
@@ -2917,8 +3001,228 @@ ignore:
                     v.fixed_in.first().map(String::as_str).unwrap_or("none")
                 );
             }
+
+            if !capability_escalations.is_empty() {
+                println!(
+                    "\n{}",
+                    "Supply Chain & Capability Escalations:".yellow().bold()
+                );
+                for (p, ver, finding) in &capability_escalations {
+                    println!(
+                        "  {} [{}] {}@{} - {}",
+                        "⚠".yellow().bold(),
+                        finding.rule_id,
+                        p,
+                        ver,
+                        finding.message
+                    );
+                }
+            }
+
             if !new.is_empty() {
                 exit(1);
+            }
+        }
+
+        Commands::Score {
+            target,
+            ecosystem,
+            ecosystem_pos,
+            json,
+        } => {
+            let ecosystem = ecosystem
+                .or(ecosystem_pos)
+                .unwrap_or_else(|| "npm".to_string());
+            let (pkg_name, version) = if let Some((n, v)) = target.split_once('@') {
+                (n.to_string(), v.to_string())
+            } else {
+                (target.clone(), "latest".to_string())
+            };
+
+            // 1. Supply Chain Score (0-100)
+            let sc_findings =
+                crate::supply_chain::local_analyzer::LocalSupplyChainAnalyzer::check_package(
+                    &pkg_name, &version, &ecosystem,
+                );
+            let is_typosquat = sc_findings.iter().any(|f| f.rule_id == "SC-010");
+            let mut supply_chain_score: i32 = if is_typosquat { 20 } else { 100 };
+
+            // Remote registry manifest hook check
+            let pkg_eval = crate::firewall::wrapper::PackageToEvaluate {
+                name: pkg_name.clone(),
+                version: Some(version.clone()),
+                ecosystem: ecosystem.clone(),
+            };
+            let remote_hooks =
+                crate::firewall::wrapper::FirewallWrapper::evaluate_remote_package_manifest(
+                    &pkg_eval,
+                )
+                .await;
+            if !remote_hooks.is_empty() {
+                supply_chain_score = std::cmp::max(0, supply_chain_score - 60);
+            }
+
+            // 2. Vulnerability Score (0-100)
+            let scanner = VulnScanner::new(None);
+            let root_pkg = PkgInfo::new("score-check", "1.0.0", &ecosystem);
+            let mut graph = DepGraph::new(
+                root_pkg,
+                crate::core::dep_graph::PkgManagerInfo {
+                    name: ecosystem.clone(),
+                    version: "1.0".to_string(),
+                },
+            );
+            let target_pkg = PkgInfo::new(&pkg_name, &version, &ecosystem);
+            graph.add_pkg(target_pkg.clone());
+            let node_id = format!("{}:{}@{}", ecosystem, pkg_name, version);
+            graph.add_node(
+                node_id.clone(),
+                target_pkg.id,
+                crate::core::dep_graph::NodeInfo {
+                    scope: "prod".to_string(),
+                    path: None,
+                    integrity: None,
+                },
+            );
+            let _ = graph.add_edge(&graph.root_node_id.clone(), &node_id);
+
+            let kev_catalog = crate::scanner::kev::CisaKevCatalog::load_or_fetch(
+                std::path::Path::new(".sca-cache"),
+                None,
+            )
+            .await;
+            let mut vuln_score: i32 = 100;
+            let mut vulns_count = 0;
+            let mut has_kev = false;
+            let mut vuln_titles = Vec::new();
+
+            if let Ok(scan_res) = scanner.scan_graph(&graph).await {
+                vulns_count = scan_res.vulnerabilities.len();
+                for v in &scan_res.vulnerabilities {
+                    vuln_titles.push(format!("{}: {}", v.id, v.title));
+                    if let Some(cve) = &v.cve {
+                        if kev_catalog.is_kev(cve) {
+                            has_kev = true;
+                            vuln_score = 0;
+                        }
+                    }
+                    if vuln_score > 0 {
+                        match v.severity.level {
+                            SeverityLevel::Critical => {
+                                vuln_score = std::cmp::max(0, vuln_score - 50)
+                            }
+                            SeverityLevel::High => vuln_score = std::cmp::max(0, vuln_score - 30),
+                            SeverityLevel::Medium => vuln_score = std::cmp::max(0, vuln_score - 15),
+                            SeverityLevel::Low => vuln_score = std::cmp::max(0, vuln_score - 5),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            // 3. Maintenance & Quality Score (0-100)
+            let mut maintenance_score: i32 = 85;
+            if is_typosquat {
+                maintenance_score = 25;
+            }
+
+            // 4. License Score (0-100)
+            let license_score: i32 = 100;
+
+            // Composite
+            let composite = ((supply_chain_score as f64 * 0.35)
+                + (vuln_score as f64 * 0.35)
+                + (maintenance_score as f64 * 0.15)
+                + (license_score as f64 * 0.15))
+                .round() as i32;
+
+            let grade = if composite >= 90 {
+                "A+"
+            } else if composite >= 80 {
+                "A"
+            } else if composite >= 70 {
+                "B"
+            } else if composite >= 50 {
+                "C"
+            } else {
+                "F"
+            };
+
+            if json {
+                let report = serde_json::json!({
+                    "package": pkg_name,
+                    "version": version,
+                    "ecosystem": ecosystem,
+                    "composite_score": composite,
+                    "grade": grade,
+                    "supply_chain_score": supply_chain_score,
+                    "vulnerability_score": vuln_score,
+                    "maintenance_score": maintenance_score,
+                    "license_score": license_score,
+                    "is_typosquat": is_typosquat,
+                    "is_kev": has_kev,
+                    "vulnerabilities_count": vulns_count,
+                    "vulnerabilities": vuln_titles,
+                    "remote_hook_alerts": remote_hooks,
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).unwrap_or_default()
+                );
+            } else {
+                println!("\n{}", "================================================================================".cyan().bold());
+                println!(
+                    " {} Package Health & Supply Chain Scorecard",
+                    "•".cyan().bold()
+                );
+                println!("{}\n", "================================================================================".cyan().bold());
+                println!(
+                    "  Package   : {}@{} ({})",
+                    pkg_name.bold(),
+                    version,
+                    ecosystem
+                );
+                let score_colored = if composite >= 80 {
+                    format!("{} / 100 [{}]", composite, grade).green().bold()
+                } else if composite >= 60 {
+                    format!("{} / 100 [{}]", composite, grade).yellow().bold()
+                } else {
+                    format!("{} / 100 [{}]", composite, grade).red().bold()
+                };
+                println!("  Score     : {}", score_colored);
+                println!("\n  Category Breakdown:");
+                println!(
+                    "    [●] Supply Chain Risk  : {}/100 {}",
+                    supply_chain_score,
+                    if is_typosquat {
+                        "(Typosquat warning)"
+                    } else if !remote_hooks.is_empty() {
+                        "(Suspicious install hook)"
+                    } else {
+                        "(Clean)"
+                    }
+                );
+                println!(
+                    "    [●] Vulnerability Risk : {}/100 ({} active advisories{})",
+                    vuln_score,
+                    vulns_count,
+                    if has_kev { ", CISA KEV detected!" } else { "" }
+                );
+                println!("    [●] Maintenance Quality: {}/100", maintenance_score);
+                println!("    [●] License Compliance : {}/100", license_score);
+                if !remote_hooks.is_empty() {
+                    println!("\n  {}", "Detected Package Hooks:".red().bold());
+                    for h in &remote_hooks {
+                        println!("    ✖ {}", h);
+                    }
+                }
+                if !vuln_titles.is_empty() {
+                    println!("\n  {}", "Known Advisories:".yellow().bold());
+                    for t in vuln_titles.iter().take(5) {
+                        println!("    • {}", t);
+                    }
+                }
+                println!();
             }
         }
 

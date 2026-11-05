@@ -110,9 +110,10 @@ vexa-sca wrap npm ci
 
 ### What it checks (in order)
 
-1. **Typosquatting detection (SC-010)** — Computes Damerau-Levenshtein edit distance ≤ 1 against a curated list of popular packages. Blocks `loadsh`, `reqests`, `expres`, `serde-json` (vs `serde_json`), etc.
-2. **CISA KEV check** — Fetches and caches the CISA Known Exploited Vulnerabilities catalog (24 h TTL at `.sca-cache/cisa_kev.json`). Blocks any package with a KEV-listed CVE.
-3. **OSV advisory scan** — Queries `api.osv.dev` for published advisories against each package name + version.
+1. **Typosquatting detection (SC-010)** — Computes Damerau-Levenshtein edit distance ≤ 1 across a curated index of 250+ popular packages across npm, PyPI, crates.io, Go, and Maven. Employs length pruning for microsecond validation. Blocks `loadsh`, `reqests`, `expres`, `fast1fy`, `playwr1ght`, `serde-json` (vs `serde_json`), etc.
+2. **Pre-flight Manifest & Lifecycle Script Inspection** — Queries the upstream registry API (e.g. `https://registry.npmjs.org/<package>/<version>`) prior to package installation. Inspects lifecycle scripts (`preinstall`, `install`, `postinstall`) for unauthorized network egress (`curl`, `wget`, `powershell`, `Invoke-WebRequest`), reverse shells (`nc -e`, `sh -i`, `bash -i >& /dev/tcp`), and obfuscated execution (`eval()`, base64 decoding). Blocks execution if risky payload patterns are identified.
+3. **CISA KEV check** — Fetches and caches the CISA Known Exploited Vulnerabilities catalog (24 h TTL at `.sca-cache/cisa_kev.json`). Blocks any package with a KEV-listed CVE.
+4. **OSV advisory scan** — Queries `api.osv.dev` for published advisories against each package name + version.
 
 ### Exit codes
 
@@ -240,3 +241,79 @@ vexa-sca scan --upload-facts --json --sarif-file results.sarif
 
 > [!NOTE]
 > `.vexa.facts.json` is designed for the Zero-Code-Retention architecture: only dependency coordinates and import-graph facts are exported — no source code leaves your environment.
+
+---
+
+## Package Health & Security Score (`vexa-sca score`)
+
+`vexa-sca score` evaluates any open-source package coordinate or local workspace directory across four core pillars:
+1. **Supply Chain Integrity**: Typosquatting risk, preinstall/postinstall lifecycle scripts, dangerous shell execution patterns.
+2. **Vulnerability Posture**: Known CVEs, OSV advisories, and CISA Known Exploited Vulnerabilities (KEV).
+3. **Maintenance Health**: Release frequency, deprecation indicators, and ecosystem stability signals.
+4. **License Compliance**: Permissive vs copyleft/restrictive licensing risks.
+
+### Usage
+
+```sh
+vexa-sca score <TARGET> [--eco <ECOSYSTEM>] [--json]
+```
+
+### Examples
+
+```sh
+# Score an npm package
+vexa-sca score express --eco npm
+
+# Score a Python PyPI package
+vexa-sca score requests --eco pypi
+
+# Score a Rust crate
+vexa-sca score serde --eco crates.io
+
+# Score the current workspace repository
+vexa-sca score .
+
+# Output machine-parsable JSON for automation
+vexa-sca score lodash --eco npm --json
+```
+
+Outputs composite score (0-100), letter grade (`A+`, `A`, `B`, `C`, `F`), pillar percentages, and actionable insights.
+
+---
+
+## Lockfile Differential Analysis & Capability Escalation (`vexa-sca diff`)
+
+`vexa-sca diff` computes the delta between a base lockfile and a head lockfile (or between two Git branches in CI). Beyond simple version bumping, it scans newly added dependencies for **Supply Chain & Capability Escalation Warnings** (e.g. newly introduced packages with typosquatted names, remote network calls, or dangerous lifecycle scripts).
+
+### Usage
+
+```sh
+vexa-sca diff <BASE_LOCKFILE> <HEAD_LOCKFILE>
+```
+
+### Examples
+
+```sh
+# Diff npm lockfiles before and after a PR
+vexa-sca diff main-package-lock.json head-package-lock.json
+
+# Diff Cargo.lock files
+vexa-sca diff origin-Cargo.lock Cargo.lock
+```
+
+### Sample Output
+
+```
+Comparing lockfiles:
+  Base: main-package-lock.json
+  Head: pr-package-lock.json
+
+Summary:
+  Added:    2 packages
+  Removed:  1 package
+  Upgraded: 3 packages
+
+Supply Chain & Capability Escalations:
+  [WARN] fast1fy (v1.0.0): Added package matches typosquatting pattern of 'fastify' (SC-010)
+```
+
