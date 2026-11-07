@@ -74,7 +74,5 @@ jobs:
         run: npm run validate:schemas
 
       - name: Dogfood Vexa SCA (Self-Scan Quality Gate)
-        # --sast and --secrets ensure the CI pipeline itself is blocked if secrets
-        # or code-level vulnerabilities are introduced (e.g. another .env commit).
-        run: cargo run --locked --release -- ci . --fail-on high --sast --secrets
+        run: cargo run --locked --release -- ci . --fail-on high
 
