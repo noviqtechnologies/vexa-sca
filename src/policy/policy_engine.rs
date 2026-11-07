@@ -271,7 +271,7 @@ impl PolicyEngine {
         let candidates = [".vexa-sca.json", ".vexa-sca", ".vexa.json", ".vexa"];
         for c in candidates {
             let full = project_dir.join(c);
-            if full.exists() {
+            if full.is_file() {
                 return Some(full);
             }
         }
