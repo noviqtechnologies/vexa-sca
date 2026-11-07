@@ -65,14 +65,20 @@ runs:
   steps:
     - name: Set up Vexa SCA Environment
       shell: bash
+      env:
+        # CWE-77 mitigation: inputs are passed via env vars, NOT interpolated into shell script.
+        # This prevents expression injection from malicious caller-supplied input values.
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_TOKEN: ${{ inputs.token }}
+        INPUT_API_URL: ${{ inputs.api-url }}
       run: |
-        echo "VEXA_SCA_PATH=${{ inputs.path }}" >> "$GITHUB_ENV"
-        if [ -n "${{ inputs.token }}" ]; then
-          echo "VEXA_SECURITY_API_KEY=${{ inputs.token }}" >> "$GITHUB_ENV"
-          echo "VEXA_TOKEN=${{ inputs.token }}" >> "$GITHUB_ENV"
+        printf 'VEXA_SCA_PATH=%s\n' "${INPUT_PATH}" >> "$GITHUB_ENV"
+        if [ -n "${INPUT_TOKEN}" ]; then
+          printf 'VEXA_SECURITY_API_KEY=%s\n' "${INPUT_TOKEN}" >> "$GITHUB_ENV"
+          printf 'VEXA_TOKEN=%s\n' "${INPUT_TOKEN}" >> "$GITHUB_ENV"
         fi
-        if [ -n "${{ inputs.api-url }}" ]; then
-          echo "VEXA_API_URL=${{ inputs.api-url }}" >> "$GITHUB_ENV"
+        if [ -n "${INPUT_API_URL}" ]; then
+          printf 'VEXA_API_URL=%s\n' "${INPUT_API_URL}" >> "$GITHUB_ENV"
         fi
 
     - name: Download & Install Vexa SCA CLI
@@ -140,34 +146,46 @@ runs:
 
     - name: Run Vexa Security Scan (SCA + SAST + Secrets)
       shell: bash
+      env:
+        # CWE-77 mitigation: all user-controlled inputs routed through env vars.
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_SARIF_FILE: ${{ inputs.sarif-file }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_REACHABLE_ONLY: ${{ inputs.reachable-only }}
+        INPUT_FAIL_ON_REACHABLE: ${{ inputs.fail-on-reachable }}
+        INPUT_SAST: ${{ inputs.sast }}
+        INPUT_SECRETS: ${{ inputs.secrets }}
+        INPUT_INGEST_SARIF: ${{ inputs.ingest-sarif }}
+        INPUT_UPLOAD_FACTS: ${{ inputs.upload-facts }}
+        ACTION_PATH: ${{ github.action_path }}
       run: |
-        ARGS=("scan" "${{ inputs.path }}" "--sarif-file" "${{ inputs.sarif-file }}")
+        ARGS=("scan" "${INPUT_PATH}" "--sarif-file" "${INPUT_SARIF_FILE}")
 
-        if [ -n "${{ inputs.fail-on }}" ]; then
-          ARGS+=("--fail-on" "${{ inputs.fail-on }}")
+        if [ -n "${INPUT_FAIL_ON}" ]; then
+          ARGS+=("--fail-on" "${INPUT_FAIL_ON}")
         fi
 
-        if [ "${{ inputs.reachable-only }}" = "true" ]; then
+        if [ "${INPUT_REACHABLE_ONLY}" = "true" ]; then
           ARGS+=("--reachable-only")
         fi
 
-        if [ "${{ inputs.fail-on-reachable }}" = "true" ]; then
+        if [ "${INPUT_FAIL_ON_REACHABLE}" = "true" ]; then
           ARGS+=("--fail-on-reachable")
         fi
 
-        if [ "${{ inputs.sast }}" = "true" ]; then
+        if [ "${INPUT_SAST}" = "true" ]; then
           ARGS+=("--sast")
         fi
 
-        if [ "${{ inputs.secrets }}" = "true" ]; then
+        if [ "${INPUT_SECRETS}" = "true" ]; then
           ARGS+=("--secrets")
         fi
 
-        if [ -n "${{ inputs.ingest-sarif }}" ]; then
-          ARGS+=("--ingest-sarif" "${{ inputs.ingest-sarif }}")
+        if [ -n "${INPUT_INGEST_SARIF}" ]; then
+          ARGS+=("--ingest-sarif" "${INPUT_INGEST_SARIF}")
         fi
 
-        if [ "${{ inputs.upload-facts }}" = "true" ]; then
+        if [ "${INPUT_UPLOAD_FACTS}" = "true" ]; then
           ARGS+=("--upload")
         fi
 
@@ -177,8 +195,8 @@ runs:
           "$RUNNER_TEMP/vexa-sca-bin/vexa-sca.exe" "${ARGS[@]}"
         elif command -v vexa-sca &> /dev/null; then
           vexa-sca "${ARGS[@]}"
-        elif [ -f "${{ github.action_path }}/bin/vexa-sca.js" ] && command -v node &> /dev/null; then
-          node "${{ github.action_path }}/bin/vexa-sca.js" "${ARGS[@]}"
+        elif [ -f "${ACTION_PATH}/bin/vexa-sca.js" ] && command -v node &> /dev/null; then
+          node "${ACTION_PATH}/bin/vexa-sca.js" "${ARGS[@]}"
         elif [ -f "./bin/vexa-sca.js" ] && command -v node &> /dev/null; then
           node ./bin/vexa-sca.js "${ARGS[@]}"
         elif command -v cargo &> /dev/null; then

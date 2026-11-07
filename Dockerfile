@@ -38,6 +38,12 @@ COPY --from=builder /app/target/release/vexa-sca /usr/local/bin/vexa-sca
 COPY --from=builder /app/target/release/vexa /usr/local/bin/vexa
 COPY --from=builder /app/target/release/sca /usr/local/bin/sca
 
+# CIS Docker Benchmark §4.1: Run as a non-root user to limit container escape impact.
+RUN groupadd --gid 10001 vexa && \
+    useradd --uid 10001 --gid vexa --shell /bin/false --no-create-home vexa && \
+    mkdir -p /workspace && chown vexa:vexa /workspace
+
+USER vexa
 WORKDIR /workspace
 ENTRYPOINT ["vexa-sca"]
 CMD ["--help"]

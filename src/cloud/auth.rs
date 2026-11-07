@@ -47,8 +47,22 @@ pub struct DeviceTokenResponse {
 pub fn open_browser(url: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", url])
+        // Validate URL scheme to prevent command injection via crafted OAuth verification URIs (CWE-78).
+        // Legitimate OAuth verification URLs are always https:// (or http:// for local dev).
+        let trimmed = url.trim();
+        if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
+            return false;
+        }
+        // Use PowerShell Start-Process with an explicit, escaped argument to avoid
+        // cmd.exe shell metacharacter interpretation (& | ; ` etc.).
+        let escaped = trimmed.replace('\'', "''");
+        std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("Start-Process '{}'", escaped),
+            ])
             .spawn()
             .is_ok()
     }

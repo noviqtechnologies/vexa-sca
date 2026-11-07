@@ -255,7 +255,7 @@ impl CloudClient {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
-            .unwrap_or_default();
+            .map_err(|e| format!("Failed to initialize HTTPS client for cloud upload: {}", e))?;
 
         let org_slug = std::env::var("VEXA_ORG")
             .or_else(|_| std::env::var("VEXA_ORG_SLUG"))

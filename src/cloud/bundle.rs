@@ -78,6 +78,25 @@ impl OfflineBundleVerifier {
             ));
         }
 
+        // 1b. Verify bundle has not expired (defence against replay attacks, CWE-347).
+        // Note: created_at is from the untrusted envelope but is covered by the Ed25519 signature,
+        // so an attacker cannot silently alter it without breaking the signature (step 4).
+        {
+            const MAX_BUNDLE_AGE_DAYS: i64 = 90;
+            if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&envelope.created_at) {
+                let age_days =
+                    (chrono::Utc::now() - created.with_timezone(&chrono::Utc)).num_days();
+                if age_days > MAX_BUNDLE_AGE_DAYS {
+                    return Err(format!(
+                        "Offline advisory bundle has expired (age: {} days, max: {} days). \
+                         Please download a fresh bundle.",
+                        age_days, MAX_BUNDLE_AGE_DAYS
+                    ));
+                }
+            }
+            // Unparseable created_at is tolerated here; the Ed25519 step below validates it.
+        }
+
         // 2. Resolve Ed25519 verifying public key
         let pubkey_hex = override_pubkey_hex.unwrap_or(VEXA_OFFLINE_ROOT_PUBKEY_HEX);
         let pubkey_bytes = hex::decode(pubkey_hex)
