@@ -1,6 +1,6 @@
 # Report Schema Validation Evidence
 
-**Execution Timestamp:** 2026-10-26T16:02:07.250Z
+**Execution Timestamp:** 2026-11-07T07:59:35.149Z
 **Validator Engine:** `ajv@8.17.1` + `ajv-formats@3.0.1` + `ajv-draft-04@1.0.0`
 
 ## Pinned Specifications & Schema Digests
@@ -15,12 +15,12 @@
 
 | Report Type | Scenario | Exit Code | Generated File SHA-256 | Schema SHA-256 | Verdict |
 |---|---|---|---|---|---|
-| **SARIF 2.1.0** | Complete Scan | `0` | `97d9ec2fc61655760c66ad2d092024db5f0c7e51ef25f51a41884ff90ddb0e10` | `c3b4bb2d60938974...` | **VALID** |
-| **CycloneDX 1.5** | Complete Scan | `0` | `767d65cb06d755d631aa5be42ad82e3ed2c5d00f5663920558c0426b1c467e06` | `2d956c1d05c09269...` | **VALID** |
-| **SPDX 2.3** | Complete Scan | `0` | `1930d3b8a007892d3ee21f6b67dd171b7261a6cdb55e2e41440b6884fa8dc91f` | `239208b7ac287b3c...` | **VALID** |
-| **SARIF 2.1.0** | Incomplete Scan (500/1 Source Cap) | `3` | `cf88a73ff67899fbeed15425ee660be76664d72deefe193982b7a8552d1d9a04` | `c3b4bb2d60938974...` | **VALID** |
-| **CycloneDX 1.5** | Incomplete Scan (500/1 Source Cap) | `3` | `d5c514a7a373be2e75a4fda184c216488dc0802d624663e5c4131ebb1e5db3b6` | `2d956c1d05c09269...` | **VALID** |
-| **SPDX 2.3** | Incomplete Scan (500/1 Source Cap) | `3` | `31da4b4186cc9dc408aeefa6b5afa6ae4c84a9e1484c1ab0e518ca5e91125f1f` | `239208b7ac287b3c...` | **VALID** |
+| **SARIF 2.1.0** | Complete Scan | `0` | `3f31334183af614802d0abaf5835408f3bbc14e2970fb8a25fdffefdd4e9f447` | `c3b4bb2d60938974...` | **VALID** |
+| **CycloneDX 1.5** | Complete Scan | `0` | `7c33c6e42b2311cc74487e15842bfbda697a5c0e266d8d9cc8369c13d0bee591` | `2d956c1d05c09269...` | **VALID** |
+| **SPDX 2.3** | Complete Scan | `0` | `f28a119002ec806f6647b1047b11b91ca46797e382c9b95cf550ce82f9edd2f3` | `239208b7ac287b3c...` | **VALID** |
+| **SARIF 2.1.0** | Incomplete Scan (500/1 Source Cap) | `3` | `fd9b1f757cc1d367f1e2df066863b03d506ccfdedaaf9c733ba8b2df0d481f86` | `c3b4bb2d60938974...` | **VALID** |
+| **CycloneDX 1.5** | Incomplete Scan (500/1 Source Cap) | `3` | `ce1a39e382a62e2812fd1b207471678e8a6f169fcd290076bc0d211c1ec3d437` | `2d956c1d05c09269...` | **VALID** |
+| **SPDX 2.3** | Incomplete Scan (500/1 Source Cap) | `3` | `6061b4d95d1f752e5db509b661519109a501336236db4020f6f0a677320dba6f` | `239208b7ac287b3c...` | **VALID** |
 
 ## Reproducibility Command
 ```bash

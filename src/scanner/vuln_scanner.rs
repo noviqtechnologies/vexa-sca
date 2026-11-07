@@ -43,6 +43,7 @@ pub struct ScanResult {
     pub has_cycles: bool,
     pub vulnerabilities: Vec<VulnerabilityFinding>,
     pub supply_chain_findings: Vec<crate::supply_chain::local_analyzer::SupplyChainFinding>,
+    pub code_findings: Vec<crate::scanner::sast::CodeFinding>,
     pub unreachable_count: usize,
     /// Status of the advisory database lookup for this scan.
     pub advisory_status: AdvisoryStatus,
@@ -452,6 +453,7 @@ impl VulnScanner {
             has_cycles: dep_graph.has_cycles(),
             vulnerabilities,
             supply_chain_findings: Vec::new(),
+            code_findings: Vec::new(),
             unreachable_count: 0,
             advisory_status,
             packages_checked,

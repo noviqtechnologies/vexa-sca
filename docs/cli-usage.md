@@ -191,15 +191,29 @@ The server runs indefinitely, reading one JSON-RPC 2.0 request per line from `st
 
 ---
 
-## Zero-Code-Retention Facts Export (`--upload-facts`)
+## Zero-Code-Sync Code Security (SAST), Secret Detection & Facts Export (`--sast`, `--secrets`, `--ingest-sarif`, `--upload-facts`)
 
-The `--upload-facts` flag generates a `.vexa.facts.json` file in the scan root. This file contains workspace scan facts — dependency graph topology, resolved package coordinates, and AST import facts (which packages are imported in which files, with call locations) — structured for Team+ upload.
+Vexa SCA includes a built-in, sub-50ms local static code analyzer (`src/scanner/sast.rs`), secret detector (`src/scanner/secrets.rs`), and SARIF v2.1.0 ingestor (`src/scanner/sarif_ingestor.rs`) that work across **Windows, macOS, and Linux**—including in repositories with **zero dependency lockfiles**.
 
-### What it does NOT include
+### CLI Flags
 
-- First-party source code content
+| Flag / Environment Variable | Description |
+| :--- | :--- |
+| `--sast` | Enable first-party static code analysis (`VEXA-SAST-001` to `VEXA-SAST-008`: `CWE-78` OS Command Injection, `CWE-94` Code Eval, `CWE-502` Deserialization, `CWE-89` SQLi, `CWE-79` XSS, `CWE-22` Path Traversal, `CWE-327` Weak Crypto, `CWE-295` Disabled TLS). Also auto-invokes `opengrep`/`semgrep` if installed on `PATH`. |
+| `--secrets` | Enable hardcoded secret & credential detection (`VEXA-SEC-001` to `VEXA-SEC-005`: AWS keys, GitHub PATs, Stripe/OpenAI/Anthropic keys, Private Keys, Vexa/Socket tokens). Raw secrets are immediately redacted to `PREFIX************`. |
+| `--ingest-sarif <FILE>` | Ingest external SARIF v2.1.0 files (OpenGrep, Semgrep, Trivy, TruffleHog, CodeQL) and strip raw code snippets before export. |
+| `--upload-facts` | Write `.vexa.facts.json` (schema `2.0`) locally with zero raw source code. |
+| `VEXA_SECURITY_API_KEY` | When set in the environment (or `VEXA_TOKEN` / `VEXA_API_KEY`), `vexa-sca scan` automatically enables `--sast`, `--secrets`, and uploads `.vexa.facts.json` v2.0 to Vexa Cloud. |
+
+### Zero-Code-Retention Facts Export (`--upload-facts`)
+
+The `--upload-facts` flag (and automatic cloud sync via `VEXA_SECURITY_API_KEY`) generates a `.vexa.facts.json` v2.0 payload containing dependency graph topology, AST reachability facts, and stripped code/secret findings (`file_path`, `line`, `cwe`, canonical `matched_sink` ≤ 64 chars, and `remediation`).
+
+### What it NEVER includes
+
+- First-party source code lines or snippets
+- Unmasked secrets or credentials
 - File contents of any kind
-- Git history, commit SHAs, or author metadata
 
 ### Usage
 

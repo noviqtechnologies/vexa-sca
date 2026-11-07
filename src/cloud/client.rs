@@ -23,6 +23,35 @@ pub struct VexaFactsPayload {
     pub unreachable_vulnerabilities: usize,
     pub total_vulnerabilities: usize,
     pub findings: Vec<FactFindingItem>,
+    #[serde(default)]
+    pub code_findings: Vec<FactCodeFindingItem>,
+    #[serde(default)]
+    pub components: Vec<FactComponentItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FactCodeFindingItem {
+    pub rule_id: String,
+    pub category: String,
+    pub severity: String,
+    pub title: String,
+    #[serde(default)]
+    pub cwe: Option<String>,
+    pub file_path: String,
+    pub line: usize,
+    #[serde(default)]
+    pub matched_sink: Option<String>,
+    #[serde(default)]
+    pub remediation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FactComponentItem {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    #[serde(default)]
+    pub findings_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,8 +156,60 @@ impl CloudClient {
             });
         }
 
+        let mut code_findings = Vec::new();
+        let mut sast_count = 0usize;
+        let mut secret_count = 0usize;
+
+        for cf in &result.code_findings {
+            if cf.category == "SECRET" {
+                secret_count += 1;
+            } else {
+                sast_count += 1;
+            }
+            code_findings.push(FactCodeFindingItem {
+                rule_id: cf.rule_id.clone(),
+                category: cf.category.clone(),
+                severity: cf.severity.clone(),
+                title: cf.title.clone(),
+                cwe: cf.cwe.clone(),
+                file_path: crate::scanner::sast::normalize_workspace_relative_path(
+                    Path::new(""),
+                    Path::new(&cf.file_path),
+                ),
+                line: cf.line,
+                matched_sink: cf
+                    .matched_sink
+                    .as_deref()
+                    .map(crate::scanner::sast::sanitize_sink_signature),
+                remediation: cf.remediation.clone(),
+            });
+        }
+
+        let mut components = vec![FactComponentItem {
+            id: "vexa-sca-engine".to_string(),
+            name: "Vexa Dependency & Reachability Engine".to_string(),
+            status: "COMPLETED".to_string(),
+            findings_count: fact_findings.len(),
+        }];
+        if sast_count > 0 || !result.code_findings.is_empty() {
+            components.push(FactComponentItem {
+                id: "vexa-sast-engine".to_string(),
+                name: "Vexa Multi-Language SAST Engine".to_string(),
+                status: "COMPLETED".to_string(),
+                findings_count: sast_count,
+            });
+        }
+        if secret_count > 0 {
+            components.push(FactComponentItem {
+                id: "vexa-secrets-engine".to_string(),
+                name: "Vexa Zero-Leak Secret Scanner".to_string(),
+                status: "COMPLETED".to_string(),
+                findings_count: secret_count,
+            });
+        }
+
         VexaFactsPayload {
-            version: 1,
+            version: 2,
             timestamp: chrono::Utc::now().to_rfc3339(),
             project_name: dep_graph.root_pkg.name.clone(),
             project_version: dep_graph.root_pkg.version.clone(),
@@ -141,6 +222,8 @@ impl CloudClient {
             unreachable_vulnerabilities: unreachable_count,
             total_vulnerabilities: result.vulnerabilities.len(),
             findings: fact_findings,
+            code_findings,
+            components,
         }
     }
 

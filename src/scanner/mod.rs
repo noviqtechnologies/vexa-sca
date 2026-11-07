@@ -4,4 +4,7 @@ pub mod epss;
 pub mod kev;
 pub mod quality_gate;
 pub mod remediator;
+pub mod sarif_ingestor;
+pub mod sast;
+pub mod secrets;
 pub mod vuln_scanner;

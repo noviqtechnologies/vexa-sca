@@ -212,3 +212,70 @@ fn test_offline_bundle_verification_with_ed25519() {
         OfflineBundleVerifier::verify_bundle_content(&bad_sig_json, Some(&pubkey_hex));
     assert!(bad_sig_res.is_err());
 }
+
+#[test]
+fn test_facts_payload_v2_contains_zero_raw_source_code() {
+    use vexa_sca::scanner::sast::SastScanner;
+    use vexa_sca::scanner::secrets::SecretScanner;
+
+    let temp_dir = std::env::temp_dir().join("vexa_facts_v2_zero_code_test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("src")).unwrap();
+
+    // Write a Python file with OS command injection and a secret
+    let raw_code_line = "os.system(\"ping -c 4 \" + TOP_SECRET_INTERNAL_PAYLOAD)";
+    let raw_secret = "AKIAIOSFODNN7EXAMPLE";
+    let py_file = temp_dir.join("src").join("os-ijection.py");
+    std::fs::write(
+        &py_file,
+        format!(
+            "import os\nAWS_KEY = \"{}\"\ndef run(user_input):\n    {}\n",
+            raw_secret, raw_code_line
+        ),
+    )
+    .unwrap();
+
+    let mut code_findings = SastScanner::scan_workspace(&temp_dir);
+    code_findings.extend(SecretScanner::scan_workspace(&temp_dir));
+    assert!(
+        code_findings.len() >= 2,
+        "Expected both SAST and SECRET findings"
+    );
+
+    let root = PkgInfo::new("sast", "0.1.0", "source");
+    let graph = DepGraph::new(
+        root,
+        PkgManagerInfo {
+            name: "source".to_string(),
+            version: "1.0.0".to_string(),
+        },
+    );
+
+    let scan_result = ScanResult {
+        code_findings,
+        ..Default::default()
+    };
+
+    let facts = CloudClient::extract_facts(&graph, &scan_result);
+    assert_eq!(facts.version, 2);
+    assert!(facts.code_findings.len() >= 2);
+    assert!(
+        facts
+            .code_findings
+            .iter()
+            .all(|cf| !cf.file_path.contains('\\')),
+        "All file_path entries must be normalized to POSIX forward slashes"
+    );
+
+    let serialized = serde_json::to_string_pretty(&facts).unwrap();
+    assert!(
+        !serialized.contains("TOP_SECRET_INTERNAL_PAYLOAD"),
+        "Zero-Code-Sync Invariant violated: raw code line leaked into .vexa.facts.json"
+    );
+    assert!(
+        !serialized.contains(raw_secret),
+        "Zero-Code-Sync Invariant violated: unmasked secret leaked into .vexa.facts.json"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

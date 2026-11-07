@@ -99,19 +99,35 @@ impl AuthManager {
         PathBuf::from(home).join(".vexa").join("credentials.json")
     }
 
-    /// Retrieve the active token from environment (`VEXA_TOKEN` / `VEXA_SCA_API_KEY`)
-    /// or from stored `~/.vexa/credentials.json`.
-    pub fn get_token() -> Option<String> {
-        if let Ok(tok) = std::env::var("VEXA_TOKEN") {
-            let t = tok.trim().to_string();
-            if !t.is_empty() {
-                return Some(t);
+    /// Returns `true` if `VEXA_SECURITY_API_KEY` (or `SOCKET_SECURITY_API_KEY`) is set in the environment,
+    /// activating zero-config CI mode (SCA + SAST + Secret scanning + automatic Cloud Facts upload).
+    pub fn has_ci_security_api_key() -> bool {
+        for var in ["VEXA_SECURITY_API_KEY", "SOCKET_SECURITY_API_KEY"] {
+            if let Ok(tok) = std::env::var(var) {
+                if !tok.trim().is_empty() {
+                    return true;
+                }
             }
         }
-        if let Ok(tok) = std::env::var("VEXA_SCA_API_KEY") {
-            let t = tok.trim().to_string();
-            if !t.is_empty() {
-                return Some(t);
+        false
+    }
+
+    /// Retrieve the active token from environment (`VEXA_SECURITY_API_KEY`, `VEXA_TOKEN`,
+    /// `VEXA_API_KEY`, `VEXA_SCA_API_KEY`, `SOCKET_SECURITY_API_KEY`)
+    /// or from stored `~/.vexa/credentials.json`.
+    pub fn get_token() -> Option<String> {
+        for var in [
+            "VEXA_SECURITY_API_KEY",
+            "VEXA_TOKEN",
+            "VEXA_API_KEY",
+            "VEXA_SCA_API_KEY",
+            "SOCKET_SECURITY_API_KEY",
+        ] {
+            if let Ok(tok) = std::env::var(var) {
+                let t = tok.trim().to_string();
+                if !t.is_empty() {
+                    return Some(t);
+                }
             }
         }
 
@@ -383,10 +399,15 @@ impl AuthManager {
             return Err("Token cannot be empty".to_string());
         }
 
-        // Validate token format: starts with vexa_pat_ or valid Bearer prefix
-        let is_pat = token.starts_with("vexa_pat_");
+        // Validate token format: starts with vexasec_, vexa_pat_, or valid Bearer prefix
+        let is_pat = token.starts_with("vexasec_")
+            || token.starts_with("vexa_pat_")
+            || token.starts_with("sktsec_");
         if !is_pat && token.len() < 16 {
-            return Err("Invalid token format. Vexa API tokens start with 'vexa_pat_'".to_string());
+            return Err(
+                "Invalid token format. Vexa API tokens start with 'vexasec_' or 'vexa_pat_'"
+                    .to_string(),
+            );
         }
 
         let base_url = Self::resolve_api_base_url(api_base_url);

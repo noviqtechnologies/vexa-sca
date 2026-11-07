@@ -544,5 +544,39 @@ pub fn render_terminal_report(
         }
     }
 
+    // 6. Code Security (SAST) & Secret Findings (Zero-Code-Sync)
+    if !scan_result.code_findings.is_empty() {
+        println!("\n{}", "=".repeat(78));
+        println!(
+            " {}",
+            format!(
+                "Code Security (SAST) & Secret Findings ({} found):",
+                scan_result.code_findings.len()
+            )
+            .red()
+            .bold()
+        );
+        println!("{}", "=".repeat(78));
+        for cf in &scan_result.code_findings {
+            let sev = SeverityLevel::from_str_loose(&cf.severity);
+            let cwe_str = cf.cwe.as_deref().unwrap_or("CWE-1000");
+            println!(
+                " {} [{} / {}] {} ({}:{})",
+                format_severity_badge(sev),
+                cf.rule_id.cyan().bold(),
+                cwe_str.yellow(),
+                cf.title.bold(),
+                cf.file_path,
+                cf.line
+            );
+            if let Some(sink) = &cf.matched_sink {
+                println!("   ↳ Sink : {}", sink.magenta());
+            }
+            if let Some(rem) = &cf.remediation {
+                println!("   ↳ Fix  : {}", rem.green());
+            }
+        }
+    }
+
     println!("\n{}\n", "=".repeat(78));
 }

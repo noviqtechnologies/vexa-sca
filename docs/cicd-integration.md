@@ -50,7 +50,40 @@ The same principles apply to GitHub Actions, GitLab CI, Bitbucket Pipelines, and
 
 Do not copy legacy workflow samples that use unpinned actions, build the current application checkout as though it were the scanner, assign SARIF to an unsupported native report field, or grant broad token permissions. Use your platform's official workflow documentation to construct a pinned job following the sequence above.
 
-### Complete GitHub Actions Workflow (`.github/workflows/vexa-sca.yml`)
+## 60-Second Vexa Cloud CI Setup (SCA + Opt-In SAST + Secret Detection)
+
+When connected to **Vexa Cloud**, you can enable unified Dependency SCA + First-Party Code Scanning (SAST) + Hardcoded Secret Detection in **3 steps** while preserving the **Zero-Code-Sync** privacy guarantee:
+
+1. **Create a Scoped API Token**: In Vexa Cloud Dashboard (`Settings > API Tokens` or `/org/<slug>/settings?setup=sast`), click **+ Create API token**, select the **`vexa-basics`** scope (`report:read`, `report:write`, `full-scans:create`), and copy your `vexa_sec_...` token (includes **500 / 500** free monthly CI scans).
+2. **Add GitHub Repository Secret**: In your GitHub repository (`Settings > Secrets and variables > Actions`), add `VEXA_SECURITY_API_KEY`.
+3. **Add `.github/workflows/vexa-security.yml`**:
+
+```yaml
+name: Vexa Security Scan (SCA + SAST + Secrets)
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  vexa-security:
+    runs-on: ubuntu-latest # Supports ubuntu-latest, macos-latest, and windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Vexa SCA + SAST + Secret Scan
+        env:
+          VEXA_SECURITY_API_KEY: ${{ secrets.VEXA_SECURITY_API_KEY }}
+        run: npx --yes vexa-sca scan
+```
+
+### What `npx vexa-sca scan` Does When `VEXA_SECURITY_API_KEY` Is Present
+- **Cross-OS Zero-Compile Execution**: `bin/vexa-sca.js` automatically resolves or downloads the prebuilt platform binary (`Linux`, `macOS`, `Windows`) into `~/.vexa/bin/` without requiring a slow Rust source compile in CI.
+- **Unified Multi-Scanner**: Automatically activates `--sast` (`VEXA-SAST-001` through `VEXA-SAST-008`, catching OS Command Injection like `os.system(...)` in `os-ijection.py`), `--secrets` (masked secret detection), and Dependency SCA—even in repositories that contain **no lockfiles**.
+- **Strict Zero-Code-Sync**: Strips all raw source code lines locally before uploading `.vexa.facts.json` (v2.0) to `POST /v1/facts/sync`. Only normalized POSIX file paths (`os-ijection.py`), line numbers (`12`), CWE IDs (`CWE-78`), and canonical sink signatures (`os.system(...)`) are transmitted.
+
+---
+
+### Complete Standalone GitHub Actions Workflow (`.github/workflows/vexa-sca.yml`)
 
 Copy and paste this into `.github/workflows/vexa-sca.yml` in your target repository:
 

@@ -1,20 +1,20 @@
-name: 'Vexa SCA - Software Composition Analysis & Vulnerability Firewall'
-description: 'Zero-false-positive AST reachability SCA, behavioral package firewall, license compliance & CISA KEV exploitation scanner.'
+name: 'Vexa SCA & Code Security (SAST + Secrets + Dependency Firewall)'
+description: 'Zero-Code-Sync Dependency SCA, AST Reachability, Multi-Language SAST, Secret Detection & License Compliance.'
 author: 'Vexa Security'
 
 branding:
   icon: 'shield'
-  color: 'blue'
+  color: 'purple'
 
 inputs:
   path:
-    description: 'Path to target workspace directory containing dependency manifests or lockfiles'
+    description: 'Path to target workspace directory'
     required: false
     default: '.'
   fail-on:
     description: 'Quality gate failure threshold (low, medium, high, critical, reachable, reachable-critical)'
     required: false
-    default: 'critical'
+    default: 'high'
   reachable-only:
     description: 'Only report and evaluate vulnerabilities with confirmed AST execution reachability'
     required: false
@@ -23,6 +23,18 @@ inputs:
     description: 'Fail CI/CD quality gate if any vulnerability has confirmed AST reachability'
     required: false
     default: 'false'
+  sast:
+    description: 'Enable Zero-Code-Sync local SAST code security scanner'
+    required: false
+    default: 'true'
+  secrets:
+    description: 'Enable Zero-Code-Sync local secret & credential scanner'
+    required: false
+    default: 'true'
+  ingest-sarif:
+    description: 'Optional external SARIF v2.1.0 file to ingest with automatic code snippet stripping'
+    required: false
+    default: ''
   sarif-file:
     description: 'Output path for OASIS SARIF v2.1.0 security report'
     required: false
@@ -34,15 +46,19 @@ inputs:
   upload-facts:
     description: 'Stream Zero-Code-Retention .vexa.facts.json to Vexa SCA Cloud dashboard'
     required: false
-    default: 'false'
+    default: 'true'
   token:
-    description: 'Vexa SCA Cloud Personal Access Token (or pass secret VEXA_TOKEN)'
+    description: 'Vexa Security API Key (vexasec_... or pass secret VEXA_SECURITY_API_KEY)'
+    required: false
+    default: ''
+  api-url:
+    description: 'Optional Vexa SCA Cloud API base URL override'
     required: false
     default: ''
   version:
     description: 'Vexa SCA CLI binary version to execute'
     required: false
-    default: 'v1.3.1'
+    default: 'v1.3.2'
 
 runs:
   using: 'composite'
@@ -50,16 +66,83 @@ runs:
     - name: Set up Vexa SCA Environment
       shell: bash
       run: |
-        echo "VEXA_SCA_PATH=${{ inputs.path }}" >> $GITHUB_ENV
+        echo "VEXA_SCA_PATH=${{ inputs.path }}" >> "$GITHUB_ENV"
         if [ -n "${{ inputs.token }}" ]; then
-          echo "VEXA_TOKEN=${{ inputs.token }}" >> $GITHUB_ENV
+          echo "VEXA_SECURITY_API_KEY=${{ inputs.token }}" >> "$GITHUB_ENV"
+          echo "VEXA_TOKEN=${{ inputs.token }}" >> "$GITHUB_ENV"
+        fi
+        if [ -n "${{ inputs.api-url }}" ]; then
+          echo "VEXA_API_URL=${{ inputs.api-url }}" >> "$GITHUB_ENV"
         fi
 
-    - name: Run Vexa SCA Audit
+    - name: Download & Install Vexa SCA CLI
       shell: bash
       run: |
-        ARGS=("ci" "${{ inputs.path }}" "--sarif-file" "${{ inputs.sarif-file }}")
-        
+        if command -v vexa-sca &> /dev/null; then
+          echo "vexa-sca is already available in PATH."
+          exit 0
+        fi
+
+        VERSION="${{ inputs.version }}"
+        OS="${RUNNER_OS:-Linux}"
+        ARCH="${RUNNER_ARCH:-X64}"
+
+        case "$OS" in
+          Linux)
+            if [ "$ARCH" = "ARM64" ]; then
+              ASSET="vexa-sca-linux-arm64.tar.gz"
+            else
+              ASSET="vexa-sca-linux-x86_64.tar.gz"
+            fi
+            ;;
+          macOS)
+            if [ "$ARCH" = "ARM64" ]; then
+              ASSET="vexa-sca-darwin-arm64.tar.gz"
+            else
+              ASSET="vexa-sca-darwin-x86_64.tar.gz"
+            fi
+            ;;
+          Windows)
+            ASSET="vexa-sca-windows-x86_64.zip"
+            ;;
+          *)
+            echo "::warning::Unrecognized runner OS: $OS. Skipping binary download."
+            exit 0
+            ;;
+        esac
+
+        INSTALL_DIR="$RUNNER_TEMP/vexa-sca-bin"
+        mkdir -p "$INSTALL_DIR"
+
+        DOWNLOAD_URL="https://github.com/noviqtechnologies/vexa-sca/releases/download/${VERSION}/${ASSET}"
+        echo "Attempting to download prebuilt Vexa SCA binary from $DOWNLOAD_URL..."
+
+        SUCCESS=false
+        if [ "$OS" = "Windows" ]; then
+          if curl -sSL -f -o "$RUNNER_TEMP/$ASSET" "$DOWNLOAD_URL"; then
+            unzip -q -o "$RUNNER_TEMP/$ASSET" -d "$INSTALL_DIR" && SUCCESS=true
+          fi
+        else
+          if curl -sSL -f "$DOWNLOAD_URL" | tar -xz -C "$INSTALL_DIR" 2>/dev/null; then
+            chmod +x "$INSTALL_DIR/vexa-sca" 2>/dev/null || true
+            chmod +x "$INSTALL_DIR/vexa" 2>/dev/null || true
+            chmod +x "$INSTALL_DIR/sca" 2>/dev/null || true
+            SUCCESS=true
+          fi
+        fi
+
+        if [ "$SUCCESS" = "true" ]; then
+          echo "$INSTALL_DIR" >> "$GITHUB_PATH"
+          echo "Successfully installed Vexa SCA to $INSTALL_DIR"
+        else
+          echo "::warning::Release asset download failed for $DOWNLOAD_URL. Proceeding to fallback launchers."
+        fi
+
+    - name: Run Vexa Security Scan (SCA + SAST + Secrets)
+      shell: bash
+      run: |
+        ARGS=("scan" "${{ inputs.path }}" "--sarif-file" "${{ inputs.sarif-file }}")
+
         if [ -n "${{ inputs.fail-on }}" ]; then
           ARGS+=("--fail-on" "${{ inputs.fail-on }}")
         fi
@@ -72,16 +155,36 @@ runs:
           ARGS+=("--fail-on-reachable")
         fi
 
+        if [ "${{ inputs.sast }}" = "true" ]; then
+          ARGS+=("--sast")
+        fi
+
+        if [ "${{ inputs.secrets }}" = "true" ]; then
+          ARGS+=("--secrets")
+        fi
+
+        if [ -n "${{ inputs.ingest-sarif }}" ]; then
+          ARGS+=("--ingest-sarif" "${{ inputs.ingest-sarif }}")
+        fi
+
         if [ "${{ inputs.upload-facts }}" = "true" ]; then
           ARGS+=("--upload")
         fi
 
-        if command -v vexa-sca &> /dev/null; then
+        if [ -n "$RUNNER_TEMP" ] && [ -x "$RUNNER_TEMP/vexa-sca-bin/vexa-sca" ]; then
+          "$RUNNER_TEMP/vexa-sca-bin/vexa-sca" "${ARGS[@]}"
+        elif [ -n "$RUNNER_TEMP" ] && [ -f "$RUNNER_TEMP/vexa-sca-bin/vexa-sca.exe" ]; then
+          "$RUNNER_TEMP/vexa-sca-bin/vexa-sca.exe" "${ARGS[@]}"
+        elif command -v vexa-sca &> /dev/null; then
           vexa-sca "${ARGS[@]}"
+        elif [ -f "${{ github.action_path }}/bin/vexa-sca.js" ] && command -v node &> /dev/null; then
+          node "${{ github.action_path }}/bin/vexa-sca.js" "${ARGS[@]}"
+        elif [ -f "./bin/vexa-sca.js" ] && command -v node &> /dev/null; then
+          node ./bin/vexa-sca.js "${ARGS[@]}"
         elif command -v cargo &> /dev/null; then
           cargo run --release --bin vexa-sca -- "${ARGS[@]}"
         else
-          echo "Error: Neither vexa-sca binary nor cargo build toolchain found on runner."
+          echo "Error: Neither vexa-sca binary, node launcher, nor cargo build toolchain found on runner."
           exit 1
         fi
 
@@ -91,4 +194,3 @@ runs:
       with:
         sarif_file: ${{ inputs.sarif-file }}
         category: 'vexa-sca'
-

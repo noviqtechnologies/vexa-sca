@@ -202,6 +202,25 @@ impl QualityGate {
             }
         }
 
+        // 6. Code Security (SAST) & Secret Detection Gate (when SAST/Secret findings are present)
+        if !scan_result.code_findings.is_empty() && options.fail_on_licenses.is_none() {
+            let min_weight = options
+                .fail_on_severity
+                .map(|s| s.weight())
+                .unwrap_or(SeverityLevel::Low.weight());
+            let violating_code_findings = scan_result
+                .code_findings
+                .iter()
+                .filter(|cf| SeverityLevel::from_str_loose(&cf.severity).weight() >= min_weight)
+                .count();
+            if violating_code_findings > 0 {
+                failure_reasons.push(format!(
+                    "Found {} Code Security (SAST / Secret) findings violating quality gate",
+                    violating_code_findings
+                ));
+            }
+        }
+
         let passed = if options.no_fail {
             true
         } else {

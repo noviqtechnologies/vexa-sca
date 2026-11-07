@@ -17,7 +17,102 @@ use crate::reporters::terminal::render_terminal_report;
 use crate::scanner::quality_gate::{QualityGate, QualityGateOptions};
 use crate::scanner::vuln_scanner::{ScanResult, VulnScanner};
 use crate::types::{PkgInfo, ScanStatus, SeverityLevel};
-use crate::{scan_project, ScanOptions};
+use crate::{scan_project, ProjectScanOutput, ScanOptions};
+
+fn infer_workspace_project_name(path: &std::path::Path) -> String {
+    if let Ok(proj) = std::env::var("VEXA_PROJECT") {
+        let trimmed = proj.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Ok(gh_repo) = std::env::var("GITHUB_REPOSITORY") {
+        if let Some(repo_name) = gh_repo.trim().split('/').next_back() {
+            if !repo_name.is_empty() {
+                return repo_name.to_string();
+            }
+        }
+    }
+    path.canonicalize()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .or_else(|| path.file_name().map(|n| n.to_string_lossy().to_string()))
+        .filter(|s| !s.is_empty() && s != ".")
+        .unwrap_or_else(|| "workspace".to_string())
+}
+
+async fn scan_project_with_code_security(
+    path: &std::path::Path,
+    options: ScanOptions,
+    run_sast: bool,
+    run_secrets: bool,
+    ingest_sarif: Option<&std::path::Path>,
+) -> Result<ProjectScanOutput, String> {
+    let mut output = match scan_project(path, options).await {
+        Ok(out) => out,
+        Err(e) => {
+            let code_scan_requested = run_sast || run_secrets || ingest_sarif.is_some();
+            if code_scan_requested && e.contains("No supported lockfile") {
+                let proj_name = infer_workspace_project_name(path);
+                let root_pkg = PkgInfo::new(&proj_name, "0.1.0", "source");
+                let dep_graph = DepGraph::new(
+                    root_pkg,
+                    crate::core::dep_graph::PkgManagerInfo {
+                        name: "source".to_string(),
+                        version: "1.0.0".to_string(),
+                    },
+                );
+                ProjectScanOutput {
+                    manifest_file: path.join("source"),
+                    manifest_type: crate::parsers::detector::ManifestType::NpmPackageLock,
+                    dep_graph,
+                    scan_result: ScanResult {
+                        scan_status: ScanStatus::Pass,
+                        ..Default::default()
+                    },
+                    suppressed: Vec::new(),
+                    remediations: Vec::new(),
+                    license_audit: None,
+                    policy_file: None,
+                    discovered_projects: vec![path.to_path_buf()],
+                    all_vulnerabilities: Vec::new(),
+                }
+            } else {
+                return Err(e);
+            }
+        }
+    };
+
+    // If GITHUB_REPOSITORY or VEXA_PROJECT is set and root_pkg is generic, prefer repository name
+    if output.dep_graph.root_pkg.name == "root"
+        || output.dep_graph.root_pkg.name == "project"
+        || output.dep_graph.root_pkg.name == "workspace"
+    {
+        output.dep_graph.root_pkg.name = infer_workspace_project_name(path);
+    }
+
+    if run_sast {
+        let sast_findings = crate::scanner::sast::SastScanner::scan_workspace(path);
+        output.scan_result.code_findings.extend(sast_findings);
+    }
+    if run_secrets {
+        let secret_findings = crate::scanner::secrets::SecretScanner::scan_workspace(path);
+        output.scan_result.code_findings.extend(secret_findings);
+    }
+    if let Some(sarif_path) = ingest_sarif {
+        let sarif_findings =
+            crate::scanner::sarif_ingestor::SarifIngestor::parse_sarif_file(path, sarif_path)?;
+        output.scan_result.code_findings.extend(sarif_findings);
+    }
+
+    if !output.scan_result.code_findings.is_empty()
+        && output.scan_result.scan_status == ScanStatus::Pass
+    {
+        output.scan_result.scan_status = ScanStatus::Fail;
+    }
+
+    Ok(output)
+}
 
 fn incomplete_scan_requires_exit3(result: &ScanResult, allow_unavailable: bool) -> bool {
     let completeness = &result.completeness;
@@ -313,6 +408,18 @@ pub enum Commands {
         /// API base URL override for cloud facts upload
         #[arg(long)]
         api_url: Option<String>,
+
+        /// Enable Zero-Code-Sync local SAST code security scanner
+        #[arg(long)]
+        sast: bool,
+
+        /// Enable Zero-Code-Sync local secret & credential scanner
+        #[arg(long)]
+        secrets: bool,
+
+        /// Ingest external SARIF v2.1.0 report (CodeQL, Semgrep, Bandit, Gosec) with automatic snippet stripping
+        #[arg(long)]
+        ingest_sarif: Option<PathBuf>,
     },
 
     /// Automated scan profile for CI/CD pipelines (fails closed on incomplete data/advisory outage)
@@ -453,6 +560,18 @@ pub enum Commands {
         /// API base URL override for cloud facts upload
         #[arg(long)]
         api_url: Option<String>,
+
+        /// Enable Zero-Code-Sync local SAST code security scanner
+        #[arg(long)]
+        sast: bool,
+
+        /// Enable Zero-Code-Sync local secret & credential scanner
+        #[arg(long)]
+        secrets: bool,
+
+        /// Ingest external SARIF v2.1.0 report (CodeQL, Semgrep, Bandit, Gosec) with automatic snippet stripping
+        #[arg(long)]
+        ingest_sarif: Option<PathBuf>,
     },
 
     /// Initialize pinned GitHub Actions workflow for Vexa SCA in .github/workflows/vexa-sca.yml
@@ -730,7 +849,18 @@ pub enum DbCommands {
 }
 
 pub async fn run() {
-    let cli = Cli::parse();
+    let raw_args: Vec<String> = std::env::args().collect();
+    let normalized_args: Vec<String> =
+        if raw_args.len() >= 3 && raw_args[1] == "scan" && raw_args[2] == "create" {
+            let mut v = Vec::with_capacity(raw_args.len() - 1);
+            v.push(raw_args[0].clone());
+            v.push(raw_args[1].clone());
+            v.extend_from_slice(&raw_args[3..]);
+            v
+        } else {
+            raw_args
+        };
+    let cli = Cli::parse_from(normalized_args);
 
     match cli.command {
         Commands::Licenses {
@@ -1565,6 +1695,9 @@ pub async fn run() {
             open,
             offline_db,
             api_url,
+            sast,
+            secrets,
+            ingest_sarif,
         } => {
             if let Some(db_path) = &offline_db {
                 match crate::cloud::OfflineBundleVerifier::verify_bundle_file(db_path, None) {
@@ -1595,6 +1728,12 @@ pub async fn run() {
                 exit(2);
             }
 
+            let ci_key_active = crate::cloud::auth::AuthManager::has_ci_security_api_key();
+            let effective_sast = sast || ci_key_active;
+            let effective_secrets = secrets || ci_key_active;
+            let upload = upload || ci_key_active;
+            let upload_facts = upload_facts || ci_key_active;
+
             let options = ScanOptions {
                 dev: !prod_only,
                 reachable_only,
@@ -1609,7 +1748,15 @@ pub async fn run() {
                 max_source_files,
             };
 
-            match scan_project(&path, options).await {
+            match scan_project_with_code_security(
+                &path,
+                options,
+                effective_sast,
+                effective_secrets,
+                ingest_sarif.as_deref(),
+            )
+            .await
+            {
                 Ok(mut output) => {
                     if let Some(thresh) = epss_threshold {
                         let mut retained = Vec::new();
@@ -1921,21 +2068,36 @@ pub async fn run() {
                     }
 
                     if upload || upload_facts {
+                        let facts_payload = crate::cloud::CloudClient::extract_facts(
+                            &output.dep_graph,
+                            &output.scan_result,
+                        );
                         if let Ok(detection) =
                             crate::parsers::detector::detect_and_parse(&path, !prod_only)
                         {
                             let facts = crate::reporters::export::generate_workspace_facts(
                                 &path, &detection, None,
                             );
+                            let mut facts_val =
+                                serde_json::to_value(&facts).unwrap_or(serde_json::json!({}));
+                            if !facts_payload.code_findings.is_empty() {
+                                if let Some(obj) = facts_val.as_object_mut() {
+                                    obj.insert(
+                                        "code_findings".to_string(),
+                                        serde_json::to_value(&facts_payload.code_findings)
+                                            .unwrap_or(serde_json::Value::Array(vec![])),
+                                    );
+                                }
+                            }
                             let facts_path = path.join(".vexa.facts.json");
-                            if let Ok(serialized) = serde_json::to_string_pretty(&facts) {
+                            if let Ok(serialized) = serde_json::to_string_pretty(&facts_val) {
                                 if let Err(e) = std::fs::write(&facts_path, serialized) {
                                     eprintln!(
                                         "{} Failed to write .vexa.facts.json: {}",
                                         "Warning:".yellow(),
                                         e
                                     );
-                                } else {
+                                } else if !json && !sarif && !html && sbom.is_none() {
                                     println!(
                                         "{} Exported Zero-Code-Retention scan facts to {}",
                                         "✔".green().bold(),
@@ -1943,14 +2105,20 @@ pub async fn run() {
                                     );
                                 }
                             }
+                        } else if let Ok(facts_path) =
+                            crate::cloud::CloudClient::save_facts_file(&path, &facts_payload)
+                        {
+                            if !json && !sarif && !html && sbom.is_none() {
+                                println!(
+                                    "{} Exported Zero-Code-Retention scan facts to {}",
+                                    "✔".green().bold(),
+                                    facts_path.display()
+                                );
+                            }
                         }
 
                         let should_upload = upload || open;
                         if should_upload {
-                            let facts_payload = crate::cloud::CloudClient::extract_facts(
-                                &output.dep_graph,
-                                &output.scan_result,
-                            );
                             match crate::cloud::CloudClient::upload_facts(
                                 &facts_payload,
                                 api_url.as_deref(),
@@ -1958,11 +2126,13 @@ pub async fn run() {
                             .await
                             {
                                 Ok(sync_res) => {
-                                    println!(
-                                        "{} Successfully streamed facts to Vexa SCA Cloud!\n  Dashboard URL: {}",
-                                        "✔".green().bold(),
-                                        sync_res.dashboard_url.cyan().bold()
-                                    );
+                                    if !json && !sarif && !html && sbom.is_none() {
+                                        println!(
+                                            "{} Successfully streamed facts to Vexa SCA Cloud!\n  Dashboard URL: {}",
+                                            "✔".green().bold(),
+                                            sync_res.dashboard_url.cyan().bold()
+                                        );
+                                    }
                                     if open {
                                         println!("  Opening dashboard in browser...");
                                         crate::cloud::auth::open_browser(&sync_res.dashboard_url);
@@ -2046,6 +2216,9 @@ pub async fn run() {
             open,
             offline_db,
             api_url,
+            sast,
+            secrets,
+            ingest_sarif,
         } => {
             if let Some(db_path) = &offline_db {
                 match crate::cloud::OfflineBundleVerifier::verify_bundle_file(db_path, None) {
@@ -2076,6 +2249,12 @@ pub async fn run() {
                 exit(2);
             }
 
+            let ci_key_active = crate::cloud::auth::AuthManager::has_ci_security_api_key();
+            let effective_sast = sast || ci_key_active;
+            let effective_secrets = secrets || ci_key_active;
+            let upload = upload || ci_key_active;
+            let upload_facts = upload_facts || ci_key_active;
+
             let options = ScanOptions {
                 dev: !prod_only,
                 reachable_only,
@@ -2090,7 +2269,15 @@ pub async fn run() {
                 max_source_files,
             };
 
-            match scan_project(&path, options).await {
+            match scan_project_with_code_security(
+                &path,
+                options,
+                effective_sast,
+                effective_secrets,
+                ingest_sarif.as_deref(),
+            )
+            .await
+            {
                 Ok(mut output) => {
                     if let Some(thresh) = epss_threshold {
                         let mut retained = Vec::new();
@@ -2351,21 +2538,36 @@ pub async fn run() {
                     }
 
                     if upload || upload_facts {
+                        let facts_payload = crate::cloud::CloudClient::extract_facts(
+                            &output.dep_graph,
+                            &output.scan_result,
+                        );
                         if let Ok(detection) =
                             crate::parsers::detector::detect_and_parse(&path, !prod_only)
                         {
                             let facts = crate::reporters::export::generate_workspace_facts(
                                 &path, &detection, None,
                             );
+                            let mut facts_val =
+                                serde_json::to_value(&facts).unwrap_or(serde_json::json!({}));
+                            if !facts_payload.code_findings.is_empty() {
+                                if let Some(obj) = facts_val.as_object_mut() {
+                                    obj.insert(
+                                        "code_findings".to_string(),
+                                        serde_json::to_value(&facts_payload.code_findings)
+                                            .unwrap_or(serde_json::Value::Array(vec![])),
+                                    );
+                                }
+                            }
                             let facts_path = path.join(".vexa.facts.json");
-                            if let Ok(serialized) = serde_json::to_string_pretty(&facts) {
+                            if let Ok(serialized) = serde_json::to_string_pretty(&facts_val) {
                                 if let Err(e) = std::fs::write(&facts_path, serialized) {
                                     eprintln!(
                                         "{} Failed to write .vexa.facts.json: {}",
                                         "Warning:".yellow(),
                                         e
                                     );
-                                } else {
+                                } else if !json && !sarif && sbom.is_none() {
                                     println!(
                                         "{} Exported Zero-Code-Retention scan facts to {}",
                                         "✔".green().bold(),
@@ -2373,14 +2575,20 @@ pub async fn run() {
                                     );
                                 }
                             }
+                        } else if let Ok(facts_path) =
+                            crate::cloud::CloudClient::save_facts_file(&path, &facts_payload)
+                        {
+                            if !json && !sarif && sbom.is_none() {
+                                println!(
+                                    "{} Exported Zero-Code-Retention scan facts to {}",
+                                    "✔".green().bold(),
+                                    facts_path.display()
+                                );
+                            }
                         }
 
                         let should_upload = upload || open;
                         if should_upload {
-                            let facts_payload = crate::cloud::CloudClient::extract_facts(
-                                &output.dep_graph,
-                                &output.scan_result,
-                            );
                             match crate::cloud::CloudClient::upload_facts(
                                 &facts_payload,
                                 api_url.as_deref(),
@@ -2388,11 +2596,13 @@ pub async fn run() {
                             .await
                             {
                                 Ok(sync_res) => {
-                                    println!(
-                                        "{} Successfully streamed facts to Vexa SCA Cloud!\n  Dashboard URL: {}",
-                                        "✔".green().bold(),
-                                        sync_res.dashboard_url.cyan().bold()
-                                    );
+                                    if !json && !sarif && sbom.is_none() {
+                                        println!(
+                                            "{} Successfully streamed facts to Vexa SCA Cloud!\n  Dashboard URL: {}",
+                                            "✔".green().bold(),
+                                            sync_res.dashboard_url.cyan().bold()
+                                        );
+                                    }
                                     if open {
                                         println!("  Opening dashboard in browser...");
                                         crate::cloud::auth::open_browser(&sync_res.dashboard_url);
