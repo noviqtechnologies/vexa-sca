@@ -282,11 +282,10 @@ impl CloudClient {
             req = req.header("X-Vexa-Org", org);
         }
 
-        let resp = req
-            .json(payload)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to connect to Vexa SCA Cloud ({}): {}", sync_url, e))?;
+        let resp =
+            req.json(payload).send().await.map_err(|e| {
+                format!("Failed to connect to Vexa SCA Cloud ({}): {}", sync_url, e)
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();

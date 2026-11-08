@@ -116,7 +116,12 @@ impl AuthManager {
     /// Returns `true` if `VEXA_SCA_SECURITY_API_KEY` or `VEXA_SECURITY_API_KEY` (or `SOCKET_SECURITY_API_KEY`) is set in the environment,
     /// activating zero-config CI mode (SCA + SAST + Secret scanning + automatic Cloud Facts upload).
     pub fn has_ci_security_api_key() -> bool {
-        for var in ["VEXA_SCA_SECURITY_API_KEY", "VEXA_SECURITY_API_KEY", "VEXA_TOKEN", "SOCKET_SECURITY_API_KEY"] {
+        for var in [
+            "VEXA_SCA_SECURITY_API_KEY",
+            "VEXA_SECURITY_API_KEY",
+            "VEXA_TOKEN",
+            "SOCKET_SECURITY_API_KEY",
+        ] {
             if let Ok(tok) = std::env::var(var) {
                 if !tok.trim().is_empty() {
                     return true;
