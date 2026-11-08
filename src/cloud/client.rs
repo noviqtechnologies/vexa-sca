@@ -208,10 +208,21 @@ impl CloudClient {
             });
         }
 
+        let project_name = std::env::var("GITHUB_REPOSITORY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| {
+                if !dep_graph.root_pkg.name.trim().is_empty() {
+                    dep_graph.root_pkg.name.clone()
+                } else {
+                    "workspace".to_string()
+                }
+            });
+
         VexaFactsPayload {
             version: 2,
             timestamp: chrono::Utc::now().to_rfc3339(),
-            project_name: dep_graph.root_pkg.name.clone(),
+            project_name,
             project_version: dep_graph.root_pkg.version.clone(),
             ecosystem: dep_graph.pkg_manager.name.clone(),
             total_packages: total_pkgs,
@@ -260,13 +271,18 @@ impl CloudClient {
         let org_slug = std::env::var("VEXA_ORG")
             .or_else(|_| std::env::var("VEXA_ORG_SLUG"))
             .ok()
-            .or_else(|| AuthManager::load_stored_credentials().and_then(|c| c.org_slug))
-            .unwrap_or_else(|| "vexadev".to_string());
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| AuthManager::load_stored_credentials().and_then(|c| c.org_slug));
 
-        let resp = client
+        let mut req = client
             .post(&sync_url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("X-Vexa-Org", org_slug)
+            .header("Authorization", format!("Bearer {}", token));
+
+        if let Some(ref org) = org_slug {
+            req = req.header("X-Vexa-Org", org);
+        }
+
+        let resp = req
             .json(payload)
             .send()
             .await

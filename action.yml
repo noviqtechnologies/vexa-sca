@@ -1,6 +1,6 @@
 name: 'Vexa SCA & Code Security (SAST + Secrets + Dependency Firewall)'
 description: 'Zero-Code-Sync Dependency SCA, AST Reachability, Multi-Language SAST, Secret Detection & License Compliance.'
-author: 'Vexa Security'
+author: 'Vexa SCA Security'
 
 branding:
   icon: 'shield'
@@ -48,11 +48,15 @@ inputs:
     required: false
     default: 'true'
   token:
-    description: 'Vexa Security API Key (vexasec_... or pass secret VEXA_SECURITY_API_KEY)'
+    description: 'Vexa SCA Security API Key (vexasec_... or pass secret VEXA_SCA_SECURITY_API_KEY)'
     required: false
     default: ''
   api-url:
     description: 'Optional Vexa SCA Cloud API base URL override'
+    required: false
+    default: ''
+  org:
+    description: 'Target Vexa organization slug (e.g. codesecuredev-01)'
     required: false
     default: ''
   version:
@@ -71,14 +75,21 @@ runs:
         INPUT_PATH: ${{ inputs.path }}
         INPUT_TOKEN: ${{ inputs.token }}
         INPUT_API_URL: ${{ inputs.api-url }}
+        INPUT_ORG: ${{ inputs.org }}
       run: |
         printf 'VEXA_SCA_PATH=%s\n' "${INPUT_PATH}" >> "$GITHUB_ENV"
         if [ -n "${INPUT_TOKEN}" ]; then
+          printf 'VEXA_SCA_SECURITY_API_KEY=%s\n' "${INPUT_TOKEN}" >> "$GITHUB_ENV"
           printf 'VEXA_SECURITY_API_KEY=%s\n' "${INPUT_TOKEN}" >> "$GITHUB_ENV"
           printf 'VEXA_TOKEN=%s\n' "${INPUT_TOKEN}" >> "$GITHUB_ENV"
         fi
         if [ -n "${INPUT_API_URL}" ]; then
           printf 'VEXA_API_URL=%s\n' "${INPUT_API_URL}" >> "$GITHUB_ENV"
+          printf 'VEXA_API_BASE_URL=%s\n' "${INPUT_API_URL}" >> "$GITHUB_ENV"
+        fi
+        if [ -n "${INPUT_ORG}" ]; then
+          printf 'VEXA_ORG=%s\n' "${INPUT_ORG}" >> "$GITHUB_ENV"
+          printf 'VEXA_ORG_SLUG=%s\n' "${INPUT_ORG}" >> "$GITHUB_ENV"
         fi
 
     - name: Download & Install Vexa SCA CLI
@@ -157,6 +168,15 @@ runs:
         INPUT_SECRETS: ${{ inputs.secrets }}
         INPUT_INGEST_SARIF: ${{ inputs.ingest-sarif }}
         INPUT_UPLOAD_FACTS: ${{ inputs.upload-facts }}
+        INPUT_API_URL: ${{ inputs.api-url }}
+        INPUT_ORG: ${{ inputs.org }}
+        VEXA_ORG: ${{ inputs.org }}
+        VEXA_ORG_SLUG: ${{ inputs.org }}
+        VEXA_API_URL: ${{ inputs.api-url }}
+        VEXA_API_BASE_URL: ${{ inputs.api-url }}
+        VEXA_SCA_SECURITY_API_KEY: ${{ inputs.token }}
+        VEXA_SECURITY_API_KEY: ${{ inputs.token }}
+        VEXA_TOKEN: ${{ inputs.token }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         ARGS=("scan" "${INPUT_PATH}" "--sarif-file" "${INPUT_SARIF_FILE}")
@@ -187,6 +207,10 @@ runs:
 
         if [ "${INPUT_UPLOAD_FACTS}" = "true" ]; then
           ARGS+=("--upload")
+        fi
+
+        if [ -n "${INPUT_API_URL}" ]; then
+          ARGS+=("--api-url" "${INPUT_API_URL}")
         fi
 
         if [ -n "$RUNNER_TEMP" ] && [ -x "$RUNNER_TEMP/vexa-sca-bin/vexa-sca" ]; then
