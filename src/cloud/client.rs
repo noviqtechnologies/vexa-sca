@@ -208,16 +208,17 @@ impl CloudClient {
             });
         }
 
-        let project_name = std::env::var("GITHUB_REPOSITORY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| {
-                if !dep_graph.root_pkg.name.trim().is_empty() {
-                    dep_graph.root_pkg.name.clone()
-                } else {
-                    "workspace".to_string()
-                }
-            });
+        let project_name = if !dep_graph.root_pkg.name.trim().is_empty() {
+            dep_graph.root_pkg.name.clone()
+        } else if let Ok(repo) = std::env::var("GITHUB_REPOSITORY") {
+            if !repo.trim().is_empty() {
+                repo
+            } else {
+                "workspace".to_string()
+            }
+        } else {
+            "workspace".to_string()
+        };
 
         VexaFactsPayload {
             version: 2,
