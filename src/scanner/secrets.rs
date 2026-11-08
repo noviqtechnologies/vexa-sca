@@ -211,6 +211,16 @@ impl SecretScanner {
                 pattern: Regex::new(r"\b(?:vexasec_[A-Za-z0-9_\-]{16,}|vexa_pat_[A-Za-z0-9_\-]{16,}|sktsec_[A-Za-z0-9_\-]{16,})\b")
                     .expect("valid regex"),
             },
+            SecretRule {
+                rule_id: "VEXA-SEC-006",
+                cwe_id: "CWE-798",
+                title: "Hardcoded Password or Private Secret",
+                severity: "HIGH",
+                sink_symbol: "HARDCODED_SECRET",
+                remediation_hint: "Avoid hardcoding plaintext secrets or credentials in source code. Inject secrets using environment variables or a secret vault.",
+                pattern: Regex::new(r#"(?i)\b(?:password|passwd|pwd|api_secret|client_secret)\s*[:=]\s*["'][^"'\s]{4,}["']"#)
+                    .expect("valid regex"),
+            },
         ]
     }
 }

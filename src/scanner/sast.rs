@@ -232,7 +232,23 @@ impl SastScanner {
                 continue;
             }
 
-            // 6. VEXA-SAST-007: Weak Cryptographic Hash (MD5 / SHA-1) (CWE-327)
+            // 6. VEXA-SAST-006: Path Traversal / Arbitrary File Access (CWE-22)
+            if let Some((sink, remediation)) = Self::detect_path_traversal(&ext, trimmed) {
+                findings.push(CodeFinding {
+                    rule_id: "VEXA-SAST-006".to_string(),
+                    category: "SAST".to_string(),
+                    severity: "CRITICAL".to_string(),
+                    title: "Path Traversal / Arbitrary File Access".to_string(),
+                    cwe: Some("CWE-22".to_string()),
+                    file_path: rel_path.clone(),
+                    line: line_num,
+                    matched_sink: Some(sanitize_sink_signature(sink)),
+                    remediation: Some(remediation.to_string()),
+                });
+                continue;
+            }
+
+            // 7. VEXA-SAST-007: Weak Cryptographic Hash (MD5 / SHA-1) (CWE-327)
             if let Some((sink, remediation)) = Self::detect_weak_crypto(trimmed) {
                 findings.push(CodeFinding {
                     rule_id: "VEXA-SAST-007".to_string(),
@@ -248,7 +264,7 @@ impl SastScanner {
                 continue;
             }
 
-            // 7. VEXA-SAST-008: Disabled TLS Certificate Verification (CWE-295)
+            // 8. VEXA-SAST-008: Disabled TLS Certificate Verification (CWE-295)
             if let Some((sink, remediation)) = Self::detect_disabled_tls(trimmed) {
                 findings.push(CodeFinding {
                     rule_id: "VEXA-SAST-008".to_string(),
@@ -256,6 +272,22 @@ impl SastScanner {
                     severity: "HIGH".to_string(),
                     title: "Improper TLS Certificate Validation (verify=False)".to_string(),
                     cwe: Some("CWE-295".to_string()),
+                    file_path: rel_path.clone(),
+                    line: line_num,
+                    matched_sink: Some(sanitize_sink_signature(sink)),
+                    remediation: Some(remediation.to_string()),
+                });
+                continue;
+            }
+
+            // 9. VEXA-SAST-009: Server-Side Request Forgery (SSRF) (CWE-918)
+            if let Some((sink, remediation)) = Self::detect_ssrf(&ext, trimmed) {
+                findings.push(CodeFinding {
+                    rule_id: "VEXA-SAST-009".to_string(),
+                    category: "SAST".to_string(),
+                    severity: "HIGH".to_string(),
+                    title: "Server-Side Request Forgery (SSRF) via Untrusted URL".to_string(),
+                    cwe: Some("CWE-918".to_string()),
                     file_path: rel_path.clone(),
                     line: line_num,
                     matched_sink: Some(sanitize_sink_signature(sink)),
@@ -291,7 +323,33 @@ impl SastScanner {
                 ));
             }
         } else if matches!(ext, "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs") {
-            if line.contains("child_process.exec(") || line.contains("child_process.execSync(") {
+            let has_exec_call = line.contains("child_process.exec(")
+                || line.contains("child_process.execSync(")
+                || line.contains("cp.exec(")
+                || line.contains("cp.execSync(")
+                || line.contains("childProcess.exec(")
+                || line.contains("childProcess.execSync(")
+                || line.contains("shelljs.exec(")
+                || line.starts_with("exec(")
+                || line.contains(" exec(")
+                || line.contains("=exec(")
+                || line.contains("(exec(")
+                || line.contains("await exec(")
+                || line.starts_with("execSync(")
+                || line.contains(" execSync(")
+                || line.contains("=execSync(")
+                || line.contains("(execSync(")
+                || line.contains("await execSync(");
+
+            let is_pure_decl = (line.starts_with("import ") || line.starts_with("export "))
+                && !line.contains("exec(");
+
+            let is_spawn_shell = (line.contains("spawn(") || line.contains(".spawn("))
+                && (line.contains("shell: true")
+                    || line.contains("shell:true")
+                    || line.contains("shell: 1"));
+
+            if (has_exec_call && !is_pure_decl) || is_spawn_shell {
                 return Some((
                     "child_process.exec(...)",
                     "Use child_process.execFile() or spawn() with an argument array instead of invoking a shell.",
@@ -346,7 +404,16 @@ impl SastScanner {
                 ));
             }
         } else if matches!(ext, "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs") {
-            if line.starts_with("eval(") || line.contains(" eval(") || line.contains("=eval(") {
+            let is_eval = line.starts_with("eval(")
+                || line.starts_with("eval ")
+                || line.contains(" eval(")
+                || line.contains("=eval(")
+                || line.contains("(eval(")
+                || line.contains("await eval(")
+                || line.contains("window.eval(")
+                || line.contains("global.eval(");
+
+            if is_eval {
                 return Some((
                     "eval(...)",
                     "Replace eval() with JSON.parse() or a safe expression parser.",
@@ -356,6 +423,15 @@ impl SastScanner {
                 return Some((
                     "new Function(...)",
                     "Avoid constructing functions dynamically from strings.",
+                ));
+            }
+            if (line.contains("setTimeout(") || line.contains("setInterval("))
+                && (line.contains('`') || line.contains('"') || line.contains('\''))
+                && (line.contains("${") || line.contains('+'))
+            {
+                return Some((
+                    "setTimeout(stringCode, ...)",
+                    "Pass a function reference to setTimeout/setInterval instead of a dynamically constructed string.",
                 ));
             }
         }
@@ -388,25 +464,98 @@ impl SastScanner {
 
     fn detect_sql_injection(line: &str) -> Option<(&'static str, &'static str)> {
         let lower = line.to_lowercase();
-        if (lower.contains(".execute(f\"")
-            || lower.contains(".execute(f'")
-            || lower.contains(".execute(\"select ") && line.contains('+')
-            || lower.contains(".query(`select ") && line.contains("${"))
-            && (lower.contains("select ")
-                || lower.contains("insert ")
-                || lower.contains("update ")
-                || lower.contains("delete "))
-        {
-            return Some((
-                "cursor.execute(f\"SELECT ...\")",
-                "Use parameterized queries / prepared statements (e.g. cursor.execute(\"SELECT ... WHERE id = ?\", (user_id,))) instead of string formatting.",
-            ));
+        let has_sql_keyword = lower.contains("select ")
+            || lower.contains("insert into ")
+            || lower.contains("update ")
+            || lower.contains("delete from ");
+
+        if has_sql_keyword {
+            let has_python_fstring =
+                lower.contains(".execute(f\"") || lower.contains(".execute(f'");
+            let has_template_interp = line.contains("${");
+            let has_concat = line.contains('+');
+            let is_query_sink = lower.contains(".query(")
+                || lower.contains(".execute(")
+                || lower.contains("rawquery(")
+                || lower.contains("queryrawunsafe(")
+                || lower.contains("$queryrawunsafe(")
+                || lower.contains("cursor.execute(");
+
+            let has_unparameterized_str = lower.contains("\"select")
+                || lower.contains("'select")
+                || lower.contains("`select")
+                || lower.contains("\"insert")
+                || lower.contains("'insert")
+                || lower.contains("\"update")
+                || lower.contains("'update")
+                || lower.contains("\"delete")
+                || lower.contains("'delete");
+
+            if has_python_fstring
+                || (is_query_sink && (has_template_interp || has_concat))
+                || (has_unparameterized_str && (has_template_interp || has_concat))
+            {
+                return Some((
+                    "db.query(\"SELECT ... \" + input)",
+                    "Use parameterized queries / prepared statements instead of string concatenation or template interpolation.",
+                ));
+            }
+        }
+        None
+    }
+
+    fn detect_path_traversal(ext: &str, line: &str) -> Option<(&'static str, &'static str)> {
+        if matches!(ext, "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs") {
+            let lower = line.to_lowercase();
+            let is_fs = lower.contains("fs.readfile(")
+                || lower.contains("fs.readfilesync(")
+                || lower.contains("fs.createreadstream(")
+                || lower.contains("fs.writefile(")
+                || lower.contains("fs.writefilesync(")
+                || lower.contains("fs.promises.readfile(")
+                || lower.contains("fs.promises.writefile(")
+                || lower.contains("res.sendfile(")
+                || lower.contains("res.download(");
+
+            if is_fs {
+                let has_untrusted = line.contains("req.query")
+                    || line.contains("req.params")
+                    || line.contains("req.body")
+                    || line.contains("${")
+                    || line.contains('+')
+                    || lower.contains("userinput")
+                    || lower.contains("filepath")
+                    || lower.contains("filename")
+                    || lower.contains("user_input");
+
+                if has_untrusted {
+                    return Some((
+                        "fs.readFile(userInput, ...)",
+                        "Validate and sanitize paths using path.resolve() against a safe base directory and disallow directory traversal ('..').",
+                    ));
+                }
+            }
+        } else if ext == "py" {
+            let lower = line.to_lowercase();
+            if lower.contains("open(")
+                && (lower.contains("request.args")
+                    || lower.contains("request.form")
+                    || lower.contains("user_input")
+                    || line.contains('+')
+                    || lower.contains("f\""))
+            {
+                return Some((
+                    "open(user_path, ...)",
+                    "Validate paths against an allowlist and ensure canonical paths stay inside the intended root directory.",
+                ));
+            }
         }
         None
     }
 
     fn detect_xss(ext: &str, line: &str) -> Option<(&'static str, &'static str)> {
         if matches!(ext, "js" | "jsx" | "ts" | "tsx") {
+            let lower = line.to_lowercase();
             if line.contains("dangerouslySetInnerHTML") {
                 return Some((
                     "dangerouslySetInnerHTML={{ __html: ... }}",
@@ -418,6 +567,53 @@ impl SastScanner {
                     "element.innerHTML = ...",
                     "Use element.textContent instead of innerHTML when rendering untrusted input.",
                 ));
+            }
+            if line.contains("document.write(") || line.contains("document.writeln(") {
+                return Some((
+                    "document.write(...)",
+                    "Use modern DOM manipulation APIs (document.createElement, textContent) instead of document.write().",
+                ));
+            }
+            if (lower.contains("res.send(") || lower.contains("res.write("))
+                && line.contains('<')
+                && (line.contains("${") || line.contains('+') || line.contains("req."))
+            {
+                return Some((
+                    "res.send(<html> + input)",
+                    "Escape user input or use a template engine with auto-escaping enabled to prevent Cross-Site Scripting (XSS).",
+                ));
+            }
+        }
+        None
+    }
+
+    fn detect_ssrf(ext: &str, line: &str) -> Option<(&'static str, &'static str)> {
+        if matches!(ext, "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs") {
+            let lower = line.to_lowercase();
+            let is_http_client = lower.contains("axios.get(")
+                || lower.contains("axios.post(")
+                || lower.contains("axios(")
+                || lower.contains("fetch(")
+                || lower.contains("http.get(")
+                || lower.contains("https.get(")
+                || lower.contains("request.get(");
+
+            if is_http_client {
+                let has_untrusted = line.contains("req.query")
+                    || line.contains("req.params")
+                    || line.contains("req.body")
+                    || line.contains("${")
+                    || line.contains('+')
+                    || lower.contains("userinput")
+                    || lower.contains("targeturl")
+                    || lower.contains("target_url");
+
+                if has_untrusted {
+                    return Some((
+                        "fetch(untrustedUrl, ...)",
+                        "Validate target URLs against a strict domain allowlist and block private IP ranges (127.0.0.1, 10.0.0.0/8, 169.254.169.254).",
+                    ));
+                }
             }
         }
         None
@@ -514,6 +710,55 @@ mod tests {
         assert!(rule_ids.contains(&"VEXA-SAST-003")); // pickle.loads
         assert!(rule_ids.contains(&"VEXA-SAST-002")); // eval
         assert!(rule_ids.contains(&"VEXA-SAST-008")); // verify=False
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_detect_typescript_sast_vulnerabilities() {
+        let temp_dir = std::env::temp_dir().join(format!("vexa_sast_ts_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let ts_code = r#"
+import { exec } from "child_process";
+import fs from "fs";
+import axios from "axios";
+
+export function handleUser(req: any, res: any) {
+    const userInput = req.query.cmd;
+    exec("ping -c 1 " + userInput);
+
+    const data = fs.readFileSync(req.query.file);
+    db.query("SELECT * FROM users WHERE id = " + req.query.id);
+
+    res.send("<h1>Welcome " + req.query.name + "</h1>");
+    axios.get(req.query.url);
+}
+"#;
+        fs::write(temp_dir.join("vul01.ts"), ts_code).unwrap();
+
+        let findings = SastScanner::scan_workspace(&temp_dir);
+        assert!(
+            !findings.is_empty(),
+            "Should detect vulnerabilities in vul01.ts"
+        );
+
+        let rule_ids: Vec<&str> = findings.iter().map(|f| f.rule_id.as_str()).collect();
+        assert!(
+            rule_ids.contains(&"VEXA-SAST-001"),
+            "Should detect OS Command Injection"
+        );
+        assert!(
+            rule_ids.contains(&"VEXA-SAST-006"),
+            "Should detect Path Traversal"
+        );
+        assert!(
+            rule_ids.contains(&"VEXA-SAST-004"),
+            "Should detect SQL Injection"
+        );
+        assert!(rule_ids.contains(&"VEXA-SAST-005"), "Should detect XSS");
+        assert!(rule_ids.contains(&"VEXA-SAST-009"), "Should detect SSRF");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
