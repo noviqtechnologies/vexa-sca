@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Vexa SCA CLI Official Windows Installer with Cryptographic Checksum Verification.
 .DESCRIPTION
