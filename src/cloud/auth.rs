@@ -197,7 +197,9 @@ impl AuthManager {
             let meta = fs::symlink_metadata(&path)
                 .map_err(|e| format!("Failed to inspect credentials path: {}", e))?;
             if meta.file_type().is_symlink() {
-                return Err("Credentials path is a symlink, refusing to overwrite for security".to_string());
+                return Err(
+                    "Credentials path is a symlink, refusing to overwrite for security".to_string(),
+                );
             }
         }
 
@@ -614,7 +616,10 @@ impl AuthManager {
         let status = Self::check_status(api_base_url).await;
         if status.authenticated && status.cloud_verified {
             println!("{}", "Vexa SCA Authentication Status:".green().bold());
-            println!("  Status: {}", "Authenticated (Verified with Vexa Cloud)".green().bold());
+            println!(
+                "  Status: {}",
+                "Authenticated (Verified with Vexa Cloud)".green().bold()
+            );
             if let Some(prefix) = status.token_prefix {
                 println!("  Token: {}", prefix);
             }
@@ -630,7 +635,10 @@ impl AuthManager {
             println!("  Credentials: {}", Self::credentials_path().display());
         } else if !status.cloud_verified && status.token_prefix.is_some() {
             println!("{}", "Vexa SCA Authentication Status:".yellow().bold());
-            println!("  Status: {}", "Token Present (Cloud Offline / Unverified)".yellow().bold());
+            println!(
+                "  Status: {}",
+                "Token Present (Cloud Offline / Unverified)".yellow().bold()
+            );
             if let Some(prefix) = status.token_prefix {
                 println!("  Token: {}", prefix);
             }

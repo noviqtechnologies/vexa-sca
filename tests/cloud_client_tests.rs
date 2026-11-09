@@ -42,9 +42,18 @@ fn test_auth_manager_storage_lifecycle() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let status = rt.block_on(AuthManager::check_status(Some(unreachable_api)));
 
-    assert!(!status.authenticated, "Must NOT claim authenticated: true when cloud is unreachable");
-    assert!(!status.cloud_verified, "Must report cloud_verified: false when unreachable");
-    assert!(status.error_message.is_some(), "Must report clear notice of unreachable API");
+    assert!(
+        !status.authenticated,
+        "Must NOT claim authenticated: true when cloud is unreachable"
+    );
+    assert!(
+        !status.cloud_verified,
+        "Must report cloud_verified: false when unreachable"
+    );
+    assert!(
+        status.error_message.is_some(),
+        "Must report clear notice of unreachable API"
+    );
     assert_eq!(status.token_prefix.as_deref(), Some("vexa_pat_tes..."));
 
     let _ = AuthManager::logout();
