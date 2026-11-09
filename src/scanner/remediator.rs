@@ -65,12 +65,7 @@ impl Remediator {
                         .fixed_in
                         .iter()
                         .filter_map(|f| clean_or_coerce_version(f))
-                        .filter(|fv| {
-                            current_semver
-                                .as_ref()
-                                .map(|cur| fv > cur)
-                                .unwrap_or(true)
-                        })
+                        .filter(|fv| current_semver.as_ref().map(|cur| fv > cur).unwrap_or(true))
                         .collect();
                     if v_fixes.is_empty() {
                         continue;

@@ -1,7 +1,5 @@
 use crate::core::dep_graph::DepGraph;
-use crate::core::semver_utils::{
-    clean_or_coerce_version, extract_fixed_versions_for_package,
-};
+use crate::core::semver_utils::{clean_or_coerce_version, extract_fixed_versions_for_package};
 use crate::scanner::cache::VulnCache;
 use crate::scanner::epss::EpssResolver;
 use crate::types::{

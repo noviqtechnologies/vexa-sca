@@ -343,8 +343,7 @@ impl WorkspaceAstIndex {
         let mut call_sites: HashMap<(String, String), Vec<CallSite>> = HashMap::new();
         let lines: Vec<&str> = content.lines().collect();
 
-        let use_re =
-            Regex::new(r"use\s+([a-zA-Z0-9_]+)(?:::([a-zA-Z0-9_:,\{\}\s\*]+))?;").unwrap();
+        let use_re = Regex::new(r"use\s+([a-zA-Z0-9_]+)(?:::([a-zA-Z0-9_:,\{\}\s\*]+))?;").unwrap();
         let call_re =
             Regex::new(r"([a-zA-Z0-9_]+)(?:::[a-zA-Z0-9_]+)*::([a-zA-Z0-9_]+)(?:::<[^>]*>)?\s*\(")
                 .unwrap();
