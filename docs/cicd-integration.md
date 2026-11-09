@@ -1,4 +1,4 @@
-# Vexa SCA CI/CD Integration Guide (GA v1.2.0)
+# Vexa SCA CI/CD Integration Guide (GA v1.3.4)
 
 ## Scope and Status
 
@@ -69,15 +69,20 @@ jobs:
   vexa-sca-scan:
     runs-on: ubuntu-latest # Supports ubuntu-latest, macos-latest, and windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Vexa SCA
+        run: |
+          curl -sSf https://raw.githubusercontent.com/noviqtechnologies/vexa-sca/main/scripts/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
       - name: Run Vexa SCA Security Scan
         env:
           VEXA_SCA_SECURITY_API_KEY: ${{ secrets.VEXA_SCA_SECURITY_API_KEY }}
-        run: npx --yes vexa-sca scan
+        run: vexa-sca scan --upload
 ```
 
-### What `npx vexa-sca scan` Does When `VEXA_SCA_SECURITY_API_KEY` Is Present
-- **Cross-OS Zero-Compile Execution**: `bin/vexa-sca.js` automatically resolves or downloads the prebuilt platform binary (`Linux`, `macOS`, `Windows`) into `~/.vexa/bin/` without requiring a slow Rust source compile in CI.
+### What Vexa SCA Does When `VEXA_SCA_SECURITY_API_KEY` Is Present
+- **Cross-OS Native Execution**: The installer installs the prebuilt platform binary (`Linux`, `macOS`, `Windows`) with SHA-256 integrity verification.
 - **Unified Multi-Scanner**: Automatically activates `--sast` (`VEXA-SAST-001` through `VEXA-SAST-008`, catching OS Command Injection like `os.system(...)` in `os-ijection.py`), `--secrets` (masked secret detection), and Dependency SCA—even in repositories that contain **no lockfiles**.
 - **Strict Zero-Code-Sync**: Strips all raw source code lines locally before uploading `.vexa.facts.json` (v2.0) to `POST /v1/facts/sync`. Only normalized POSIX file paths (`os-ijection.py`), line numbers (`12`), CWE IDs (`CWE-78`), and canonical sink signatures (`os.system(...)`) are transmitted.
 
@@ -111,12 +116,12 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@7b7c2780e1d9d955f95211932252384a84d451ec # master / pinned
 
       - name: Build and install Vexa SCA CLI
         run: |
           # Build scanner in /tmp to prevent workspace collisions with target Cargo.toml
-          git clone --depth 1 https://github.com/noviqtechnologies/vexa-sca.git /tmp/vexa-sca
+          git clone --depth 1 --branch v1.3.4 https://github.com/noviqtechnologies/vexa-sca.git /tmp/vexa-sca
           cargo build --locked --release --manifest-path /tmp/vexa-sca/Cargo.toml
           sudo cp /tmp/vexa-sca/target/release/vexa-sca /usr/local/bin/vexa-sca
           rm -rf /tmp/vexa-sca
@@ -142,7 +147,7 @@ jobs:
 
       - name: Upload SARIF to GitHub Code Scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@48ab28a6f5dab2a823ea73dcf06866bc7a7ee0c2 # v3.28.0
         with:
           sarif_file: vexa-report.sarif
           category: vexa-sca
@@ -159,9 +164,9 @@ stages:
 
 vexa-sca-scan:
   stage: test
-  image: rust:latest
+  image: rust:1.82.0-slim
   script:
-    - git clone --depth 1 https://github.com/noviqtechnologies/vexa-sca.git /tmp/vexa-sca
+    - git clone --depth 1 --branch v1.3.4 https://github.com/noviqtechnologies/vexa-sca.git /tmp/vexa-sca
     - cargo build --locked --release --manifest-path /tmp/vexa-sca/Cargo.toml
     - cp /tmp/vexa-sca/target/release/vexa-sca /usr/local/bin/vexa-sca
     - rm -rf /tmp/vexa-sca

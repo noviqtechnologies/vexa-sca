@@ -1,8 +1,8 @@
-# Vexa SCA Open Source: Architectural & Operational Guide (v2.0 / GA v1.2.0+)
+# Vexa SCA Open Source: Architectural & Operational Guide (v2.0 / GA v1.3.4+)
 
 ## Executive Summary
 
-**Vexa SCA** is an open-source, high-performance Software Composition Analysis (SCA) engine built in Rust. It is **Generally Available (GA v1.2.0+)** for Tier 1 ecosystems (Node.js / JavaScript / TypeScript: `package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9), providing enterprise-grade dependency auditing, PR-differential baseline scanning, policy enforcement, CycloneDX/SPDX SBOM generation, and automated same-major remediation proposals.
+**Vexa SCA** is an open-source, high-performance Software Composition Analysis (SCA) engine built in Rust. It is **Generally Available (GA v1.3.4+)** for Tier 1 ecosystems (Node.js / JavaScript / TypeScript: `package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9), providing enterprise-grade dependency auditing, PR-differential baseline scanning, policy enforcement, CycloneDX/SPDX SBOM generation, and automated same-major remediation proposals.
 
 Starting with v2.0, the reachability engine has been substantially improved per the **Stage 1A Handover** milestone:
 
@@ -94,7 +94,7 @@ Policy files live with individual repositories. There is no centralized SaaS das
 
 ## Production Adoption & Support
  
-Vexa SCA v1.2.0 is **production-ready for Tier 1 environments** (Node.js/npm/pnpm). Organizations can integrate `vexa-sca ci` into GitHub Actions, GitLab CI, and other automation pipelines as an authoritative quality gate. For teams evaluating non-Tier-1 ecosystems (Python, Java, Go, Rust, Container OS), preview scans should be run alongside established controls while ecosystem-specific tests continue to expand. Full validation evidence is documented in [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md).
+Vexa SCA v1.3.4 is **production-ready for Tier 1 environments** (Node.js/npm/pnpm). Organizations can integrate `vexa-sca ci` into GitHub Actions, GitLab CI, and other automation pipelines as an authoritative quality gate. For teams evaluating non-Tier-1 ecosystems (Python, Java, Go, Rust, Container OS), preview scans should be run alongside established controls while ecosystem-specific tests continue to expand. Full validation evidence is documented in [RELEASE_VALIDATION.md](../RELEASE_VALIDATION.md).
 
 ---
 

@@ -2067,7 +2067,7 @@ pub async fn run() {
                         QualityGate::print_terminal_summary(&gate_res);
                     }
 
-                    if upload || upload_facts {
+                    if upload || upload_facts || open {
                         let facts_payload = crate::cloud::CloudClient::extract_facts(
                             &output.dep_graph,
                             &output.scan_result,
@@ -2117,7 +2117,7 @@ pub async fn run() {
                             }
                         }
 
-                        let should_upload = upload || open;
+                        let should_upload = upload || upload_facts || open;
                         if should_upload {
                             match crate::cloud::CloudClient::upload_facts(
                                 &facts_payload,
@@ -2537,7 +2537,7 @@ pub async fn run() {
                         QualityGate::print_terminal_summary(&gate_res);
                     }
 
-                    if upload || upload_facts {
+                    if upload || upload_facts || open {
                         let facts_payload = crate::cloud::CloudClient::extract_facts(
                             &output.dep_graph,
                             &output.scan_result,
@@ -2587,7 +2587,7 @@ pub async fn run() {
                             }
                         }
 
-                        let should_upload = upload || open;
+                        let should_upload = upload || upload_facts || open;
                         if should_upload {
                             match crate::cloud::CloudClient::upload_facts(
                                 &facts_payload,

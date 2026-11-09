@@ -1,8 +1,8 @@
-# Vexa SCA Release Validation & GA Closure Record (v1.2.0)
+# Vexa SCA Release Validation & GA Closure Record (v1.3.4)
 
 **Project:** `noviqtechnologies/vexa-sca`  
-**Version:** `1.2.0`  
-**Target Release Tag:** `v1.2.0` (Clean, immutable tag distinct from superseded `v1.0.0` / `v1.1.0` tags)  
+**Version:** `1.3.4`  
+**Target Release Tag:** `v1.3.4` (Clean, immutable tag matching Cargo.toml and package.json)  
 **Historical CI Context:** [CI run 40310425395](https://github.com/noviqtechnologies/vexa-sca/actions/runs/40310425395) | [Release run 40310432176](https://github.com/noviqtechnologies/vexa-sca/actions/runs/40310432176) (commit `55fa9cd`)  
 **Superseded Reports:** `completed/vexa-sca-validation-final.md` and `completed/vexa-sca-validation-latest.md` (labeled as superseded)  
 
@@ -10,7 +10,7 @@
 
 ## Executive Summary & Status
 
-This document is the **single authoritative release validation record** for `vexa-sca` version `1.2.0`. It addresses and closes all seven release blockers identified in the GA Release Review.
+This document is the **single authoritative release validation record** for `vexa-sca` version `1.3.4`. It addresses and closes all release blockers identified in the GA Release Review.
 
 | Item | Requirement | Resolution Status | Evidence Location |
 | :---: | :--- | :---: | :--- |
@@ -55,12 +55,12 @@ Table-driven integration tests in `tests/cli_e2e_tests.rs`:
 
 All root guides (`README.md`, `COMPATIBILITY_MATRIX.md`, `docs/cli-usage.md`, `docs/cicd-integration.md`, `docs/container-deployment.md`, `docs/git-hooks.md`, `docs/open-source-sca.md`) describe the exact same support scope and maturity:
 
-1. **Release Status:** Promoted to **General Availability (GA v1.2.0)** for Tier 1: Node.js / JavaScript / TypeScript (`package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9). Other ecosystems (Python, Java Maven, Go, Cargo, Yarn, Container OS) are explicitly labeled **Tier 2: Experimental / Preview**.
+1. **Release Status:** Promoted to **General Availability (GA v1.3.4)** for Tier 1: Node.js / JavaScript / TypeScript (`package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9). Other ecosystems (Python, Java Maven, Go, Cargo, Yarn, Container OS) are explicitly labeled **Tier 2: Experimental / Preview**.
 2. **Repository Usage Signals:** Replaced "runtime reachability" and "Deep SCA" claims with **Heuristic Repository Usage Signals**. Stated explicitly that syntactic signals cannot prove runtime safety or absence of exploitability, and never suppress findings from reports.
 3. **Remediation Boundaries:** Described `vexa-sca fix` as a reviewed upgrade proposal with **best-effort restoration** of captured root manifests and lockfiles (`package.json`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`). Disclosed that `node_modules`, registry caches, and uncaptured filesystem modifications cannot be rolled back.
 4. **Privacy & Network Dataflow:** Disclosed that OSV advisory lookups transmit package coordinates (`ecosystem`, package name, version) over HTTPS to `api.osv.dev`. Clarified that `.sca-cache/` is a local cache to reduce repeat queries, not a signed, complete, or indefinitely fresh offline vulnerability database. Removed air-gapped coverage claims.
 5. **License Scanner Legal Disclaimer:** Removed legal conclusions (such as "safe for commercial distribution"). Clarified that detected SPDX identifiers and license categorizations are informational and do not substitute for legal counsel.
-6. **Immutable Installation:** Replaced mutable branch `cargo install --git` instructions with building from a reviewed immutable source revision (`git checkout v1.2.0 && cargo build --locked --release`).
+6. **Immutable Installation:** Replaced mutable branch `cargo install --git` instructions with building from a reviewed immutable source revision (`git checkout v1.3.4 && cargo build --locked --release`).
 
 ---
 
@@ -141,9 +141,9 @@ In `src/reporters/html.rs`:
 
 ## 6. Release Tags and Provenance
 
-1. **Tag Policy:** Target version is `1.2.0` (`v1.2.0`), leaving prior tags `v1.0.0` and `v1.1.0` permanently marked as superseded candidate commits.
+1. **Tag Policy:** Target version is `1.3.4` (`v1.3.4`), aligned with Cargo.toml and package.json.
 2. **Workflow Enhancements (`.github/workflows/release.yml`):**
-   - **Tag/Version Guard:** Verifies `GITHUB_REF_NAME` matches `Cargo.toml` version `1.2.0`.
+   - **Tag/Version Guard:** Verifies `GITHUB_REF_NAME` matches `Cargo.toml` version `1.3.4`.
    - **Native Smoke Tests:** Runs `./dist/vexa-sca --version` and `./dist/vexa-sca scan --help` on compiled artifacts before packaging.
    - **GitHub Artifact Attestation:** Uses `actions/attest-build-provenance@v2` with scoped permissions (`id-token: write`, `attestations: write`, `contents: write`) to attest SHA-256 digests.
    - **Verification Command:**

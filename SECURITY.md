@@ -10,8 +10,8 @@ Only the latest Generally Available (GA) release receives critical security upda
 
 | Version | Status | Security Support |
 | :--- | :--- | :--- |
-| **`1.2.x` (GA)** | **Current Stable GA** | :white_check_mark: Fully Supported |
-| `< 1.2.0` | Superseded Candidates / Beta | :x: End of Life (Upgrade to v1.2.0+) |
+| **`1.3.x` (GA)** | **Current Stable GA** | :white_check_mark: Fully Supported |
+| `< 1.3.0` | Superseded Candidates / Beta | :x: End of Life (Upgrade to v1.3.x+) |
 
 ---
 

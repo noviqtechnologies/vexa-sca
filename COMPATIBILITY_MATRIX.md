@@ -1,9 +1,9 @@
 # Vexa SCA — Parser and Fixture Coverage
 
-This document records ecosystem support tiers, parser capabilities, and fixture validation evidence for Vexa SCA v1.2.0.
+This document records ecosystem support tiers, parser capabilities, and fixture validation evidence for Vexa SCA v1.3.4.
 
 > [!IMPORTANT]
-> **Status: General Availability (GA) — Release v1.2.0**
+> **Status: General Availability (GA) — Release v1.3.4**
 > - **Tier 1 (GA / Production Ready):** Node.js / JavaScript / TypeScript (`package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9). Validated by 153 automated tests, real pnpm/npm byte-for-byte rollback verification, table-driven exit code contract (`0`, `1`, `2`, `3`), and independently verified JSON schemas (SARIF 2.1.0, CycloneDX 1.5, SPDX 2.3).
 > - **Tier 2 (Experimental / Community Preview):** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn (`yarn.lock`), Cargo (`Cargo.lock`), Go (`go.sum`), and Container OS package auditing. These ecosystems have fixture coverage and are available for preview evaluation.
 >
@@ -173,7 +173,7 @@ The mock-server unit tests use loopback only. This does not mean full official-r
 
 These tests used pinned public repository snapshots and a cap of 500 source files. They ran **before** the current hardening edits and therefore are diagnostic baseline evidence, not validation of this source tree. `INCOMPLETE` is expected when the source cap or advisory lookup leaves scope unchecked; the prior executable nevertheless returned exit code 0 in each completed run, which is one of the defects the current work is intended to fix.
 
-### Official-repository smoke tests (pre-hardening baseline vs v1.2.0 hardened contract)
+### Official-repository smoke tests (pre-hardening baseline vs v1.3.4 hardened contract)
 
 These benchmark runs tested pinned public repository snapshots with the 500-file safety cap. Under the hardened contract, completeness is explicitly decoupled across three distinct dimensions, and any dimension limit forces an overall status of `INCOMPLETE` with process exit code `3`:
 

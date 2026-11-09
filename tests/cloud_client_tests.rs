@@ -36,6 +36,18 @@ fn test_auth_manager_storage_lifecycle() {
     assert!(logout_res);
     assert!(AuthManager::load_stored_credentials().is_none());
 
+    // Verify offline / unverified status handling
+    let _ = AuthManager::save_token("vexa_pat_test_offline_status", Some("test-org"), None);
+    let unreachable_api = "http://127.0.0.1:59999/api/v1";
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let status = rt.block_on(AuthManager::check_status(Some(unreachable_api)));
+
+    assert!(!status.authenticated, "Must NOT claim authenticated: true when cloud is unreachable");
+    assert!(!status.cloud_verified, "Must report cloud_verified: false when unreachable");
+    assert!(status.error_message.is_some(), "Must report clear notice of unreachable API");
+    assert_eq!(status.token_prefix.as_deref(), Some("vexa_pat_tes..."));
+
+    let _ = AuthManager::logout();
     let _ = std::fs::remove_dir_all(&temp_home);
 }
 

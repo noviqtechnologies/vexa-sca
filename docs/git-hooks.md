@@ -1,4 +1,4 @@
-# Vexa SCA Git Hooks Integration Guide (GA v1.2.0)
+# Vexa SCA Git Hooks Integration Guide (GA v1.3.4)
 
 ## Security Architecture & Best Practices
 

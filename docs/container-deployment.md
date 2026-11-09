@@ -1,4 +1,4 @@
-# Vexa SCA Container Deployment Guide (GA v1.2.0)
+# Vexa SCA Container Deployment Guide (GA v1.3.4)
 
 ## Overview & Support Scope
 
@@ -9,7 +9,7 @@ Vexa SCA provides container images and rootless containerization capabilities fo
 2. **Container OS Package Auditing (`vexa-sca container` - Experimental / Tier 2):** Auditing container filesystem layers (`apk` database, `dpkg` status, Dockerfile base image analysis) is available as an experimental preview.
 
 ### Best Practices for Containerized CI
-- **Immutable Tags / Digest Pinning:** In production pipelines, pin container images by digest (`sha256:...`) or release version tag (`v1.2.0`), avoiding moving tags like `:latest`.
+- **Immutable Tags / Digest Pinning:** In production pipelines, pin container images by digest (`sha256:...`) or release version tag (`v1.3.4`), avoiding moving tags like `:latest`.
 - **Rootless & Non-Privileged:** Run scanner containers with non-root user permissions (`--user 1000:1000`) and read-only host mounts (`-v "${PWD}:/workspace:ro"`).
 - **Zero Host Socket Mounting:** Do not mount `/var/run/docker.sock` into scanner containers. Vexa SCA analyzes lockfiles and uncompressed tarballs directly without requiring access to Docker daemons.
 

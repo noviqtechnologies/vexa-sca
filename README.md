@@ -1,6 +1,6 @@
 # Vexa SCA: Enterprise-Grade Software Composition Analysis & Security Engine
 
-[![Release](https://img.shields.io/badge/Release-v1.2.0%20GA-brightgreen.svg?logo=github)](https://github.com/noviqtechnologies/vexa-sca/releases)
+[![Release](https://img.shields.io/badge/Release-v1.3.4%20GA-brightgreen.svg?logo=github)](https://github.com/noviqtechnologies/vexa-sca/releases)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg?logo=githubactions)](https://github.com/noviqtechnologies/vexa-sca/actions)
 [![Tests](https://img.shields.io/badge/Tests-177%20Passing-success.svg)](#automated-tests--verification)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
@@ -60,7 +60,7 @@
 > ```bash
 > git clone https://github.com/noviqtechnologies/vexa-sca.git
 > cd vexa-sca
-> git checkout v1.2.0
+> git checkout v1.3.4
 > cargo build --locked --release
 > ```
 > 
@@ -217,23 +217,39 @@ Vexa SCA is fully cross-platform and operates identically on **Linux** (x86_64, 
 > [!NOTE]
 > **Zero External C / OpenSSL Dependencies**: Vexa SCA uses a pure Rust TLS implementation (`rustls-tls`) and pure Rust decompression (`miniz_oxide`). You do not need to install Perl, OpenSSL dev headers, or build tools solely for cryptographic handshakes or tarball unpacking.
 
-### Prerequisites by OS
+### Quick Install (Verified Precompiled Binaries)
 
-| Operating System | Recommended Rust Installation | Optional Node.js (for `npx` wrapper) |
-| :--- | :--- | :--- |
-| **Linux** (Ubuntu, Debian, Fedora, RHEL, Arch, Alpine) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` | `v16.0.0+` (via `nvm` or package manager) |
-| **macOS** (Apple Silicon M1-M4 & Intel) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` | `brew install node` |
-| **Windows** (10 / 11, Windows Server) | `winget install Rustlang.Rustup` or download [rustup-init.exe](https://rustup.rs) | `winget install OpenJS.NodeJS.LTS` |
+Install Vexa SCA with automatic architecture detection and cryptographic SHA-256 checksum verification:
+
+**Linux / macOS:**
+```bash
+curl -sSf https://raw.githubusercontent.com/noviqtechnologies/vexa-sca/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/noviqtechnologies/vexa-sca/main/install.ps1 | iex
+```
+
+**Via Cargo (Rust crates.io / Source):**
+```bash
+cargo install vexa-sca --locked
+```
+
+**Direct GitHub Releases:**
+Download prebuilt archives and cosign attestations directly from [GitHub Releases](https://github.com/noviqtechnologies/vexa-sca/releases/latest).
+
+---
 
 ### Building from Source
 
 ```bash
-# Clone the repository
-git clone https://github.com/noviqtechnologies/vexa-sca.git
+# Clone the repository at the v1.3.4 release tag
+git clone --branch v1.3.4 --depth 1 https://github.com/noviqtechnologies/vexa-sca.git
 cd vexa-sca
 
-# Compile release binaries (produces `vexa-sca`, `vexa`, and `sca`)
-cargo build --release
+# Compile release binaries with locked dependencies
+cargo build --locked --release
 ```
 
 Compiled binaries are located at:
@@ -242,9 +258,9 @@ Compiled binaries are located at:
 
 ### Running the CLI
 
-You can install the native binary to your user `PATH` using Cargo:
+Install the locally built binary to your user `PATH` using Cargo:
 ```bash
-cargo install --path .
+cargo install --path . --locked
 
 # Now available globally from any terminal or OS:
 vexa-sca --help

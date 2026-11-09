@@ -17,6 +17,8 @@ pub struct StoredCredentials {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthStatusResponse {
     pub authenticated: bool,
+    pub cloud_verified: bool,
+    pub error_message: Option<String>,
     pub org_slug: Option<String>,
     pub user_email: Option<String>,
     pub tier: Option<String>,
@@ -159,6 +161,17 @@ impl AuthManager {
         if !path.exists() {
             return None;
         }
+        if let Ok(meta) = fs::symlink_metadata(&path) {
+            if meta.file_type().is_symlink() {
+                eprintln!("Warning: credentials file is a symbolic link; ignoring for security.");
+                return None;
+            }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
         let content = fs::read_to_string(path).ok()?;
         serde_json::from_str(&content).ok()
     }
@@ -172,6 +185,20 @@ impl AuthManager {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create credentials directory: {}", e))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+            }
+        }
+
+        // Symlink check: refuse to write if destination exists as a symlink
+        if path.exists() {
+            let meta = fs::symlink_metadata(&path)
+                .map_err(|e| format!("Failed to inspect credentials path: {}", e))?;
+            if meta.file_type().is_symlink() {
+                return Err("Credentials path is a symlink, refusing to overwrite for security".to_string());
+            }
         }
 
         let creds = StoredCredentials {
@@ -183,7 +210,52 @@ impl AuthManager {
 
         let json = serde_json::to_string_pretty(&creds)
             .map_err(|e| format!("Failed to serialize credentials: {}", e))?;
-        fs::write(&path, json).map_err(|e| format!("Failed to write credentials: {}", e))?;
+
+        // Write atomically via temporary file
+        let tmp_path = path.with_extension(format!("tmp.{}", std::process::id()));
+
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp_path)
+                .map_err(|e| format!("Failed to open temp credentials file: {}", e))?;
+            file.write_all(json.as_bytes())
+                .map_err(|e| format!("Failed to write credentials: {}", e))?;
+            file.sync_all()
+                .map_err(|e| format!("Failed to sync credentials: {}", e))?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&tmp_path)
+                .map_err(|e| format!("Failed to open temp credentials file: {}", e))?;
+            file.write_all(json.as_bytes())
+                .map_err(|e| format!("Failed to write credentials: {}", e))?;
+            file.sync_all()
+                .map_err(|e| format!("Failed to sync credentials: {}", e))?;
+        }
+
+        fs::rename(&tmp_path, &path).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            format!("Failed to atomically commit credentials file: {}", e)
+        })?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
 
         Ok(())
     }
@@ -204,6 +276,8 @@ impl AuthManager {
         let Some(t) = token else {
             return AuthStatusResponse {
                 authenticated: false,
+                cloud_verified: false,
+                error_message: None,
                 org_slug: None,
                 user_email: None,
                 tier: None,
@@ -225,42 +299,92 @@ impl AuthManager {
             .build()
             .unwrap_or_default();
 
-        if let Ok(resp) = client
+        match client
             .get(&status_url)
             .header("Authorization", format!("Bearer {}", t))
             .send()
             .await
         {
-            if resp.status().is_success() {
-                if let Ok(info) = resp.json::<serde_json::Value>().await {
-                    let org_slug = info
-                        .get("org_slug")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    let user_email = info
-                        .get("user_email")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    let tier = info.get("tier").and_then(|v| v.as_str()).map(String::from);
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    if let Ok(info) = resp.json::<serde_json::Value>().await {
+                        let org_slug = info
+                            .get("org_slug")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let user_email = info
+                            .get("user_email")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let tier = info.get("tier").and_then(|v| v.as_str()).map(String::from);
 
+                        return AuthStatusResponse {
+                            authenticated: true,
+                            cloud_verified: true,
+                            error_message: None,
+                            org_slug,
+                            user_email,
+                            tier: tier.or_else(|| Some("Free".to_string())),
+                            token_prefix: Some(prefix),
+                        };
+                    }
+                } else if resp.status() == reqwest::StatusCode::UNAUTHORIZED
+                    || resp.status() == reqwest::StatusCode::FORBIDDEN
+                {
                     return AuthStatusResponse {
-                        authenticated: true,
-                        org_slug,
-                        user_email,
-                        tier: tier.or_else(|| Some("Free".to_string())),
+                        authenticated: false,
+                        cloud_verified: true,
+                        error_message: Some(format!(
+                            "Cloud API rejected credentials (HTTP {})",
+                            resp.status()
+                        )),
+                        org_slug: None,
+                        user_email: None,
+                        tier: None,
+                        token_prefix: Some(prefix),
+                    };
+                } else {
+                    let status_code = resp.status();
+                    let stored = Self::load_stored_credentials();
+                    return AuthStatusResponse {
+                        authenticated: false,
+                        cloud_verified: false,
+                        error_message: Some(format!(
+                            "Cloud status check returned HTTP {}",
+                            status_code
+                        )),
+                        org_slug: stored.as_ref().and_then(|s| s.org_slug.clone()),
+                        user_email: stored.as_ref().and_then(|s| s.user_email.clone()),
+                        tier: Some("Local (Unverified)".to_string()),
                         token_prefix: Some(prefix),
                     };
                 }
             }
+            Err(e) => {
+                let stored = Self::load_stored_credentials();
+                return AuthStatusResponse {
+                    authenticated: false,
+                    cloud_verified: false,
+                    error_message: Some(format!(
+                        "Cloud API unreachable ({}). Token exists locally but validity is unverified.",
+                        e
+                    )),
+                    org_slug: stored.as_ref().and_then(|s| s.org_slug.clone()),
+                    user_email: stored.as_ref().and_then(|s| s.user_email.clone()),
+                    tier: Some("Local (Offline)".to_string()),
+                    token_prefix: Some(prefix),
+                };
+            }
         }
 
-        // If cloud API is offline or unreachable, return local token verification
         let stored = Self::load_stored_credentials();
         AuthStatusResponse {
-            authenticated: true,
+            authenticated: false,
+            cloud_verified: false,
+            error_message: Some("Could not verify status with cloud API".to_string()),
             org_slug: stored.as_ref().and_then(|s| s.org_slug.clone()),
             user_email: stored.as_ref().and_then(|s| s.user_email.clone()),
-            tier: Some("Free / Local".to_string()),
+            tier: Some("Local".to_string()),
             token_prefix: Some(prefix),
         }
     }
@@ -488,9 +612,9 @@ impl AuthManager {
     /// Execute `vexa-sca auth status`
     pub async fn run_status(api_base_url: Option<&str>) -> Result<(), String> {
         let status = Self::check_status(api_base_url).await;
-        if status.authenticated {
+        if status.authenticated && status.cloud_verified {
             println!("{}", "Vexa SCA Authentication Status:".green().bold());
-            println!("  Status: {}", "Authenticated".green());
+            println!("  Status: {}", "Authenticated (Verified with Vexa Cloud)".green().bold());
             if let Some(prefix) = status.token_prefix {
                 println!("  Token: {}", prefix);
             }
@@ -504,6 +628,27 @@ impl AuthManager {
                 println!("  Plan Tier: {}", tier.bold());
             }
             println!("  Credentials: {}", Self::credentials_path().display());
+        } else if !status.cloud_verified && status.token_prefix.is_some() {
+            println!("{}", "Vexa SCA Authentication Status:".yellow().bold());
+            println!("  Status: {}", "Token Present (Cloud Offline / Unverified)".yellow().bold());
+            if let Some(prefix) = status.token_prefix {
+                println!("  Token: {}", prefix);
+            }
+            if let Some(org) = status.org_slug {
+                println!("  Organization: {}", org.cyan());
+            }
+            if let Some(msg) = status.error_message {
+                println!("  Notice: {}", msg.yellow());
+            }
+            println!("  Credentials: {}", Self::credentials_path().display());
+        } else if let Some(msg) = status.error_message {
+            println!("{}", "Vexa SCA Authentication Status:".red().bold());
+            println!("  Status: {}", "Authentication Rejected".red().bold());
+            println!("  Error: {}", msg.red());
+            println!(
+                "  Run '{}' to re-authenticate.",
+                "vexa-sca auth login".cyan().bold()
+            );
         } else {
             println!("{}", "Vexa SCA Authentication Status:".yellow().bold());
             println!("  Status: {}", "Unauthenticated (Local OSS Mode)".yellow());
