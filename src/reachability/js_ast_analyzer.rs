@@ -254,8 +254,12 @@ impl<'a> Visit<'a> for BindingCollector<'a> {
                 for spec in specifiers {
                     match spec {
                         ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
-                            self.bindings
-                                .insert(s.local.name.to_string(), "default".to_string());
+                            let kind = if let Some(sub) = extract_subpath_symbol(src) {
+                                format!("subpath:{}", sub)
+                            } else {
+                                "default".to_string()
+                            };
+                            self.bindings.insert(s.local.name.to_string(), kind);
                         }
                         ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
                             self.bindings
@@ -374,6 +378,13 @@ impl<'a> Visit<'a> for BindingCollector<'a> {
                                     &mut self.bindings,
                                     &mut self.named_imports,
                                 );
+                            } else if let Some(sub) = extract_subpath_symbol(pkg) {
+                                bind_pattern(
+                                    &decl.id,
+                                    &format!("subpath:{}", sub),
+                                    &mut self.bindings,
+                                    &mut self.named_imports,
+                                );
                             } else {
                                 bind_pattern(
                                     &decl.id,
@@ -424,7 +435,7 @@ impl<'a> Visit<'a> for BindingCollector<'a> {
     }
 
     fn visit_member_expression(&mut self, mem: &MemberExpression<'a>) {
-        if matches!(mem, MemberExpression::ComputedMemberExpression(_)) {
+        if is_dynamic_computed_member(mem, &self.bindings) {
             self.has_dynamic_construct = true;
         }
         walk::walk_member_expression(self, mem);
@@ -516,7 +527,7 @@ impl<'a, 'p> Visit<'a> for CallSiteChecker<'p> {
     }
 
     fn visit_member_expression(&mut self, mem: &MemberExpression<'a>) {
-        if matches!(mem, MemberExpression::ComputedMemberExpression(_)) {
+        if is_dynamic_computed_member(mem, self.bindings) {
             self.has_dynamic_construct = true;
         }
         walk::walk_member_expression(self, mem);
@@ -537,7 +548,9 @@ impl<'p> CallSiteChecker<'p> {
         // 1. Check member expression calls: `mod.fn(...)`, `mod.default.fn(...)`
         if let Some(mem) = call.callee.as_member_expression() {
             if matches!(mem, MemberExpression::ComputedMemberExpression(_)) {
-                self.has_dynamic_construct = true;
+                if is_dynamic_computed_member(mem, self.bindings) {
+                    self.has_dynamic_construct = true;
+                }
                 return;
             }
             if let Some(prop) = member_static_property_name(mem) {
@@ -548,11 +561,11 @@ impl<'p> CallSiteChecker<'p> {
                     self.match_and_record_member_call(base_name, prop, call.span.start as usize);
                     return;
                 }
-                // Check nested member base: `lodashModule.default.template(...)`
+                // Check nested member base: `lodashModule.default.template(...)` or `lodash.fp.merge(...)`
                 if let Some(inner_mem) = obj.as_member_expression() {
-                    if member_static_property_name(inner_mem) == Some("default") {
-                        if let Expression::Identifier(base_id) = member_object(inner_mem) {
-                            let base_name = base_id.name.as_str();
+                    if let Expression::Identifier(base_id) = member_object(inner_mem) {
+                        let base_name = base_id.name.as_str();
+                        if self.bindings.contains_key(base_name) {
                             self.match_and_record_member_call(
                                 base_name,
                                 prop,
@@ -561,19 +574,45 @@ impl<'p> CallSiteChecker<'p> {
                             return;
                         }
                     }
-                    self.has_dynamic_construct = true;
                     return;
                 }
             }
         }
 
-        // 2. Check direct named import calls: `template(...)`
+        // 2. Check direct import calls: `template(...)`, `minimist(...)`, `tpl(...)`
         if let Expression::Identifier(id) = &call.callee {
             let name = id.name.as_str();
             if name == "eval" {
                 self.has_dynamic_construct = true;
             }
-            if self.named_imports.contains(name) {
+            if let Some(binding_kind) = self.bindings.get(name) {
+                let resolved_sym = if let Some(orig) = binding_kind.strip_prefix("named:") {
+                    orig
+                } else if let Some(prop) = binding_kind.strip_prefix("member:") {
+                    prop
+                } else if let Some(sub) = binding_kind.strip_prefix("subpath:") {
+                    sub
+                } else {
+                    name
+                };
+                let pkg_base = self._pkg_name.rsplit('/').next().unwrap_or(self._pkg_name);
+                let matches = if let Some(targets) = self.target_functions {
+                    targets.iter().any(|t| {
+                        t == name
+                            || t == resolved_sym
+                            || t == binding_kind
+                            || ((binding_kind == "default" || binding_kind == "dyn")
+                                && (t == "default" || t == pkg_base || t == self._pkg_name))
+                    })
+                } else {
+                    true
+                };
+                if matches {
+                    let (line_idx, snippet) = span_to_line(id.span.start as usize, self.source);
+                    self.call_sites
+                        .push((line_idx + 1, snippet, resolved_sym.to_string(), true));
+                }
+            } else if self.named_imports.contains(name) {
                 let matches = if let Some(targets) = self.target_functions {
                     targets.iter().any(|t| t == name)
                 } else {
@@ -612,6 +651,56 @@ impl<'p> CallSiteChecker<'p> {
 }
 
 // ── AST Helpers ──────────────────────────────────────────────────────────────
+
+fn extract_subpath_symbol(src: &str) -> Option<&str> {
+    let clean = src.trim().trim_matches('\'').trim_matches('"');
+    if clean.starts_with('.') || clean.starts_with('/') {
+        return None;
+    }
+    let parts: Vec<&str> = clean.split('/').collect();
+    if clean.starts_with('@') {
+        if parts.len() > 2 {
+            parts.last().copied().filter(|s| !s.is_empty())
+        } else {
+            None
+        }
+    } else if parts.len() > 1 {
+        parts.last().copied().filter(|s| !s.is_empty())
+    } else {
+        None
+    }
+}
+
+fn is_dynamic_computed_member(
+    mem: &MemberExpression<'_>,
+    bindings: &HashMap<String, String>,
+) -> bool {
+    if let MemberExpression::ComputedMemberExpression(comp) = mem {
+        match &comp.object {
+            Expression::Identifier(id) => {
+                let name = id.name.as_str();
+                matches!(
+                    name,
+                    "globalThis" | "window" | "global" | "module" | "exports" | "require"
+                ) || bindings.contains_key(name)
+            }
+            _ => {
+                if let Some(inner) = comp.object.as_member_expression() {
+                    if let Expression::Identifier(id) = member_object(inner) {
+                        let name = id.name.as_str();
+                        return matches!(
+                            name,
+                            "globalThis" | "window" | "global" | "module" | "exports" | "require"
+                        ) || bindings.contains_key(name);
+                    }
+                }
+                false
+            }
+        }
+    } else {
+        false
+    }
+}
 
 fn member_static_property_name<'a>(mem: &'a MemberExpression<'a>) -> Option<&'a str> {
     match mem {

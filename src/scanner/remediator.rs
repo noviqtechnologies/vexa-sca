@@ -55,13 +55,47 @@ impl Remediator {
                 }
             });
 
+            // Helper: does `cand` resolve every vulnerability in `vulns` that has at least one valid fix > current?
+            let resolves_all = |cand_str: &str| -> bool {
+                let Some(cand) = clean_or_coerce_version(cand_str) else {
+                    return false;
+                };
+                for v in &vulns {
+                    let v_fixes: Vec<semver::Version> = v
+                        .fixed_in
+                        .iter()
+                        .filter_map(|f| clean_or_coerce_version(f))
+                        .filter(|fv| {
+                            current_semver
+                                .as_ref()
+                                .map(|cur| fv > cur)
+                                .unwrap_or(true)
+                        })
+                        .collect();
+                    if v_fixes.is_empty() {
+                        continue;
+                    }
+                    let same_major_fixes: Vec<&semver::Version> =
+                        v_fixes.iter().filter(|fv| fv.major == cand.major).collect();
+                    let resolved = if !same_major_fixes.is_empty() {
+                        same_major_fixes.iter().any(|fv| &cand >= *fv)
+                    } else {
+                        v_fixes.iter().any(|fv| cand >= *fv)
+                    };
+                    if !resolved {
+                        return false;
+                    }
+                }
+                true
+            };
+
             // Same-major preference per FR-020:
             let same_major_candidates: Vec<String> = if let Some(cur) = &current_semver {
                 valid_upgrades
                     .iter()
                     .filter(|v| {
                         if let Some(cand) = clean_or_coerce_version(v) {
-                            cand.major == cur.major
+                            cand.major == cur.major && resolves_all(v)
                         } else {
                             false
                         }
@@ -72,24 +106,39 @@ impl Remediator {
                 Vec::new()
             };
 
+            let all_resolving_candidates: Vec<String> = valid_upgrades
+                .iter()
+                .filter(|v| resolves_all(v))
+                .cloned()
+                .collect();
+
             let (target_version, is_major_bump) = if !same_major_candidates.is_empty() {
-                // Pick the upgrade within same major version to ensure all same-major vulns are addressed
-                (same_major_candidates.last().cloned(), false)
-            } else if let Some(highest) = valid_upgrades.last().cloned() {
+                // Pick the lowest same-major candidate that resolves all vulnerabilities
+                (same_major_candidates.first().cloned(), false)
+            } else if let Some(chosen) = all_resolving_candidates
+                .first()
+                .cloned()
+                .or_else(|| valid_upgrades.last().cloned())
+            {
                 let is_bump = if let (Some(cur), Some(cand)) =
-                    (&current_semver, clean_or_coerce_version(&highest))
+                    (&current_semver, clean_or_coerce_version(&chosen))
                 {
                     cand.major > cur.major
                 } else {
                     false
                 };
-                (Some(highest), is_bump)
+                (Some(chosen), is_bump)
             } else {
                 (None, false)
             };
 
             let (action_type, advice) = match &target_version {
                 Some(target) => {
+                    let go_target = if target.starts_with('v') {
+                        target.clone()
+                    } else {
+                        format!("v{}", target)
+                    };
                     if !is_transitive {
                         let bump_warning = if is_major_bump {
                             "[MAJOR UPGRADE WARNING - Breaking change risk; review release notes before applying] "
@@ -103,7 +152,7 @@ impl Remediator {
                             ),
                             "Go" => format!(
                                 "{}Upgrade direct dependency \"{}\" from {} to {} via 'go get {}@{}'.",
-                                bump_warning, sample.package, current_version, target, sample.package, target
+                                bump_warning, sample.package, current_version, target, sample.package, go_target
                             ),
                             "PyPI" => format!(
                                 "{}Upgrade direct dependency \"{}\" from {} to {} in requirements.txt or pyproject.toml.",
@@ -142,7 +191,7 @@ impl Remediator {
                             ),
                             "Go" => format!(
                                 "Transitive vulnerability introduced by {}. Update via 'go get {}@{}' in go.mod.",
-                                introducer_list, sample.package, target
+                                introducer_list, sample.package, go_target
                             ),
                             "PyPI" => format!(
                                 "Transitive vulnerability introduced by {}. Pin {}=={} in requirements or lockfile.",

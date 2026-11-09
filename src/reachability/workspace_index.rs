@@ -343,8 +343,11 @@ impl WorkspaceAstIndex {
         let mut call_sites: HashMap<(String, String), Vec<CallSite>> = HashMap::new();
         let lines: Vec<&str> = content.lines().collect();
 
-        let use_re = Regex::new(r"use\s+([a-zA-Z0-9_]+)(?:::([a-zA-Z0-9_{},\s\*]+))?;").unwrap();
-        let call_re = Regex::new(r"([a-zA-Z0-9_]+)::([a-zA-Z0-9_]+)(?:::<[^>]*>)?\s*\(").unwrap();
+        let use_re =
+            Regex::new(r"use\s+([a-zA-Z0-9_]+)(?:::([a-zA-Z0-9_:,\{\}\s\*]+))?;").unwrap();
+        let call_re =
+            Regex::new(r"([a-zA-Z0-9_]+)(?:::[a-zA-Z0-9_]+)*::([a-zA-Z0-9_]+)(?:::<[^>]*>)?\s*\(")
+                .unwrap();
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
@@ -353,15 +356,24 @@ impl WorkspaceAstIndex {
                     let crate_str = crate_name.as_str();
                     if crate_str != "crate"
                         && crate_str != "super"
+                        && crate_str != "self"
                         && crate_str != "std"
                         && crate_str != "core"
+                        && crate_str != "alloc"
                     {
                         let mut symbols = HashSet::new();
                         if let Some(syms) = cap.get(2) {
                             for s in syms.as_str().split(',') {
                                 let clean = s.trim().trim_matches('{').trim_matches('}').trim();
                                 if !clean.is_empty() {
-                                    symbols.insert(clean.to_string());
+                                    for part in clean.split(" as ") {
+                                        let leaf =
+                                            part.trim().rsplit("::").next().unwrap_or("").trim();
+                                        let leaf = leaf.trim_matches('{').trim_matches('}').trim();
+                                        if !leaf.is_empty() {
+                                            symbols.insert(leaf.to_string());
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -394,6 +406,27 @@ impl WorkspaceAstIndex {
                         matched_function: fn_str.to_string(),
                         is_specific_function_match: true,
                     };
+                    if crate_str != "crate"
+                        && crate_str != "super"
+                        && crate_str != "self"
+                        && crate_str != "std"
+                        && crate_str != "core"
+                        && crate_str != "alloc"
+                        && crate_str
+                            .chars()
+                            .next()
+                            .map(|ch| ch.is_ascii_lowercase())
+                            .unwrap_or(false)
+                    {
+                        external_imports
+                            .entry(crate_str.to_string())
+                            .or_default()
+                            .insert(fn_str.to_string());
+                        external_imports
+                            .entry(crate_str.replace('_', "-"))
+                            .or_default()
+                            .insert(fn_str.to_string());
+                    }
                     call_sites
                         .entry((crate_str.to_string(), fn_str.to_string()))
                         .or_default()
@@ -402,7 +435,21 @@ impl WorkspaceAstIndex {
                     call_sites
                         .entry((hyphenated, fn_str.to_string()))
                         .or_default()
-                        .push(site);
+                        .push(site.clone());
+
+                    // If `crate_str` is an imported type/module from an external crate (e.g. `TcpStream::connect`), attribute to that crate too
+                    for (ext_crate, syms) in &external_imports {
+                        if syms.contains(crate_str) {
+                            call_sites
+                                .entry((ext_crate.clone(), fn_str.to_string()))
+                                .or_default()
+                                .push(site.clone());
+                            call_sites
+                                .entry((ext_crate.clone(), crate_str.to_string()))
+                                .or_default()
+                                .push(site.clone());
+                        }
+                    }
                 }
             }
 
@@ -446,13 +493,16 @@ impl WorkspaceAstIndex {
     fn analyze_python_file(content: &str, rel_path: &str, is_test: bool) -> FileAstFacts {
         let mut external_imports: HashMap<String, HashSet<String>> = HashMap::new();
         let mut call_sites: HashMap<(String, String), Vec<CallSite>> = HashMap::new();
+        let mut module_aliases: HashMap<String, String> = HashMap::new();
+        let mut symbol_imports: HashMap<String, (String, String)> = HashMap::new();
         let lines: Vec<&str> = content.lines().collect();
 
         let import_re =
             Regex::new(r"^import\s+([a-zA-Z0-9_\.]+)(?:\s+as\s+([a-zA-Z0-9_]+))?").unwrap();
         let from_re =
-            Regex::new(r"^from\s+([a-zA-Z0-9_\.]+)\s+import\s+([a-zA-Z0-9_,\s\*]+)").unwrap();
+            Regex::new(r"^from\s+([a-zA-Z0-9_\.]+)\s+import\s+([a-zA-Z0-9_,\s\*\(\)]+)").unwrap();
         let call_re = Regex::new(r"([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*\(").unwrap();
+        let direct_call_re = Regex::new(r"\b([a-zA-Z0-9_]+)\s*\(").unwrap();
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
@@ -460,6 +510,12 @@ impl WorkspaceAstIndex {
                 if let Some(pkg) = cap.get(1) {
                     let base_pkg = pkg.as_str().split('.').next().unwrap_or(pkg.as_str());
                     let norm = normalize_python_pkg(base_pkg);
+                    let alias = cap
+                        .get(2)
+                        .map(|a| a.as_str().to_string())
+                        .unwrap_or_else(|| base_pkg.to_string());
+                    module_aliases.insert(alias, norm.clone());
+                    module_aliases.insert(base_pkg.to_string(), norm.clone());
                     external_imports
                         .entry(norm)
                         .or_default()
@@ -468,26 +524,39 @@ impl WorkspaceAstIndex {
             } else if let Some(cap) = from_re.captures(trimmed) {
                 if let Some(pkg) = cap.get(1) {
                     let base_pkg = pkg.as_str().split('.').next().unwrap_or(pkg.as_str());
-                    let norm = normalize_python_pkg(base_pkg);
-                    let mut syms = HashSet::new();
-                    if let Some(sym_list) = cap.get(2) {
-                        for s in sym_list.as_str().split(',') {
-                            let clean = s.trim();
-                            if !clean.is_empty() {
-                                syms.insert(clean.to_string());
+                    if !base_pkg.is_empty() {
+                        let norm = normalize_python_pkg(base_pkg);
+                        let mut syms = HashSet::new();
+                        if let Some(sym_list) = cap.get(2) {
+                            for s in sym_list.as_str().split(',') {
+                                let clean = s.trim().trim_matches('(').trim_matches(')').trim();
+                                if !clean.is_empty() {
+                                    let mut parts = clean.split(" as ");
+                                    let orig = parts.next().unwrap_or(clean).trim();
+                                    let local = parts.next().unwrap_or(orig).trim();
+                                    if !orig.is_empty() {
+                                        syms.insert(orig.to_string());
+                                        if orig != "*" && !local.is_empty() {
+                                            symbol_imports.insert(
+                                                local.to_string(),
+                                                (norm.clone(), orig.to_string()),
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         }
+                        if syms.is_empty() {
+                            syms.insert("*".to_string());
+                        }
+                        external_imports.entry(norm).or_default().extend(syms);
                     }
-                    if syms.is_empty() {
-                        syms.insert("*".to_string());
-                    }
-                    external_imports.entry(norm).or_default().extend(syms);
                 }
             }
 
             for cap in call_re.captures_iter(trimmed) {
                 if let (Some(m), Some(f)) = (cap.get(1), cap.get(2)) {
-                    let mod_name = normalize_python_pkg(m.as_str());
+                    let raw_mod = m.as_str();
                     let fn_name = f.as_str();
                     let site = CallSite {
                         file: rel_path.to_string(),
@@ -496,10 +565,50 @@ impl WorkspaceAstIndex {
                         matched_function: fn_name.to_string(),
                         is_specific_function_match: true,
                     };
-                    call_sites
-                        .entry((mod_name, fn_name.to_string()))
-                        .or_default()
-                        .push(site);
+                    if let Some((pkg_norm, orig_sym)) = symbol_imports.get(raw_mod) {
+                        call_sites
+                            .entry((pkg_norm.clone(), fn_name.to_string()))
+                            .or_default()
+                            .push(site.clone());
+                        call_sites
+                            .entry((pkg_norm.clone(), orig_sym.clone()))
+                            .or_default()
+                            .push(site);
+                    } else {
+                        let mod_name = module_aliases
+                            .get(raw_mod)
+                            .cloned()
+                            .unwrap_or_else(|| normalize_python_pkg(raw_mod));
+                        call_sites
+                            .entry((mod_name, fn_name.to_string()))
+                            .or_default()
+                            .push(site);
+                    }
+                }
+            }
+
+            if !trimmed.starts_with("import ")
+                && !trimmed.starts_with("from ")
+                && !trimmed.starts_with("def ")
+                && !trimmed.starts_with("class ")
+            {
+                for cap in direct_call_re.captures_iter(trimmed) {
+                    if let Some(fn_match) = cap.get(1) {
+                        let local_fn = fn_match.as_str();
+                        if let Some((pkg_norm, orig_sym)) = symbol_imports.get(local_fn) {
+                            let site = CallSite {
+                                file: rel_path.to_string(),
+                                line: idx + 1,
+                                code: trimmed.to_string(),
+                                matched_function: orig_sym.clone(),
+                                is_specific_function_match: true,
+                            };
+                            call_sites
+                                .entry((pkg_norm.clone(), orig_sym.clone()))
+                                .or_default()
+                                .push(site);
+                        }
+                    }
                 }
             }
         }
@@ -524,36 +633,77 @@ impl WorkspaceAstIndex {
     fn analyze_go_file(content: &str, rel_path: &str, is_test: bool) -> FileAstFacts {
         let mut external_imports: HashMap<String, HashSet<String>> = HashMap::new();
         let mut call_sites: HashMap<(String, String), Vec<CallSite>> = HashMap::new();
+        let mut alias_to_pkgs: HashMap<String, Vec<String>> = HashMap::new();
         let lines: Vec<&str> = content.lines().collect();
+
+        let import_spec_re =
+            Regex::new(r#"^(?:import\s+)?(?:([a-zA-Z0-9_]+)\s+)?"([^"]+)""#).unwrap();
+        let go_call_re = Regex::new(r"\b([a-zA-Z0-9_]+)\.([A-Za-z0-9_]+)\s*\(").unwrap();
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
-            if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.contains('/') {
-                let pkg = trimmed.trim_matches('"');
-                let pkg_name = pkg.split('/').next_back().unwrap_or(pkg);
-                external_imports
-                    .entry(pkg_name.to_string())
-                    .or_default()
-                    .insert("*".to_string());
-                external_imports
-                    .entry(pkg.to_string())
-                    .or_default()
-                    .insert("*".to_string());
+            if let Some(cap) = import_spec_re.captures(trimmed) {
+                if let Some(pkg_match) = cap.get(2) {
+                    let pkg = pkg_match.as_str();
+                    if pkg.contains('/') || pkg.contains('.') {
+                        let last_seg = pkg.split('/').next_back().unwrap_or(pkg);
+                        let local_alias = cap
+                            .get(1)
+                            .map(|a| a.as_str())
+                            .filter(|a| *a != "_" && *a != ".")
+                            .unwrap_or(last_seg);
+
+                        let mut pkg_variants = vec![last_seg.to_string(), pkg.to_string()];
+                        let parts: Vec<&str> = pkg.split('/').collect();
+                        for prefix_len in 2..parts.len() {
+                            pkg_variants.push(parts[..prefix_len].join("/"));
+                        }
+
+                        for variant in &pkg_variants {
+                            external_imports
+                                .entry(variant.clone())
+                                .or_default()
+                                .insert("*".to_string());
+                        }
+                        alias_to_pkgs
+                            .entry(local_alias.to_string())
+                            .or_default()
+                            .extend(pkg_variants);
+                    }
+                }
             }
 
-            for pkg in external_imports.keys() {
-                if line.contains(&format!("{}.", pkg)) {
-                    let site = CallSite {
-                        file: rel_path.to_string(),
-                        line: idx + 1,
-                        code: trimmed.to_string(),
-                        matched_function: "*".to_string(),
-                        is_specific_function_match: false,
-                    };
-                    call_sites
-                        .entry((pkg.clone(), "*".to_string()))
-                        .or_default()
-                        .push(site);
+            for cap in go_call_re.captures_iter(trimmed) {
+                if let (Some(alias_match), Some(fn_match)) = (cap.get(1), cap.get(2)) {
+                    let alias = alias_match.as_str();
+                    let fn_name = fn_match.as_str();
+                    if let Some(targets) = alias_to_pkgs.get(alias) {
+                        for pkg_key in targets {
+                            let specific_site = CallSite {
+                                file: rel_path.to_string(),
+                                line: idx + 1,
+                                code: trimmed.to_string(),
+                                matched_function: fn_name.to_string(),
+                                is_specific_function_match: true,
+                            };
+                            call_sites
+                                .entry((pkg_key.clone(), fn_name.to_string()))
+                                .or_default()
+                                .push(specific_site);
+
+                            let wildcard_site = CallSite {
+                                file: rel_path.to_string(),
+                                line: idx + 1,
+                                code: trimmed.to_string(),
+                                matched_function: "*".to_string(),
+                                is_specific_function_match: false,
+                            };
+                            call_sites
+                                .entry((pkg_key.clone(), "*".to_string()))
+                                .or_default()
+                                .push(wildcard_site);
+                        }
+                    }
                 }
             }
         }
@@ -575,39 +725,82 @@ impl WorkspaceAstIndex {
         let mut external_imports: HashMap<String, HashSet<String>> = HashMap::new();
         let mut call_sites: HashMap<(String, String), Vec<CallSite>> = HashMap::new();
         let lines: Vec<&str> = content.lines().collect();
+        let method_re = Regex::new(r"\.([a-zA-Z0-9_]+)\s*\(").unwrap();
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
             if trimmed.starts_with("import ") && trimmed.ends_with(';') {
                 let imp = trimmed
                     .trim_start_matches("import ")
+                    .trim_start_matches("static ")
                     .trim_end_matches(';')
                     .trim();
                 let parts: Vec<&str> = imp.split('.').collect();
-                if parts.len() >= 2 {
-                    let pkg = parts[parts.len() - 2];
+                if parts.len() >= 2 && parts[0] != "java" && parts[0] != "javax" {
                     let sym = parts[parts.len() - 1];
-                    external_imports
-                        .entry(pkg.to_string())
-                        .or_default()
-                        .insert(sym.to_string());
+                    let pkg_parts = &parts[..parts.len() - 1];
+                    let full_pkg = pkg_parts.join(".");
+
+                    let mut candidates = vec![full_pkg];
+                    for &seg in pkg_parts {
+                        if !matches!(seg, "org" | "com" | "net" | "io" | "apache" | "codehaus") {
+                            candidates.push(seg.to_string());
+                            candidates.push(format!("{}-core", seg));
+                            candidates.push(format!("{}-api", seg));
+                        }
+                    }
+                    for w in pkg_parts.windows(2) {
+                        if !matches!(w[0], "org" | "com" | "net" | "io") {
+                            candidates.push(format!("{}-{}", w[0], w[1]));
+                        }
+                    }
+
+                    for cand in candidates {
+                        external_imports
+                            .entry(cand)
+                            .or_default()
+                            .insert(sym.to_string());
+                    }
                 }
             }
 
-            for (pkg, syms) in &external_imports {
-                for sym in syms {
-                    if sym != "*" && line.contains(sym) {
-                        let site = CallSite {
-                            file: rel_path.to_string(),
-                            line: idx + 1,
-                            code: trimmed.to_string(),
-                            matched_function: sym.clone(),
-                            is_specific_function_match: true,
-                        };
-                        call_sites
-                            .entry((pkg.clone(), sym.clone()))
-                            .or_default()
-                            .push(site);
+            if !trimmed.starts_with("import ") && !trimmed.starts_with("package ") {
+                for (pkg, syms) in &external_imports {
+                    for sym in syms {
+                        if sym == "*" || line.contains(sym) {
+                            let site = CallSite {
+                                file: rel_path.to_string(),
+                                line: idx + 1,
+                                code: trimmed.to_string(),
+                                matched_function: sym.clone(),
+                                is_specific_function_match: sym != "*",
+                            };
+                            call_sites
+                                .entry((pkg.clone(), sym.clone()))
+                                .or_default()
+                                .push(site.clone());
+                            call_sites
+                                .entry((pkg.clone(), "*".to_string()))
+                                .or_default()
+                                .push(site);
+
+                            for cap in method_re.captures_iter(trimmed) {
+                                if let Some(m) = cap.get(1) {
+                                    let m_str = m.as_str();
+                                    let m_site = CallSite {
+                                        file: rel_path.to_string(),
+                                        line: idx + 1,
+                                        code: trimmed.to_string(),
+                                        matched_function: m_str.to_string(),
+                                        is_specific_function_match: true,
+                                    };
+                                    call_sites
+                                        .entry((pkg.clone(), m_str.to_string()))
+                                        .or_default()
+                                        .push(m_site);
+                                }
+                            }
+                        }
                     }
                 }
             }

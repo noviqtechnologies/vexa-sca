@@ -2080,8 +2080,23 @@ pub async fn run() {
                             );
                             let mut facts_val =
                                 serde_json::to_value(&facts).unwrap_or(serde_json::json!({}));
-                            if !facts_payload.code_findings.is_empty() {
-                                if let Some(obj) = facts_val.as_object_mut() {
+                            if let Some(obj) = facts_val.as_object_mut() {
+                                obj.insert(
+                                    "findings".to_string(),
+                                    serde_json::to_value(&facts_payload.findings)
+                                        .unwrap_or(serde_json::Value::Array(vec![])),
+                                );
+                                obj.insert(
+                                    "packages".to_string(),
+                                    serde_json::to_value(&facts_payload.packages)
+                                        .unwrap_or(serde_json::Value::Array(vec![])),
+                                );
+                                obj.insert(
+                                    "components".to_string(),
+                                    serde_json::to_value(&facts_payload.components)
+                                        .unwrap_or(serde_json::Value::Array(vec![])),
+                                );
+                                if !facts_payload.code_findings.is_empty() {
                                     obj.insert(
                                         "code_findings".to_string(),
                                         serde_json::to_value(&facts_payload.code_findings)
@@ -2550,8 +2565,23 @@ pub async fn run() {
                             );
                             let mut facts_val =
                                 serde_json::to_value(&facts).unwrap_or(serde_json::json!({}));
-                            if !facts_payload.code_findings.is_empty() {
-                                if let Some(obj) = facts_val.as_object_mut() {
+                            if let Some(obj) = facts_val.as_object_mut() {
+                                obj.insert(
+                                    "findings".to_string(),
+                                    serde_json::to_value(&facts_payload.findings)
+                                        .unwrap_or(serde_json::Value::Array(vec![])),
+                                );
+                                obj.insert(
+                                    "packages".to_string(),
+                                    serde_json::to_value(&facts_payload.packages)
+                                        .unwrap_or(serde_json::Value::Array(vec![])),
+                                );
+                                obj.insert(
+                                    "components".to_string(),
+                                    serde_json::to_value(&facts_payload.components)
+                                        .unwrap_or(serde_json::Value::Array(vec![])),
+                                );
+                                if !facts_payload.code_findings.is_empty() {
                                     obj.insert(
                                         "code_findings".to_string(),
                                         serde_json::to_value(&facts_payload.code_findings)

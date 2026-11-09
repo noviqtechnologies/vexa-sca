@@ -19,7 +19,7 @@ pub fn clean_or_coerce_version(v: &str) -> Option<Version> {
             return Some(ver);
         }
     }
-    if parts.len() == 1 {
+    if parts.len() == 1 && parts[0].len() <= 4 {
         let reconstructed = format!("{}.0.0", parts[0]);
         if let Ok(ver) = Version::parse(&reconstructed) {
             return Some(ver);
@@ -29,12 +29,59 @@ pub fn clean_or_coerce_version(v: &str) -> Option<Version> {
 }
 
 pub fn extract_fixed_versions(vuln: &Value) -> Vec<String> {
+    extract_fixed_versions_for_package(vuln, "", "")
+}
+
+pub fn extract_fixed_versions_for_package(
+    vuln: &Value,
+    pkg_name: &str,
+    ecosystem: &str,
+) -> Vec<String> {
     let mut fixes = BTreeSet::new();
+    let norm_pkg = pkg_name.trim().to_lowercase().replace('_', "-");
+    let norm_eco = match ecosystem.trim().to_lowercase().as_str() {
+        "cargo" | "crates.io" => "crates.io".to_string(),
+        "pip" | "pypi" => "pypi".to_string(),
+        "golang" | "go" => "go".to_string(),
+        other => other.to_string(),
+    };
 
     if let Some(affected_arr) = vuln.get("affected").and_then(|v| v.as_array()) {
         for aff in affected_arr {
+            if let Some(pkg_obj) = aff.get("package") {
+                if !norm_pkg.is_empty() {
+                    if let Some(aff_name) = pkg_obj.get("name").and_then(|n| n.as_str()) {
+                        let norm_aff_name = aff_name.trim().to_lowercase().replace('_', "-");
+                        if norm_aff_name != norm_pkg && !aff_name.eq_ignore_ascii_case(pkg_name) {
+                            continue;
+                        }
+                    }
+                }
+                if !norm_eco.is_empty() {
+                    if let Some(aff_eco) = pkg_obj.get("ecosystem").and_then(|e| e.as_str()) {
+                        let norm_aff_eco = match aff_eco.trim().to_lowercase().as_str() {
+                            "cargo" | "crates.io" => "crates.io".to_string(),
+                            "pip" | "pypi" => "pypi".to_string(),
+                            "golang" | "go" => "go".to_string(),
+                            other => other.to_string(),
+                        };
+                        if norm_aff_eco != norm_eco {
+                            continue;
+                        }
+                    }
+                }
+            }
+
             if let Some(ranges) = aff.get("ranges").and_then(|v| v.as_array()) {
                 for range in ranges {
+                    if range
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .map(|t| t.eq_ignore_ascii_case("GIT"))
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
                     if let Some(events) = range.get("events").and_then(|v| v.as_array()) {
                         for ev in events {
                             if let Some(fixed_str) = ev.get("fixed").and_then(|v| v.as_str()) {

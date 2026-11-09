@@ -62,7 +62,7 @@ inputs:
   version:
     description: 'Vexa SCA CLI binary version to execute'
     required: false
-    default: 'v1.3.4'
+    default: 'v1.3.5'
 
 runs:
   using: 'composite'

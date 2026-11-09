@@ -7,7 +7,7 @@ REPO="noviqtechnologies/vexa-sca"
 VERSION="${VERSION:-latest}"
 
 if [ "$VERSION" = "latest" ]; then
-    VERSION_TAG=$(curl -sSf "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || echo "v1.3.4")
+    VERSION_TAG=$(curl -sSf "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || echo "v1.3.5")
 else
     case "$VERSION" in
         v*) VERSION_TAG="$VERSION" ;;

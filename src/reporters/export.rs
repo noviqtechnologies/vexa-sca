@@ -544,7 +544,23 @@ pub fn generate_workspace_facts(
             let mut sorted_symbols: Vec<String> = symbols.into_iter().collect();
             sorted_symbols.sort();
 
-            let purl = format!("pkg:npm/{}", pkg_name);
+            let purl_prefix = match detection.graph.pkg_manager.name.to_lowercase().as_str() {
+                "npm" | "yarn" | "pnpm" => "pkg:npm/",
+                "crates.io" | "cargo" => "pkg:cargo/",
+                "pypi" | "pip" | "poetry" | "pipenv" => "pkg:pypi/",
+                "go" | "golang" => "pkg:golang/",
+                "maven" | "gradle" => "pkg:maven/",
+                _ => match detection.manifest_type.as_str().to_lowercase().as_str() {
+                    "cargo.lock" | "cargo.toml" => "pkg:cargo/",
+                    "requirements.txt" | "pipfile.lock" | "poetry.lock" | "pyproject.toml" => {
+                        "pkg:pypi/"
+                    }
+                    "go.mod" | "go.sum" => "pkg:golang/",
+                    "pom.xml" | "build.gradle" => "pkg:maven/",
+                    _ => "pkg:npm/",
+                },
+            };
+            let purl = format!("{}{}", purl_prefix, pkg_name);
             pkgs_map.insert(
                 purl,
                 crate::types::ImportedPackageFact {

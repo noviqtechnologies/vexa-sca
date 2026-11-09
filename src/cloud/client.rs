@@ -61,6 +61,8 @@ pub struct FactPackageItem {
     pub ecosystem: String,
     pub is_direct: bool,
     pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +74,20 @@ pub struct FactFindingItem {
     pub reachability: String,
     pub title: String,
     pub is_kev: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_in: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epss: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_site: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwe: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cvss_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub propagation_path: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,12 +134,28 @@ impl CloudClient {
                 direct_count += 1;
             }
 
+            let is_dev_only = dep_graph
+                .nodes
+                .values()
+                .filter(|n| n.pkg_id == pkg.id)
+                .all(|n| n.info.scope == "dev")
+                && dep_graph
+                    .nodes
+                    .values()
+                    .any(|n| n.pkg_id == pkg.id && n.info.scope == "dev");
+            let scope = if is_dev_only {
+                "dev".to_string()
+            } else {
+                "prod".to_string()
+            };
+
             fact_pkgs.push(FactPackageItem {
                 name: pkg.name.clone(),
                 version: pkg.version.clone(),
                 ecosystem: pkg.ecosystem.clone(),
                 is_direct,
-                scope: "prod".to_string(),
+                scope,
+                license: None,
             });
         }
 
@@ -145,6 +177,75 @@ impl CloudClient {
                 unreachable_count += 1;
             }
 
+            let fixed_in = if f.fixed_in.is_empty() {
+                None
+            } else if let Some(cur) = crate::core::semver_utils::clean_or_coerce_version(&f.version)
+            {
+                let mut valid_upgrades: Vec<String> = f
+                    .fixed_in
+                    .iter()
+                    .filter(|fix| {
+                        crate::core::semver_utils::clean_or_coerce_version(fix)
+                            .map(|v| v > cur)
+                            .unwrap_or(false)
+                    })
+                    .cloned()
+                    .collect();
+                valid_upgrades.sort_by(|a, b| {
+                    let va = crate::core::semver_utils::clean_or_coerce_version(a);
+                    let vb = crate::core::semver_utils::clean_or_coerce_version(b);
+                    match (va, vb) {
+                        (Some(x), Some(y)) => x.cmp(&y),
+                        _ => a.cmp(b),
+                    }
+                });
+                let same_major = valid_upgrades.iter().find(|fix| {
+                    crate::core::semver_utils::clean_or_coerce_version(fix)
+                        .map(|v| v.major == cur.major)
+                        .unwrap_or(false)
+                });
+                same_major
+                    .cloned()
+                    .or_else(|| valid_upgrades.first().cloned())
+                    .or_else(|| f.fixed_in.last().cloned())
+            } else {
+                f.fixed_in.last().cloned()
+            };
+
+            let epss = f.epss.as_ref().and_then(|e| {
+                if e.source != crate::types::EpssSource::Unavailable {
+                    Some(e.score)
+                } else {
+                    None
+                }
+            });
+
+            let call_site = f.reachability.as_ref().and_then(|r| {
+                r.call_sites
+                    .first()
+                    .map(|cs| format!("{}:{} ({})", cs.file, cs.line, cs.matched_function))
+            });
+
+            let cwe = f
+                .cwe_ids
+                .first()
+                .cloned()
+                .or_else(|| f.cwes.first().cloned());
+
+            let cvss_score = if f.severity.score > 0.0 {
+                Some(f.severity.score)
+            } else {
+                None
+            };
+
+            let scope = Some(if f.is_transitive {
+                "transitive".to_string()
+            } else {
+                "direct".to_string()
+            });
+
+            let propagation_path = f.paths.first().cloned().unwrap_or_default();
+
             fact_findings.push(FactFindingItem {
                 id: f.id.clone(),
                 package_name: f.package.clone(),
@@ -153,16 +254,26 @@ impl CloudClient {
                 reachability: reach_str,
                 title: f.title.clone(),
                 is_kev: f.is_kev,
+                fixed_in,
+                epss,
+                call_site,
+                cwe,
+                cvss_score,
+                scope,
+                propagation_path,
             });
         }
 
         let mut code_findings = Vec::new();
         let mut sast_count = 0usize;
         let mut secret_count = 0usize;
+        let mut sc_count = 0usize;
 
         for cf in &result.code_findings {
             if cf.category == "SECRET" {
                 secret_count += 1;
+            } else if cf.category == "SUPPLY_CHAIN" {
+                sc_count += 1;
             } else {
                 sast_count += 1;
             }
@@ -185,13 +296,40 @@ impl CloudClient {
             });
         }
 
+        for sc in &result.supply_chain_findings {
+            sc_count += 1;
+            code_findings.push(FactCodeFindingItem {
+                rule_id: sc.rule_id.clone(),
+                category: "SUPPLY_CHAIN".to_string(),
+                severity: sc.severity.as_str().to_string(),
+                title: sc.message.clone(),
+                cwe: None,
+                file_path: sc
+                    .file_path
+                    .as_deref()
+                    .map(|p| {
+                        crate::scanner::sast::normalize_workspace_relative_path(
+                            Path::new(""),
+                            Path::new(p),
+                        )
+                    })
+                    .unwrap_or_else(|| "package.json".to_string()),
+                line: sc.line.unwrap_or(1),
+                matched_sink: sc
+                    .snippet
+                    .as_deref()
+                    .map(crate::scanner::sast::sanitize_sink_signature),
+                remediation: Some(format!("Review supply chain signal '{}'", sc.signal_name)),
+            });
+        }
+
         let mut components = vec![FactComponentItem {
             id: "vexa-sca-engine".to_string(),
             name: "Vexa Dependency & Reachability Engine".to_string(),
             status: "COMPLETED".to_string(),
             findings_count: fact_findings.len(),
         }];
-        if sast_count > 0 || !result.code_findings.is_empty() {
+        if sast_count > 0 {
             components.push(FactComponentItem {
                 id: "vexa-sast-engine".to_string(),
                 name: "Vexa Multi-Language SAST Engine".to_string(),
@@ -205,6 +343,14 @@ impl CloudClient {
                 name: "Vexa Zero-Leak Secret Scanner".to_string(),
                 status: "COMPLETED".to_string(),
                 findings_count: secret_count,
+            });
+        }
+        if sc_count > 0 {
+            components.push(FactComponentItem {
+                id: "vexa-supply-chain-engine".to_string(),
+                name: "Vexa Supply Chain Heuristics Engine".to_string(),
+                status: "COMPLETED".to_string(),
+                findings_count: sc_count,
             });
         }
 

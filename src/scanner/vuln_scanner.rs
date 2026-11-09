@@ -1,5 +1,7 @@
 use crate::core::dep_graph::DepGraph;
-use crate::core::semver_utils::extract_fixed_versions;
+use crate::core::semver_utils::{
+    clean_or_coerce_version, extract_fixed_versions_for_package,
+};
 use crate::scanner::cache::VulnCache;
 use crate::scanner::epss::EpssResolver;
 use crate::types::{
@@ -780,6 +782,8 @@ impl VulnScanner {
                             score = Some(num);
                         } else if let Some(computed) = self.calculate_cvss_v3_score(sc) {
                             score = Some(computed);
+                        } else if let Some(computed_v4) = self.calculate_cvss_v4_score(sc) {
+                            score = Some(computed_v4);
                         } else {
                             score = self.estimate_score_from_cvss(sc);
                         }
@@ -942,7 +946,157 @@ impl VulnScanner {
             (impact + exploitability).min(10.0)
         };
 
-        let rounded = (raw_score * 10.0).ceil() / 10.0;
+        let int_input = (raw_score * 100_000.0).round() as i64;
+        let rounded = if int_input % 10_000 == 0 {
+            (int_input as f64) / 100_000.0
+        } else {
+            ((int_input / 10_000 + 1) as f64) / 10.0
+        };
+        Some(rounded)
+    }
+
+    /// Calculates CVSS v4.0 score from a vector string (e.g., CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N)
+    fn calculate_cvss_v4_score(&self, vector: &str) -> Option<f64> {
+        let mut av: Option<f64> = None;
+        let mut ac: Option<f64> = None;
+        let mut at: f64 = 1.0;
+        let mut pr: Option<&str> = None;
+        let mut ui: Option<f64> = None;
+        let mut vc: Option<f64> = None;
+        let mut vi: Option<f64> = None;
+        let mut va: Option<f64> = None;
+        let mut sc: f64 = 0.0;
+        let mut si: f64 = 0.0;
+        let mut sa: f64 = 0.0;
+
+        for part in vector.split('/') {
+            let mut kv = part.split(':');
+            let k = kv.next().unwrap_or("").trim();
+            let v = kv.next().unwrap_or("").trim();
+            match k {
+                "AV" => {
+                    av = match v {
+                        "N" => Some(0.85),
+                        "A" => Some(0.62),
+                        "L" => Some(0.55),
+                        "P" => Some(0.20),
+                        _ => None,
+                    }
+                }
+                "AC" => {
+                    ac = match v {
+                        "L" => Some(0.77),
+                        "H" => Some(0.44),
+                        _ => None,
+                    }
+                }
+                "AT" => {
+                    at = match v {
+                        "N" => 1.0,
+                        "P" => 0.85,
+                        _ => return None,
+                    }
+                }
+                "PR" => pr = Some(v),
+                "UI" => {
+                    ui = match v {
+                        "N" => Some(0.85),
+                        "P" => Some(0.70),
+                        "A" => Some(0.55),
+                        _ => None,
+                    }
+                }
+                "VC" => {
+                    vc = match v {
+                        "H" => Some(0.56),
+                        "L" => Some(0.22),
+                        "N" => Some(0.0),
+                        _ => None,
+                    }
+                }
+                "VI" => {
+                    vi = match v {
+                        "H" => Some(0.56),
+                        "L" => Some(0.22),
+                        "N" => Some(0.0),
+                        _ => None,
+                    }
+                }
+                "VA" => {
+                    va = match v {
+                        "H" => Some(0.56),
+                        "L" => Some(0.22),
+                        "N" => Some(0.0),
+                        _ => None,
+                    }
+                }
+                "SC" => {
+                    sc = match v {
+                        "H" => 0.56,
+                        "L" => 0.22,
+                        _ => 0.0,
+                    }
+                }
+                "SI" => {
+                    si = match v {
+                        "H" => 0.56,
+                        "L" => 0.22,
+                        _ => 0.0,
+                    }
+                }
+                "SA" => {
+                    sa = match v {
+                        "H" => 0.56,
+                        "L" => 0.22,
+                        _ => 0.0,
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let s_changed = sc > 0.0 || si > 0.0 || sa > 0.0;
+        let pr_val = match (pr?, s_changed) {
+            ("N", _) => 0.85,
+            ("L", false) => 0.62,
+            ("L", true) => 0.68,
+            ("H", false) => 0.27,
+            ("H", true) => 0.50,
+            _ => return None,
+        };
+
+        let av = av?;
+        let ac = ac?;
+        let ui = ui?;
+        let c = vc?.max(sc * 0.85);
+        let i = vi?.max(si * 0.85);
+        let a = va?.max(sa * 0.85);
+
+        let iss = 1.0 - ((1.0 - c) * (1.0 - i) * (1.0 - a));
+        if iss <= 0.0 {
+            return Some(0.0);
+        }
+
+        let impact = if s_changed {
+            7.52 * (iss - 0.029) - 3.25 * (iss - 0.02).powi(15)
+        } else {
+            6.42 * iss
+        };
+
+        let exploitability = 8.22 * av * ac * at * pr_val * ui;
+
+        let raw_score = if s_changed {
+            (1.08 * (impact + exploitability)).min(10.0)
+        } else {
+            (impact + exploitability).min(10.0)
+        };
+
+        let int_input = (raw_score * 100_000.0).round() as i64;
+        let rounded = if int_input % 10_000 == 0 {
+            (int_input as f64) / 100_000.0
+        } else {
+            ((int_input / 10_000 + 1) as f64) / 10.0
+        };
         Some(rounded)
     }
 
@@ -1204,12 +1358,19 @@ impl VulnScanner {
         // 4. Extract union of fixed versions
         let mut fixed_in_set = HashSet::new();
         for adv in cluster {
-            for f in extract_fixed_versions(adv) {
+            for f in extract_fixed_versions_for_package(adv, &pkg.name, &pkg.ecosystem) {
                 fixed_in_set.insert(f);
             }
         }
         let mut fixed_in: Vec<String> = fixed_in_set.into_iter().collect();
-        fixed_in.sort();
+        fixed_in.sort_by(|a, b| {
+            let va = clean_or_coerce_version(a);
+            let vb = clean_or_coerce_version(b);
+            match (va, vb) {
+                (Some(x), Some(y)) => x.cmp(&y),
+                _ => a.cmp(b),
+            }
+        });
 
         // 5. Extract union of CWEs
         let mut cwe_set = HashSet::new();

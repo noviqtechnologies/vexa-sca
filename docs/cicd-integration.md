@@ -1,4 +1,4 @@
-# Vexa SCA CI/CD Integration Guide (GA v1.3.4)
+# Vexa SCA CI/CD Integration Guide (GA v1.3.5)
 
 ## Scope and Status
 
@@ -121,7 +121,7 @@ jobs:
       - name: Build and install Vexa SCA CLI
         run: |
           # Build scanner in /tmp to prevent workspace collisions with target Cargo.toml
-          git clone --depth 1 --branch v1.3.4 https://github.com/noviqtechnologies/vexa-sca.git /tmp/vexa-sca
+          git clone --depth 1 --branch v1.3.5 https://github.com/noviqtechnologies/vexa-sca.git /tmp/vexa-sca
           cargo build --locked --release --manifest-path /tmp/vexa-sca/Cargo.toml
           sudo cp /tmp/vexa-sca/target/release/vexa-sca /usr/local/bin/vexa-sca
           rm -rf /tmp/vexa-sca
@@ -166,7 +166,7 @@ vexa-sca-scan:
   stage: test
   image: rust:1.82.0-slim
   script:
-    - git clone --depth 1 --branch v1.3.4 https://github.com/noviqtechnologies/vexa-sca.git /tmp/vexa-sca
+    - git clone --depth 1 --branch v1.3.5 https://github.com/noviqtechnologies/vexa-sca.git /tmp/vexa-sca
     - cargo build --locked --release --manifest-path /tmp/vexa-sca/Cargo.toml
     - cp /tmp/vexa-sca/target/release/vexa-sca /usr/local/bin/vexa-sca
     - rm -rf /tmp/vexa-sca

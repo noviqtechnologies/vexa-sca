@@ -285,8 +285,7 @@ impl ReachabilityEngine {
             } else {
                 None
             }
-        })
-        .or_else(|| self.infer_functions_from_details(vuln));
+        });
 
         let raw_pkg = if let Some(idx) = vuln.package.find(':') {
             &vuln.package[idx + 1..]
@@ -538,15 +537,8 @@ impl ReachabilityEngine {
         true
     }
 
-    fn infer_functions_from_details(&self, vuln: &VulnerabilityFinding) -> Option<Vec<String>> {
-        let text = format!("{} {}", vuln.title, vuln.details.as_deref().unwrap_or(""));
-        let re =
-            Regex::new(r"(?i)`?_?\.([a-zA-Z0-9_]+)`?\s+function|function\s+`?([a-zA-Z0-9_]+)`?")
-                .ok()?;
-        if let Some(cap) = re.captures(&text) {
-            let name = cap.get(1).or_else(|| cap.get(2))?.as_str();
-            return Some(vec![name.to_string()]);
-        }
+    #[allow(dead_code)]
+    fn infer_functions_from_details(&self, _vuln: &VulnerabilityFinding) -> Option<Vec<String>> {
         None
     }
 
