@@ -107,14 +107,10 @@ async fn scan_project_with_code_security(
                 std::path::Path::new(""),
                 std::path::Path::new(sc_file),
             );
-            if (sc.rule_id == "SC-004" || sc.rule_id == "SC-003")
+            let is_dup = (sc.rule_id == "SC-004" || sc.rule_id == "SC-003")
                 && (sast_locs.contains(&(sc_file.to_string(), sc_line))
-                    || sast_locs.contains(&(normalized_sc_file, sc_line)))
-            {
-                false
-            } else {
-                true
-            }
+                    || sast_locs.contains(&(normalized_sc_file, sc_line)));
+            !is_dup
         });
 
         output.scan_result.code_findings.extend(sast_findings);

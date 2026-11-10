@@ -602,13 +602,14 @@ impl SastScanner {
     fn detect_xss(ext: &str, line: &str) -> Option<(&'static str, &'static str)> {
         if matches!(ext, "js" | "jsx" | "ts" | "tsx") {
             let lower = line.to_lowercase();
-            if line.contains("dangerouslySetInnerHTML") {
-                if !line.contains("DOMPurify.sanitize") && !line.contains("dompurify") {
-                    return Some((
-                        "dangerouslySetInnerHTML={{ __html: ... }}",
-                        "Sanitize HTML with DOMPurify before rendering or use standard React text nodes.",
-                    ));
-                }
+            if line.contains("dangerouslySetInnerHTML")
+                && !line.contains("DOMPurify.sanitize")
+                && !line.contains("dompurify")
+            {
+                return Some((
+                    "dangerouslySetInnerHTML={{ __html: ... }}",
+                    "Sanitize HTML with DOMPurify before rendering or use standard React text nodes.",
+                ));
             }
             if line.contains(".innerHTML =") || line.contains(".innerHTML=") {
                 let rhs = line.split(".innerHTML").nth(1).unwrap_or("").trim();

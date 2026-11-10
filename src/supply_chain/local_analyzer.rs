@@ -698,19 +698,15 @@ impl LocalSupplyChainAnalyzer {
                 continue;
             }
 
-            if trimmed.starts_with("\"\"\"") {
-                if trimmed.len() > 3 && trimmed[3..].contains("\"\"\"") {
-                    // Single-line triple quote docstring
-                } else {
+            if let Some(stripped) = trimmed.strip_prefix("\"\"\"") {
+                if !stripped.contains("\"\"\"") {
                     in_docstring = true;
                 }
                 continue;
             }
 
-            if trimmed.starts_with("'''") {
-                if trimmed.len() > 3 && trimmed[3..].contains("'''") {
-                    // Single-line triple quote docstring
-                } else {
+            if let Some(stripped) = trimmed.strip_prefix("'''") {
+                if !stripped.contains("'''") {
                     in_docstring = true;
                 }
                 continue;
