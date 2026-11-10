@@ -93,6 +93,30 @@ async fn scan_project_with_code_security(
 
     if run_sast {
         let sast_findings = crate::scanner::sast::SastScanner::scan_workspace(path);
+        // Suppress overlapping generic supply chain findings (SC-004 child process, SC-003 eval)
+        // on the exact same file and line where a specialized SAST rule (VEXA-SAST-001/002) has fired.
+        let sast_locs: std::collections::HashSet<(String, usize)> = sast_findings
+            .iter()
+            .map(|f| (f.file_path.clone(), f.line))
+            .collect();
+
+        output.scan_result.supply_chain_findings.retain(|sc| {
+            let sc_file = sc.file_path.as_deref().unwrap_or("");
+            let sc_line = sc.line.unwrap_or(0);
+            let normalized_sc_file = crate::scanner::sast::normalize_workspace_relative_path(
+                std::path::Path::new(""),
+                std::path::Path::new(sc_file),
+            );
+            if (sc.rule_id == "SC-004" || sc.rule_id == "SC-003")
+                && (sast_locs.contains(&(sc_file.to_string(), sc_line))
+                    || sast_locs.contains(&(normalized_sc_file, sc_line)))
+            {
+                false
+            } else {
+                true
+            }
+        });
+
         output.scan_result.code_findings.extend(sast_findings);
     }
     if run_secrets {

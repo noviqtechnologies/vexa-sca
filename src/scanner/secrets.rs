@@ -43,16 +43,20 @@ impl SecretScanner {
     pub fn scan_workspace(workspace_root: &Path) -> Vec<CodeFinding> {
         let rules = Self::build_rules();
         let mut findings = Vec::new();
-        Self::walk_dir(workspace_root, workspace_root, &rules, &mut findings);
+        Self::walk_dir(workspace_root, workspace_root, 0, &rules, &mut findings);
         findings
     }
 
     fn walk_dir(
         root: &Path,
         current: &Path,
+        depth: usize,
         rules: &[SecretRule],
         findings: &mut Vec<CodeFinding>,
     ) {
+        if depth > 8 {
+            return;
+        }
         let entries = match fs::read_dir(current) {
             Ok(e) => e,
             Err(_) => return,
@@ -66,7 +70,7 @@ impl SecretScanner {
                 if Self::should_skip_dir(&file_name) {
                     continue;
                 }
-                Self::walk_dir(root, &path, rules, findings);
+                Self::walk_dir(root, &path, depth + 1, rules, findings);
             } else if path.is_file() {
                 if Self::should_skip_file(&file_name) {
                     continue;
@@ -85,45 +89,83 @@ impl SecretScanner {
     }
 
     fn should_skip_dir(dir_name: &str) -> bool {
+        if dir_name.starts_with('.') {
+            return true;
+        }
+        let lower = dir_name.to_ascii_lowercase();
         matches!(
-            dir_name,
-            ".git"
-                | "node_modules"
+            lower.as_str(),
+            "node_modules"
                 | "target"
                 | "dist"
                 | "build"
-                | ".next"
                 | "vendor"
                 | "__pycache__"
-                | ".venv"
                 | "venv"
-                | ".idea"
-                | ".vscode"
+                | "__tests__"
+                | "test"
+                | "tests"
+                | "testdata"
+                | "fixtures"
+                | "mock"
+                | "mocks"
+                | "e2e"
+                | "cypress"
         )
     }
 
     fn should_skip_file(file_name: &str) -> bool {
         let lower = file_name.to_ascii_lowercase();
-        lower.ends_with(".lock")
+        if lower.ends_with(".lock")
             || lower == "package-lock.json"
             || lower == "pnpm-lock.yaml"
             || lower == "cargo.lock"
             || lower == "go.sum"
             || lower == ".vexa.facts.json"
-            || lower.ends_with(".min.js")
-            || lower.ends_with(".png")
-            || lower.ends_with(".jpg")
-            || lower.ends_with(".jpeg")
-            || lower.ends_with(".gif")
-            || lower.ends_with(".ico")
-            || lower.ends_with(".woff")
-            || lower.ends_with(".woff2")
-            || lower.ends_with(".ttf")
-            || lower.ends_with(".exe")
-            || lower.ends_with(".dll")
-            || lower.ends_with(".so")
-            || lower.ends_with(".dylib")
-            || lower.ends_with(".wasm")
+            || lower.ends_with(".test.ts")
+            || lower.ends_with(".test.tsx")
+            || lower.ends_with(".test.js")
+            || lower.ends_with(".test.jsx")
+            || lower.ends_with(".spec.ts")
+            || lower.ends_with(".spec.tsx")
+            || lower.ends_with(".spec.js")
+            || lower.ends_with(".spec.jsx")
+            || lower.ends_with("_test.go")
+            || lower.ends_with("_test.py")
+            || lower.starts_with("test_")
+        {
+            return true;
+        }
+
+        let ext = Path::new(file_name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        let is_supported = matches!(
+            ext.as_str(),
+            "py" | "js"
+                | "jsx"
+                | "ts"
+                | "tsx"
+                | "mjs"
+                | "cjs"
+                | "go"
+                | "rs"
+                | "java"
+                | "json"
+                | "yaml"
+                | "yml"
+                | "toml"
+                | "env"
+                | "conf"
+                | "cfg"
+                | "ini"
+                | "pem"
+                | "key"
+        );
+        !is_supported
     }
 
     fn scan_file_content(
@@ -132,14 +174,46 @@ impl SecretScanner {
         rules: &[SecretRule],
         findings: &mut Vec<CodeFinding>,
     ) {
+        let has_pem_end = content.contains("-----END ");
+
         for (idx, line) in content.lines().enumerate() {
             let line_no = idx + 1;
             let trimmed = line.trim();
-            if trimmed.is_empty() {
+            if trimmed.is_empty()
+                || trimmed.starts_with("//")
+                || trimmed.starts_with("/*")
+                || trimmed.starts_with('*')
+                || trimmed.starts_with('#')
+            {
+                continue;
+            }
+
+            let lower_trimmed = trimmed.to_ascii_lowercase();
+            // Skip regex definitions (e.g. const R_PEM = /-----BEGIN.../)
+            if trimmed.starts_with('/')
+                || trimmed.contains("= /")
+                || trimmed.contains(": /")
+                || trimmed.contains("RegExp(")
+            {
+                continue;
+            }
+            // Skip UI form placeholders, example comments, and mock hints
+            let is_placeholder = lower_trimmed.contains("placeholder")
+                || lower_trimmed.starts_with("// example")
+                || lower_trimmed.starts_with("# example")
+                || lower_trimmed.contains("example:")
+                || lower_trimmed.contains("sample_secret")
+                || lower_trimmed.contains("fake_secret");
+            if is_placeholder {
                 continue;
             }
 
             for rule in rules {
+                // If checking for cryptographic private keys, require that the file actually contains a complete PEM block
+                if rule.rule_id == "VEXA-SEC-004" && !has_pem_end {
+                    continue;
+                }
+
                 if let Some(mat) = rule.pattern.find(trimmed) {
                     let masked = mask_secret(mat.as_str());
                     findings.push(CodeFinding {

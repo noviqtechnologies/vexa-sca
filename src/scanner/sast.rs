@@ -93,6 +93,7 @@ impl SastScanner {
             let path = entry.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if path.is_dir() {
+                let lower = name.to_ascii_lowercase();
                 if name.starts_with('.')
                     || name == "node_modules"
                     || name == "target"
@@ -102,6 +103,15 @@ impl SastScanner {
                     || name == "__pycache__"
                     || name == "venv"
                     || name == ".venv"
+                    || lower == "__tests__"
+                    || lower == "testdata"
+                    || lower == "fixtures"
+                    || lower == "test"
+                    || lower == "tests"
+                    || lower == "e2e"
+                    || lower == "cypress"
+                    || lower == "mock"
+                    || lower == "mocks"
                 {
                     continue;
                 }
@@ -113,6 +123,28 @@ impl SastScanner {
     }
 
     pub fn scan_file(root: &Path, file_path: &Path, findings: &mut Vec<CodeFinding>) {
+        let file_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        // Skip test files, spec files, and mock harnesses to eliminate test false positives
+        if file_name.ends_with(".test.ts")
+            || file_name.ends_with(".test.tsx")
+            || file_name.ends_with(".test.js")
+            || file_name.ends_with(".test.jsx")
+            || file_name.ends_with(".spec.ts")
+            || file_name.ends_with(".spec.tsx")
+            || file_name.ends_with(".spec.js")
+            || file_name.ends_with(".spec.jsx")
+            || file_name.ends_with("_test.go")
+            || file_name.ends_with("_test.py")
+            || file_name.starts_with("test_")
+        {
+            return;
+        }
+
         let ext = file_path
             .extension()
             .and_then(|e| e.to_str())
@@ -349,7 +381,18 @@ impl SastScanner {
                     || line.contains("shell:true")
                     || line.contains("shell: 1"));
 
-            if (has_exec_call && !is_pure_decl) || is_spawn_shell {
+            // Suppress benign static literal shell commands with no dynamic variables or interpolation
+            let is_static_literal = (line.contains("exec('")
+                || line.contains("exec(\"")
+                || line.contains("execSync('")
+                || line.contains("execSync(\""))
+                && !line.contains("${")
+                && !line.contains(" + ")
+                && !line.contains('+')
+                && !line.contains(".concat(")
+                && (line.contains("')") || line.contains("\")"));
+
+            if (has_exec_call && !is_pure_decl && !is_static_literal) || is_spawn_shell {
                 return Some((
                     "child_process.exec(...)",
                     "Use child_process.execFile() or spawn() with an argument array instead of invoking a shell.",
@@ -521,12 +564,15 @@ impl SastScanner {
                 let has_untrusted = line.contains("req.query")
                     || line.contains("req.params")
                     || line.contains("req.body")
-                    || line.contains("${")
-                    || line.contains('+')
-                    || lower.contains("userinput")
-                    || lower.contains("filepath")
-                    || lower.contains("filename")
-                    || lower.contains("user_input");
+                    || line.contains("request.query")
+                    || line.contains("request.params")
+                    || line.contains("request.body")
+                    || line.contains("ctx.query")
+                    || line.contains("ctx.params")
+                    || line.contains("ctx.request")
+                    || line.contains("userInput")
+                    || line.contains("user_input")
+                    || line.contains("user_path");
 
                 if has_untrusted {
                     return Some((
@@ -557,16 +603,34 @@ impl SastScanner {
         if matches!(ext, "js" | "jsx" | "ts" | "tsx") {
             let lower = line.to_lowercase();
             if line.contains("dangerouslySetInnerHTML") {
-                return Some((
-                    "dangerouslySetInnerHTML={{ __html: ... }}",
-                    "Sanitize HTML with DOMPurify before rendering or use standard React text nodes.",
-                ));
+                if !line.contains("DOMPurify.sanitize") && !line.contains("dompurify") {
+                    return Some((
+                        "dangerouslySetInnerHTML={{ __html: ... }}",
+                        "Sanitize HTML with DOMPurify before rendering or use standard React text nodes.",
+                    ));
+                }
             }
             if line.contains(".innerHTML =") || line.contains(".innerHTML=") {
-                return Some((
-                    "element.innerHTML = ...",
-                    "Use element.textContent instead of innerHTML when rendering untrusted input.",
-                ));
+                let rhs = line.split(".innerHTML").nth(1).unwrap_or("").trim();
+                let rhs_clean = rhs.trim_start_matches('=').trim().trim_end_matches(';');
+                let is_safe_reset = rhs_clean == "''"
+                    || rhs_clean == "\"\""
+                    || rhs_clean == "null"
+                    || rhs_clean == "undefined"
+                    || rhs_clean == "``";
+                let is_pure_static_str = (rhs_clean.starts_with('\'')
+                    && rhs_clean.ends_with('\'')
+                    && !rhs_clean.contains("${"))
+                    || (rhs_clean.starts_with('"')
+                        && rhs_clean.ends_with('"')
+                        && !rhs_clean.contains("${"));
+
+                if !is_safe_reset && !is_pure_static_str {
+                    return Some((
+                        "element.innerHTML = ...",
+                        "Use element.textContent instead of innerHTML when rendering untrusted input.",
+                    ));
+                }
             }
             if line.contains("document.write(") || line.contains("document.writeln(") {
                 return Some((

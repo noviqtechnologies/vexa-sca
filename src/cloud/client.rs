@@ -297,29 +297,62 @@ impl CloudClient {
         }
 
         for sc in &result.supply_chain_findings {
+            let sc_rel_path = sc
+                .file_path
+                .as_deref()
+                .map(|p| {
+                    crate::scanner::sast::normalize_workspace_relative_path(
+                        Path::new(""),
+                        Path::new(p),
+                    )
+                })
+                .unwrap_or_else(|| "package.json".to_string());
+            let sc_line = sc.line.unwrap_or(1);
+
+            // Avoid sending duplicate findings if code_findings already contains a finding on this file and line
+            if code_findings
+                .iter()
+                .any(|cf| cf.file_path == sc_rel_path && cf.line == sc_line)
+            {
+                continue;
+            }
+
             sc_count += 1;
+            let cwe = match sc.rule_id.as_str() {
+                "SC-014" => Some("CWE-829".to_string()),
+                "SC-007" => Some("CWE-200".to_string()),
+                "SC-003" => Some("CWE-94".to_string()),
+                "SC-004" => Some("CWE-78".to_string()),
+                "SC-008" => Some("CWE-1036".to_string()),
+                "SC-013" => Some("CWE-78".to_string()),
+                _ => None,
+            };
+
+            let remediation = match sc.rule_id.as_str() {
+                "SC-014" => Some(
+                    "Pin GitHub Action to an immutable 40-character commit SHA (e.g. uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1) to prevent supply chain tampering."
+                        .to_string(),
+                ),
+                "SC-007" => Some(
+                    "Avoid direct access to host filesystem credentials or sensitive configuration files (/etc/passwd, .ssh, .aws)."
+                        .to_string(),
+                ),
+                _ => Some(format!("Review supply chain signal '{}'", sc.signal_name)),
+            };
+
             code_findings.push(FactCodeFindingItem {
                 rule_id: sc.rule_id.clone(),
                 category: "SUPPLY_CHAIN".to_string(),
                 severity: sc.severity.as_str().to_string(),
                 title: sc.message.clone(),
-                cwe: None,
-                file_path: sc
-                    .file_path
-                    .as_deref()
-                    .map(|p| {
-                        crate::scanner::sast::normalize_workspace_relative_path(
-                            Path::new(""),
-                            Path::new(p),
-                        )
-                    })
-                    .unwrap_or_else(|| "package.json".to_string()),
-                line: sc.line.unwrap_or(1),
+                cwe,
+                file_path: sc_rel_path,
+                line: sc_line,
                 matched_sink: sc
                     .snippet
                     .as_deref()
                     .map(crate::scanner::sast::sanitize_sink_signature),
-                remediation: Some(format!("Review supply chain signal '{}'", sc.signal_name)),
+                remediation,
             });
         }
 

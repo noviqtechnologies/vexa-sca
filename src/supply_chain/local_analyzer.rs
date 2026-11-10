@@ -308,7 +308,7 @@ impl LocalSupplyChainAnalyzer {
                                             findings.push(SupplyChainFinding {
                                                 rule_id: "SC-014".to_string(),
                                                 signal_name: "github_actions_unpinned_ref".to_string(),
-                                                severity: SeverityLevel::High,
+                                                severity: SeverityLevel::Medium,
                                                 message: format!(
                                                     "GitHub Actions workflow uses unpinned ref '{}' instead of immutable commit SHA",
                                                     action_ref
@@ -666,21 +666,79 @@ impl LocalSupplyChainAnalyzer {
         let mut env_secret_line = 0;
         let mut env_secret_snippet = String::new();
         let mut has_network_socket = false;
+        let mut in_block_comment = false;
+        let mut in_docstring = false;
 
         for (line_idx, line) in content.lines().enumerate() {
             let line_num = line_idx + 1;
             let trimmed = line.trim();
 
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if in_block_comment {
+                if trimmed.contains("*/") {
+                    in_block_comment = false;
+                }
+                continue;
+            }
+
+            if in_docstring {
+                if trimmed.contains("\"\"\"") || trimmed.contains("'''") {
+                    in_docstring = false;
+                }
+                continue;
+            }
+
+            if trimmed.starts_with("/*") {
+                if !trimmed.contains("*/") {
+                    in_block_comment = true;
+                }
+                continue;
+            }
+
+            if trimmed.starts_with("\"\"\"") {
+                if trimmed.len() > 3 && trimmed[3..].contains("\"\"\"") {
+                    // Single-line triple quote docstring
+                } else {
+                    in_docstring = true;
+                }
+                continue;
+            }
+
+            if trimmed.starts_with("'''") {
+                if trimmed.len() > 3 && trimmed[3..].contains("'''") {
+                    // Single-line triple quote docstring
+                } else {
+                    in_docstring = true;
+                }
+                continue;
+            }
+
+            if trimmed.starts_with('#') || trimmed.starts_with("//") || trimmed.starts_with('*') {
+                continue;
+            }
+
+            // Strip trailing inline comment for pattern matching to avoid false positives in documentation/comments
+            let code_inspect = if let Some(pos) = trimmed.find(" // ") {
+                trimmed[..pos].trim()
+            } else if let Some(pos) = trimmed.find(" # ") {
+                trimmed[..pos].trim()
+            } else {
+                trimmed
+            };
+
             // Rule SC-012: Crypto miner signatures & WebAssembly crypto-mining
-            if trimmed.contains("stratum+tcp://")
-                || trimmed.contains("stratum+ssl://")
-                || trimmed.contains("xmrig")
-                || trimmed.contains("cryptonight")
-                || trimmed.contains("coinhive")
-                || trimmed.contains("cryptonight_wasm")
-                || trimmed.contains("wasm-miner")
-                || trimmed.contains("minr.pw")
-                || trimmed.contains("crypto-loot")
+            if code_inspect.contains("stratum+tcp://")
+                || code_inspect.contains("stratum+ssl://")
+                || code_inspect.contains("xmrig")
+                || code_inspect.contains("cryptonight")
+                || code_inspect.contains("coinhive")
+                || code_inspect.contains("cryptonight_wasm")
+                || code_inspect.contains("wasm-miner")
+                || code_inspect.contains("minr.pw")
+                || code_inspect.contains("crypto-loot")
             {
                 findings.push(SupplyChainFinding {
                     rule_id: "SC-012".to_string(),
@@ -694,13 +752,13 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Rule SC-013: Reverse Shell signatures
-            if trimmed.contains("/bin/sh -i")
-                || trimmed.contains("/bin/bash -i")
-                || trimmed.contains("nc -e ")
-                || trimmed.contains("nc.exe -e")
-                || trimmed.contains("bash -i >& /dev/tcp/")
-                || trimmed.contains("sh -i >& /dev/tcp/")
-                || (trimmed.contains("pty.spawn") && trimmed.contains("/bin/bash"))
+            if code_inspect.contains("/bin/sh -i")
+                || code_inspect.contains("/bin/bash -i")
+                || code_inspect.contains("nc -e ")
+                || code_inspect.contains("nc.exe -e")
+                || code_inspect.contains("bash -i >& /dev/tcp/")
+                || code_inspect.contains("sh -i >& /dev/tcp/")
+                || (code_inspect.contains("pty.spawn") && code_inspect.contains("/bin/bash"))
             {
                 findings.push(SupplyChainFinding {
                     rule_id: "SC-013".to_string(),
@@ -714,14 +772,14 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Rule SC-007: Sensitive Filesystem Access
-            if trimmed.contains(".ssh/id_rsa")
-                || trimmed.contains(".ssh/id_ed25519")
-                || trimmed.contains(".aws/credentials")
-                || trimmed.contains(".npmrc")
-                || trimmed.contains(".kube/config")
-                || trimmed.contains("/etc/passwd")
-                || trimmed.contains("/etc/shadow")
-                || trimmed.contains("/proc/self/mem")
+            if code_inspect.contains(".ssh/id_rsa")
+                || code_inspect.contains(".ssh/id_ed25519")
+                || code_inspect.contains(".aws/credentials")
+                || code_inspect.contains(".npmrc")
+                || code_inspect.contains(".kube/config")
+                || code_inspect.contains("/etc/passwd")
+                || code_inspect.contains("/etc/shadow")
+                || code_inspect.contains("/proc/self/mem")
             {
                 findings.push(SupplyChainFinding {
                     rule_id: "SC-007".to_string(),
@@ -736,12 +794,13 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Rule SC-003: Dynamic Code Evaluation
-            if trimmed.contains("eval(")
-                || trimmed.contains("new Function(")
-                || trimmed.contains("vm.runInNewContext(")
-                || trimmed.contains("vm.runInThisContext(")
-                || (trimmed.contains("exec(")
-                    && (trimmed.contains("base64.b64decode") || trimmed.contains("b64decode")))
+            if code_inspect.contains("eval(")
+                || code_inspect.contains("new Function(")
+                || code_inspect.contains("vm.runInNewContext(")
+                || code_inspect.contains("vm.runInThisContext(")
+                || (code_inspect.contains("exec(")
+                    && (code_inspect.contains("base64.b64decode")
+                        || code_inspect.contains("b64decode")))
             {
                 findings.push(SupplyChainFinding {
                     rule_id: "SC-003".to_string(),
@@ -755,11 +814,12 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Rule SC-004: Child Process Shell Execution
-            if (trimmed.contains("child_process")
-                && (trimmed.contains("exec(") || trimmed.contains("execSync(")))
-                || (trimmed.contains("subprocess.Popen") && trimmed.contains("shell=True"))
-                || (trimmed.contains("subprocess.call") && trimmed.contains("shell=True"))
-                || (trimmed.contains("os.system("))
+            if (code_inspect.contains("child_process")
+                && (code_inspect.contains("exec(") || code_inspect.contains("execSync(")))
+                || (code_inspect.contains("subprocess.Popen")
+                    && code_inspect.contains("shell=True"))
+                || (code_inspect.contains("subprocess.call") && code_inspect.contains("shell=True"))
+                || (code_inspect.contains("os.system("))
             {
                 findings.push(SupplyChainFinding {
                     rule_id: "SC-004".to_string(),
@@ -774,30 +834,30 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Check for SC-006 components
-            if (trimmed.contains("process.env")
-                || trimmed.contains("os.environ")
-                || trimmed.contains("std::env::var"))
-                && (trimmed.contains("AWS_SECRET")
-                    || trimmed.contains("GITHUB_TOKEN")
-                    || trimmed.contains("NPM_TOKEN")
-                    || trimmed.contains("OPENAI_API_KEY")
-                    || trimmed.contains("PRIVATE_KEY")
-                    || trimmed.contains("ACCESS_KEY"))
+            if (code_inspect.contains("process.env")
+                || code_inspect.contains("os.environ")
+                || code_inspect.contains("std::env::var"))
+                && (code_inspect.contains("AWS_SECRET")
+                    || code_inspect.contains("GITHUB_TOKEN")
+                    || code_inspect.contains("NPM_TOKEN")
+                    || code_inspect.contains("OPENAI_API_KEY")
+                    || code_inspect.contains("PRIVATE_KEY")
+                    || code_inspect.contains("ACCESS_KEY"))
             {
                 has_env_secret_access = true;
                 env_secret_line = line_num;
                 env_secret_snippet = trimmed.to_string();
             }
 
-            if trimmed.contains("require('net')")
-                || trimmed.contains("require('http')")
-                || trimmed.contains("require('https')")
-                || trimmed.contains("require('dgram')")
-                || trimmed.contains("import net from")
-                || trimmed.contains("import http from")
-                || trimmed.contains("import socket")
-                || trimmed.contains("import requests")
-                || trimmed.contains("import urllib")
+            if code_inspect.contains("require('net')")
+                || code_inspect.contains("require('http')")
+                || code_inspect.contains("require('https')")
+                || code_inspect.contains("require('dgram')")
+                || code_inspect.contains("import net from")
+                || code_inspect.contains("import http from")
+                || code_inspect.contains("import socket")
+                || code_inspect.contains("import requests")
+                || code_inspect.contains("import urllib")
             {
                 has_network_socket = true;
             }
@@ -1207,5 +1267,23 @@ mod tests {
             .iter()
             .any(|f| f.rule_id == "SC-002"
                 && f.signal_name == "third_party_malicious_lifecycle_script"));
+    }
+
+    #[test]
+    fn test_comments_do_not_trigger_sc007_or_sc004() {
+        let snippet = r#"
+            # Attacker can enter: image.jpg; cat /etc/passwd
+            # os.system("ls")
+            // cat /etc/shadow
+            /* .ssh/id_rsa */
+            """
+            /etc/passwd in docstring
+            """
+            normal_code = 42
+        "#;
+        let findings =
+            LocalSupplyChainAnalyzer::analyze_file_content(Path::new("os-ijection.py"), snippet);
+        assert!(!findings.iter().any(|f| f.rule_id == "SC-007"));
+        assert!(!findings.iter().any(|f| f.rule_id == "SC-004"));
     }
 }
