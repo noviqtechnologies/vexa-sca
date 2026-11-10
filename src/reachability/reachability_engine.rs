@@ -73,6 +73,24 @@ pub fn is_test_path(rel_path: &str) -> bool {
         || s.starts_with("test/")
         || s.starts_with("tests/")
         || s.starts_with("__tests__/")
+        || is_build_tooling_path(&s, name)
+}
+
+fn is_build_tooling_path(path: &str, file_name: &str) -> bool {
+    file_name.starts_with("webpack.")
+        || file_name.ends_with(".webpack.js")
+        || file_name.starts_with("vite.config.")
+        || file_name.starts_with("rollup.config.")
+        || file_name.starts_with("jest.config.")
+        || file_name.starts_with("tsconfig.")
+        || file_name.starts_with(".eslintrc")
+        || file_name.starts_with("eslint.config.")
+        || file_name.starts_with("babel.config.")
+        || file_name.ends_with(".babelrc")
+        || file_name.starts_with("postcss.config.")
+        || file_name.starts_with("tailwind.config.")
+        || path.contains("/webpack/")
+        || path.starts_with("webpack/")
 }
 
 impl ReachabilityEngine {

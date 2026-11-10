@@ -318,6 +318,10 @@ pub enum Commands {
         #[arg(long)]
         markdown: bool,
 
+        /// Save output report directly to a file path in UTF-8
+        #[arg(short = 'o', long = "output", visible_alias = "output-file")]
+        output_file: Option<PathBuf>,
+
         /// Output report in standard OASIS SARIF v2.1.0 format
         #[arg(long)]
         sarif: bool,
@@ -487,6 +491,10 @@ pub enum Commands {
         /// Output report in Markdown format
         #[arg(long)]
         markdown: bool,
+
+        /// Save output report directly to a file path in UTF-8
+        #[arg(short = 'o', long = "output", visible_alias = "output-file")]
+        output_file: Option<PathBuf>,
 
         /// Output report in standard OASIS SARIF v2.1.0 format
         #[arg(long)]
@@ -713,6 +721,10 @@ pub enum Commands {
         /// Output report in Markdown format
         #[arg(long)]
         markdown: bool,
+
+        /// Save output report directly to a file path in UTF-8
+        #[arg(short = 'o', long = "output", visible_alias = "output-file")]
+        output_file: Option<PathBuf>,
 
         /// Output report in standard OASIS SARIF v2.1.0 format
         #[arg(long)]
@@ -1689,6 +1701,7 @@ pub async fn run() {
             ignore_unfixed,
             json,
             markdown,
+            output_file,
             sarif,
             sarif_file,
             html,
@@ -2019,6 +2032,41 @@ pub async fn run() {
                     }
 
                     // 4. Output routing
+                    if let Some(out_p) = &output_file {
+                        let to_write = if markdown {
+                            format_markdown_report(
+                                &output.scan_result,
+                                &output.suppressed,
+                                &output.remediations,
+                                output.license_audit.as_ref(),
+                                output.policy_file.as_deref(),
+                            )
+                        } else {
+                            format_json_report(
+                                &output.scan_result,
+                                &output.suppressed,
+                                &output.remediations,
+                                output.license_audit.as_ref(),
+                                output.policy_file.as_deref(),
+                                Some(&gate_res),
+                            )
+                        };
+                        if let Err(e) = std::fs::write(out_p, to_write.as_bytes()) {
+                            eprintln!(
+                                "{} Failed to write output file {}: {}",
+                                "Error:".red().bold(),
+                                out_p.display(),
+                                e
+                            );
+                        } else {
+                            eprintln!(
+                                "{} Scan report successfully written to: {}",
+                                "✔".green().bold(),
+                                out_p.display()
+                            );
+                        }
+                    }
+
                     if html && html_file.is_none() {
                         if let Some(content) = &html_output {
                             println!("{}", content);
@@ -2031,7 +2079,7 @@ pub async fn run() {
                         if let Some(content) = &sarif_output {
                             println!("{}", content);
                         }
-                    } else if json {
+                    } else if json && output_file.is_none() {
                         println!(
                             "{}",
                             format_json_report(
@@ -2043,7 +2091,7 @@ pub async fn run() {
                                 Some(&gate_res),
                             )
                         );
-                    } else if markdown {
+                    } else if markdown && output_file.is_none() {
                         println!(
                             "{}",
                             format_markdown_report(
@@ -2054,7 +2102,7 @@ pub async fn run() {
                                 output.policy_file.as_deref()
                             )
                         );
-                    } else {
+                    } else if output_file.is_none() {
                         render_terminal_report(
                             &output.scan_result,
                             &output.suppressed,
@@ -2229,6 +2277,7 @@ pub async fn run() {
             ignore_unfixed,
             json,
             markdown,
+            output_file,
             sarif,
             sarif_file,
             sbom,
@@ -2526,6 +2575,41 @@ pub async fn run() {
                         emit_github_annotations(&output.scan_result.vulnerabilities);
                     }
 
+                    if let Some(out_p) = &output_file {
+                        let to_write = if markdown {
+                            format_markdown_report(
+                                &output.scan_result,
+                                &output.suppressed,
+                                &output.remediations,
+                                output.license_audit.as_ref(),
+                                output.policy_file.as_deref(),
+                            )
+                        } else {
+                            format_json_report(
+                                &output.scan_result,
+                                &output.suppressed,
+                                &output.remediations,
+                                output.license_audit.as_ref(),
+                                output.policy_file.as_deref(),
+                                Some(&gate_res),
+                            )
+                        };
+                        if let Err(e) = std::fs::write(out_p, to_write.as_bytes()) {
+                            eprintln!(
+                                "{} Failed to write output file {}: {}",
+                                "Error:".red().bold(),
+                                out_p.display(),
+                                e
+                            );
+                        } else {
+                            eprintln!(
+                                "{} Scan report successfully written to: {}",
+                                "✔".green().bold(),
+                                out_p.display()
+                            );
+                        }
+                    }
+
                     // Output routing
                     if sbom.is_some() && sbom_file.is_none() {
                         if let Some(content) = &sbom_output {
@@ -2535,7 +2619,7 @@ pub async fn run() {
                         if let Some(content) = &sarif_output {
                             println!("{}", content);
                         }
-                    } else if json {
+                    } else if json && output_file.is_none() {
                         println!(
                             "{}",
                             format_json_report(
@@ -2547,7 +2631,7 @@ pub async fn run() {
                                 Some(&gate_res),
                             )
                         );
-                    } else if markdown {
+                    } else if markdown && output_file.is_none() {
                         println!(
                             "{}",
                             format_markdown_report(
@@ -2558,7 +2642,7 @@ pub async fn run() {
                                 output.policy_file.as_deref()
                             )
                         );
-                    } else {
+                    } else if output_file.is_none() {
                         render_terminal_report(
                             &output.scan_result,
                             &output.suppressed,
@@ -2804,6 +2888,7 @@ ignore:
             ignore_unfixed,
             json,
             markdown,
+            output_file,
             sarif,
             sarif_file,
             html,
@@ -2896,6 +2981,29 @@ ignore:
                         println!("✔ SBOM saved to {}", file_path.display());
                     }
 
+                    if let Some(out_p) = &output_file {
+                        let to_write = if markdown {
+                            format_markdown_report(
+                                &output.scan_result,
+                                &[],
+                                &[],
+                                output.license_audit.as_ref(),
+                                None,
+                            )
+                        } else {
+                            format_json_report(
+                                &output.scan_result,
+                                &[],
+                                &[],
+                                output.license_audit.as_ref(),
+                                None,
+                                None,
+                            )
+                        };
+                        let _ = std::fs::write(out_p, to_write.as_bytes());
+                        eprintln!("{} Report saved to {}", "✔".green().bold(), out_p.display());
+                    }
+
                     if html && html_file.is_none() {
                         if let Some(content) = &html_output {
                             println!("{}", content);
@@ -2908,7 +3016,7 @@ ignore:
                         if let Some(content) = &sarif_output {
                             println!("{}", content);
                         }
-                    } else if json {
+                    } else if json && output_file.is_none() {
                         println!(
                             "{}",
                             format_json_report(
@@ -2920,7 +3028,7 @@ ignore:
                                 None,
                             )
                         );
-                    } else if markdown {
+                    } else if markdown && output_file.is_none() {
                         println!(
                             "{}",
                             format_markdown_report(
@@ -2931,7 +3039,7 @@ ignore:
                                 None
                             )
                         );
-                    } else {
+                    } else if output_file.is_none() {
                         render_terminal_report(
                             &output.scan_result,
                             &[],

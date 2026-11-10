@@ -906,8 +906,14 @@ fn normalize_python_pkg(name: &str) -> String {
 
 fn is_test_path(path: &str) -> bool {
     let lower = path.to_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or(&lower);
     lower.contains("test")
         || lower.contains("spec")
         || lower.contains("__tests__")
         || lower.contains("__test__")
+        || name.starts_with("webpack.")
+        || name.ends_with(".webpack.js")
+        || name.starts_with("vite.config.")
+        || name.starts_with("rollup.config.")
+        || name.starts_with("jest.config.")
 }

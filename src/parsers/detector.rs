@@ -158,6 +158,7 @@ pub struct DetectionResult {
     pub projects: Vec<WorkspaceProject>,
     pub failed_manifests: Vec<(PathBuf, String)>,
     pub skipped_manifests: Vec<PathBuf>,
+    pub superseded_manifests: Vec<PathBuf>,
 }
 
 pub fn discover_manifests(root: &Path, max_depth: usize) -> Vec<PathBuf> {
@@ -280,6 +281,7 @@ pub fn parse_manifest_at(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_additional_discovered_projects(
     discovered_projects: &[PathBuf],
     primary_manifest: &Path,
@@ -287,6 +289,7 @@ fn collect_additional_discovered_projects(
     projects: &mut Vec<WorkspaceProject>,
     failed_manifests: &mut Vec<(PathBuf, String)>,
     skipped_manifests: &mut Vec<PathBuf>,
+    superseded_manifests: &mut Vec<PathBuf>,
     include_dev: bool,
 ) {
     let primary_canon = primary_manifest
@@ -376,11 +379,15 @@ fn collect_additional_discovered_projects(
                         }
                     }
                     continue;
+                } else {
+                    // Superseded by higher precedence manifest in this directory (e.g. package-lock.json > package.json)
+                    superseded_manifests.push(p.clone());
+                    continue;
                 }
             }
         }
 
-        // Otherwise skipped due to lower precedence for the same ecosystem in this directory
+        // Truly skipped manifest (no manifest selected for this directory/ecosystem)
         skipped_manifests.push(p.clone());
     }
 }
@@ -492,6 +499,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             projects: vec![project],
             failed_manifests: vec![],
             skipped_manifests: vec![],
+            superseded_manifests: vec![],
         });
     }
 
@@ -536,6 +544,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
         }];
         let mut failed_manifests = Vec::new();
         let mut skipped_manifests = Vec::new();
+        let mut superseded_manifests = Vec::new();
 
         collect_additional_discovered_projects(
             &discovered_projects,
@@ -544,6 +553,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             &mut projects,
             &mut failed_manifests,
             &mut skipped_manifests,
+            &mut superseded_manifests,
             include_dev,
         );
 
@@ -555,6 +565,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             projects,
             failed_manifests,
             skipped_manifests,
+            superseded_manifests,
         });
     }
 
@@ -571,6 +582,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
         }];
         let mut failed_manifests = Vec::new();
         let mut skipped_manifests = Vec::new();
+        let mut superseded_manifests = Vec::new();
 
         collect_additional_discovered_projects(
             &discovered_projects,
@@ -579,6 +591,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             &mut projects,
             &mut failed_manifests,
             &mut skipped_manifests,
+            &mut superseded_manifests,
             include_dev,
         );
 
@@ -590,6 +603,7 @@ pub fn detect_and_parse(project_dir: &Path, include_dev: bool) -> Result<Detecti
             projects,
             failed_manifests,
             skipped_manifests,
+            superseded_manifests,
         });
     }
 

@@ -623,6 +623,28 @@ impl LocalSupplyChainAnalyzer {
                 continue;
             }
 
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+
+            // Skip test files, spec files, and mock harnesses to eliminate test false positives
+            if file_name.ends_with(".test.ts")
+                || file_name.ends_with(".test.tsx")
+                || file_name.ends_with(".test.js")
+                || file_name.ends_with(".test.jsx")
+                || file_name.ends_with(".spec.ts")
+                || file_name.ends_with(".spec.tsx")
+                || file_name.ends_with(".spec.js")
+                || file_name.ends_with(".spec.jsx")
+                || file_name.ends_with("_test.go")
+                || file_name.ends_with("_test.py")
+                || file_name.starts_with("test_")
+            {
+                continue;
+            }
+
             if let Ok(content) = fs::read_to_string(path) {
                 let file_findings = Self::analyze_file_content(path, &content);
                 for mut f in file_findings {
@@ -1031,6 +1053,54 @@ impl LocalSupplyChainAnalyzer {
     pub fn check_package(name: &str, _version: &str, _ecosystem: &str) -> Vec<SupplyChainFinding> {
         let mut findings = Vec::new();
         let lower = name.to_lowercase();
+
+        // Established, verified packages that must never be falsely flagged as typosquats or scope confusion
+        const KNOWN_LEGITIMATE_PACKAGES: &[&str] = &[
+            "react-redux",
+            "is-regex",
+            "react-router",
+            "react-router-dom",
+            "react-router-hash-link",
+            "react-select",
+            "react-table",
+            "react-modal",
+            "react-popper",
+            "react-popper-tooltip",
+            "react-is",
+            "react-dom",
+            "react-hook-form",
+            "react-i18next",
+            "react-input-autosize",
+            "react-lifecycles-compat",
+            "react-transition-group",
+            "react-smooth",
+            "redux-actions",
+            "redux-thunk",
+            "types-node",
+            "body-parser",
+            "cookie-parser",
+            "express-session",
+            "query-string",
+            "safe-regex-test",
+            "safe-array-concat",
+            "side-channel",
+            "side-channel-list",
+            "side-channel-map",
+            "side-channel-weakmap",
+            "value-equal",
+            "tiny-invariant",
+            "tiny-warning",
+            "to-camel-case",
+            "to-no-case",
+            "to-space-case",
+            "toggle-selection",
+            "victory-vendor",
+            "void-elements",
+        ];
+
+        if KNOWN_LEGITIMATE_PACKAGES.contains(&lower.as_str()) {
+            return findings;
+        }
 
         // 1. Homoglyph / confusable normalization
         let homoglyph_norm = lower

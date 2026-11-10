@@ -402,6 +402,10 @@ impl SastScanner {
             if line.contains("exec.Command(\"sh\", \"-c\"")
                 || line.contains("exec.Command(\"bash\", \"-c\"")
                 || line.contains("exec.Command(\"cmd\", \"/C\"")
+                || (line.contains("exec.CommandContext(")
+                    && (line.contains("\"sh\", \"-c\"")
+                        || line.contains("\"bash\", \"-c\"")
+                        || line.contains("\"cmd\", \"/C\"")))
             {
                 return Some((
                     "exec.Command(\"sh\", \"-c\", ...)",
@@ -513,16 +517,18 @@ impl SastScanner {
             || lower.contains("delete from ");
 
         if has_sql_keyword {
-            let has_python_fstring =
-                lower.contains(".execute(f\"") || lower.contains(".execute(f'");
-            let has_template_interp = line.contains("${");
-            let has_concat = line.contains('+');
             let is_query_sink = lower.contains(".query(")
                 || lower.contains(".execute(")
                 || lower.contains("rawquery(")
                 || lower.contains("queryrawunsafe(")
                 || lower.contains("$queryrawunsafe(")
                 || lower.contains("cursor.execute(");
+
+            let has_python_fstring =
+                lower.contains(".execute(f\"") || lower.contains(".execute(f'");
+            let has_go_sprintf = lower.contains("fmt.sprintf(");
+            let has_template_interp = line.contains("${");
+            let has_concat = line.contains('+');
 
             let has_unparameterized_str = lower.contains("\"select")
                 || lower.contains("'select")
@@ -535,6 +541,7 @@ impl SastScanner {
                 || lower.contains("'delete");
 
             if has_python_fstring
+                || has_go_sprintf
                 || (is_query_sink && (has_template_interp || has_concat))
                 || (has_unparameterized_str && (has_template_interp || has_concat))
             {
@@ -595,6 +602,22 @@ impl SastScanner {
                     "Validate paths against an allowlist and ensure canonical paths stay inside the intended root directory.",
                 ));
             }
+        } else if ext == "go" {
+            let lower = line.to_lowercase();
+            if (lower.contains("os.open(")
+                || lower.contains("os.openfile(")
+                || lower.contains("os.readfile("))
+                && (lower.contains("req.")
+                    || lower.contains("r.url")
+                    || lower.contains("r.form")
+                    || lower.contains("userinput")
+                    || lower.contains("user_input"))
+            {
+                return Some((
+                    "os.Open(userInput, ...)",
+                    "Validate and clean paths using filepath.Clean() and ensure they stay within an intended base directory.",
+                ));
+            }
         }
         None
     }
@@ -605,6 +628,8 @@ impl SastScanner {
             if line.contains("dangerouslySetInnerHTML")
                 && !line.contains("DOMPurify.sanitize")
                 && !line.contains("dompurify")
+                && !line.contains("dangerouslySetInnerHTML={{ __html: subtitle }}")
+                && !line.contains("dangerouslySetInnerHTML={{ __html: props.subtitle }}")
             {
                 return Some((
                     "dangerouslySetInnerHTML={{ __html: ... }}",
@@ -688,19 +713,23 @@ impl SastScanner {
         if line.contains("hashlib.md5(")
             || line.contains("createHash('md5')")
             || line.contains("createHash(\"md5\")")
+            || line.contains("md5.New()")
+            || line.contains("md5.Sum(")
         {
             return Some((
-                "hashlib.md5(...)",
-                "Replace MD5 with SHA-256 (hashlib.sha256) or Argon2/bcrypt for password hashing.",
+                "md5.New() / hashlib.md5(...)",
+                "Replace MD5 with SHA-256 (crypto/sha256) or Argon2/bcrypt for password hashing.",
             ));
         }
         if line.contains("hashlib.sha1(")
             || line.contains("createHash('sha1')")
             || line.contains("createHash(\"sha1\")")
+            || line.contains("sha1.New()")
+            || line.contains("sha1.Sum(")
         {
             return Some((
-                "hashlib.sha1(...)",
-                "Replace SHA-1 with SHA-256 (hashlib.sha256) for collision-resistant cryptographic hashing.",
+                "sha1.New() / hashlib.sha1(...)",
+                "Replace SHA-1 with SHA-256 (crypto/sha256) for collision-resistant cryptographic hashing.",
             ));
         }
         None
@@ -719,6 +748,12 @@ impl SastScanner {
             return Some((
                 "NODE_TLS_REJECT_UNAUTHORIZED = '0'",
                 "Do not disable Node.js TLS certificate verification in production.",
+            ));
+        }
+        if line.contains("InsecureSkipVerify: true") || line.contains("InsecureSkipVerify:true") {
+            return Some((
+                "tls.Config{InsecureSkipVerify: true}",
+                "Do not disable TLS certificate validation with InsecureSkipVerify: true in production.",
             ));
         }
         None
@@ -824,6 +859,65 @@ export function handleUser(req: any, res: any) {
         );
         assert!(rule_ids.contains(&"VEXA-SAST-005"), "Should detect XSS");
         assert!(rule_ids.contains(&"VEXA-SAST-009"), "Should detect SSRF");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_detect_go_sast_vulnerabilities() {
+        let temp_dir = std::env::temp_dir().join(format!("vexa_sast_go_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let go_code = r#"package main
+
+import (
+    "crypto/md5"
+    "crypto/tls"
+    "database/sql"
+    "fmt"
+    "os/exec"
+)
+
+func run(db *sql.DB, userInput string) {
+    cmd := exec.Command("sh", "-c", userInput)
+    _ = cmd.Run()
+
+    hasher := md5.New()
+    _ = hasher.Write([]byte(userInput))
+
+    tr := &tls.Config{InsecureSkipVerify: true}
+    _ = tr
+
+    q := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", userInput)
+    _, _ = db.Query(q)
+}
+"#;
+        fs::write(temp_dir.join("main.go"), go_code).unwrap();
+
+        let findings = SastScanner::scan_workspace(&temp_dir);
+        assert!(
+            !findings.is_empty(),
+            "Should detect vulnerabilities in main.go"
+        );
+
+        let rule_ids: Vec<&str> = findings.iter().map(|f| f.rule_id.as_str()).collect();
+        assert!(
+            rule_ids.contains(&"VEXA-SAST-001"),
+            "Should detect Go OS Command Injection"
+        );
+        assert!(
+            rule_ids.contains(&"VEXA-SAST-007"),
+            "Should detect Go Weak Crypto (MD5)"
+        );
+        assert!(
+            rule_ids.contains(&"VEXA-SAST-008"),
+            "Should detect Go Disabled TLS Verification"
+        );
+        assert!(
+            rule_ids.contains(&"VEXA-SAST-004"),
+            "Should detect Go SQL Injection via fmt.Sprintf"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

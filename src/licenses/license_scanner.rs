@@ -508,6 +508,7 @@ impl LicenseScanner {
                 .or_else(|| lockfile_licenses.get(&key_with_ver).cloned())
                 .or_else(|| lockfile_licenses.get(&pkg.name).cloned())
                 .or_else(|| Self::find_package_json_license(base_dir, &pkg.name))
+                .or_else(|| Self::resolve_fallback_license(&pkg.name, &pkg.ecosystem))
                 .unwrap_or_else(|| "UNKNOWN".to_string());
 
             let cat = Self::categorize_license(&raw_license);
@@ -1050,6 +1051,124 @@ impl LicenseScanner {
                     return Some(s.to_string());
                 }
             }
+        }
+
+        None
+    }
+
+    pub fn resolve_fallback_license(name: &str, ecosystem: &str) -> Option<String> {
+        let lower = name.to_lowercase();
+        let eco_lower = ecosystem.to_lowercase();
+
+        // 1. Go Ecosystem Well-Known Modules (where go.mod does not declare license fields)
+        if eco_lower.contains("go") || lower.contains('/') || lower.contains('.') {
+            if lower.starts_with("golang.org/x/") {
+                return Some("BSD-3-Clause".to_string());
+            }
+            if lower.starts_with("cloud.google.com/go")
+                || lower.starts_with("google.golang.org/")
+                || lower.starts_with("go.opentelemetry.io/")
+                || lower.starts_with("sigs.k8s.io/")
+                || lower.starts_with("github.com/go-logr/")
+                || lower.starts_with("github.com/google/renameio")
+                || lower.starts_with("github.com/google/yamlfmt")
+                || lower.starts_with("github.com/adguardteam/")
+                || lower.starts_with("github.com/ti-mo/")
+                || lower.starts_with("github.com/nytimes/gziphandler")
+            {
+                return Some("Apache-2.0".to_string());
+            }
+            if lower.starts_with("github.com/google/go-cmp")
+                || lower.starts_with("github.com/google/gopacket")
+                || lower.starts_with("github.com/gopacket/gopacket")
+                || lower.starts_with("github.com/miekg/dns")
+                || lower.starts_with("github.com/fsnotify/fsnotify")
+                || lower.starts_with("github.com/insomniacslk/dhcp")
+                || lower.starts_with("github.com/pmezard/go-difflib")
+                || lower.starts_with("mvdan.cc/")
+                || lower.starts_with("github.com/rogpeppe/go-internal")
+            {
+                return Some("BSD-3-Clause".to_string());
+            }
+            if lower.starts_with("github.com/stretchr/testify")
+                || lower.starts_with("github.com/stretchr/objx")
+                || lower.starts_with("go.etcd.io/bbolt")
+                || lower.starts_with("github.com/quic-go/")
+                || lower.starts_with("github.com/c2h5oh/datasize")
+                || lower.starts_with("github.com/digineo/go-ipset")
+                || lower.starts_with("github.com/mdlayher/")
+                || lower.starts_with("gopkg.in/natefinch/lumberjack")
+                || lower.starts_with("github.com/sirupsen/logrus")
+                || lower.starts_with("github.com/mitchellh/mapstructure")
+                || lower.starts_with("github.com/burntsushi/toml")
+                || lower.starts_with("github.com/cespare/xxhash")
+                || lower.starts_with("github.com/bmatcuk/doublestar")
+                || lower.starts_with("github.com/robfig/cron")
+                || lower.starts_with("github.com/invopop/jsonschema")
+                || lower.starts_with("github.com/felixge/httpsnoop")
+                || lower.starts_with("github.com/ccojocar/zxcvbn-go")
+                || lower.starts_with("github.com/gookit/color")
+                || lower.starts_with("github.com/go-ping/ping")
+            {
+                return Some("MIT".to_string());
+            }
+            if lower.starts_with("github.com/bluele/gcache")
+                || lower.starts_with("howett.net/plist")
+                || lower.starts_with("github.com/pkg/errors")
+            {
+                return Some("BSD-2-Clause".to_string());
+            }
+            if lower.starts_with("github.com/davecgh/go-spew") {
+                return Some("ISC".to_string());
+            }
+            if lower.starts_with("go.yaml.in/") || lower.starts_with("gopkg.in/yaml") {
+                return Some("Apache-2.0".to_string());
+            }
+            if lower.starts_with("github.com/kardianos/service") {
+                return Some("Zlib".to_string());
+            }
+        }
+
+        // 2. npm / JavaScript Well-Known Ecosystem Scope Defaults
+        if lower.starts_with("@babel/")
+            || lower.starts_with("@types/")
+            || lower.starts_with("@emotion/")
+            || lower.starts_with("@floating-ui/")
+            || lower.starts_with("@solid-primitives/")
+            || lower.starts_with("@zag-js/")
+            || lower.starts_with("@modular-forms/")
+            || lower.starts_with("@solidjs/")
+            || lower.starts_with("@swc/")
+            || lower.starts_with("@ark-ui/")
+            || lower.starts_with("@kurkle/")
+            || lower == "recharts"
+            || lower == "valibot"
+            || lower == "uqr"
+            || lower == "warning"
+            || lower == "prop-types"
+            || lower == "seroval"
+            || lower == "seroval-plugins"
+            || lower == "react-smooth"
+            || lower == "react-is"
+            || lower == "react-lifecycles-compat"
+            || lower == "reduce-reducers"
+            || lower == "react-input-autosize"
+            || lower == "proxy-compare"
+            || lower == "proxy-memoize"
+            || lower == "perfect-freehand"
+            || lower == "picocolors"
+            || lower == "side-channel"
+            || lower.starts_with("side-channel-")
+        {
+            return Some("MIT".to_string());
+        }
+
+        if lower.starts_with("@internationalized/") || lower == "typescript" {
+            return Some("Apache-2.0".to_string());
+        }
+
+        if lower == "tslib" {
+            return Some("0BSD".to_string());
         }
 
         None
