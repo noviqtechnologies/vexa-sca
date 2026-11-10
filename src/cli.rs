@@ -92,7 +92,23 @@ async fn scan_project_with_code_security(
     }
 
     if run_sast {
-        let sast_findings = crate::scanner::sast::SastScanner::scan_workspace(path);
+        let (sast_findings, sast_cov) =
+            crate::scanner::sast::SastScanner::scan_workspace_with_coverage(path);
+
+        // Record SAST coverage diagnostics into completeness metrics to prevent silent skips
+        output.scan_result.completeness.source_files_discovered += sast_cov.files_discovered;
+        output.scan_result.completeness.source_files_analysed += sast_cov.files_analysed;
+        output.scan_result.completeness.source_files_skipped += sast_cov.files_skipped;
+        output.scan_result.completeness.source_files_failed += sast_cov.files_failed;
+        if sast_cov.files_failed > 0 || !sast_cov.limits_hit.is_empty() {
+            output.scan_result.scan_status = ScanStatus::Incomplete;
+        }
+        for limit in sast_cov.limits_hit {
+            if !output.scan_result.completeness.limits_hit.contains(&limit) {
+                output.scan_result.completeness.limits_hit.push(limit);
+            }
+        }
+
         // Suppress overlapping generic supply chain findings (SC-004 child process, SC-003 eval)
         // on the exact same file and line where a specialized SAST rule (VEXA-SAST-001/002) has fired.
         let sast_locs: std::collections::HashSet<(String, usize)> = sast_findings
@@ -116,7 +132,22 @@ async fn scan_project_with_code_security(
         output.scan_result.code_findings.extend(sast_findings);
     }
     if run_secrets {
-        let secret_findings = crate::scanner::secrets::SecretScanner::scan_workspace(path);
+        let (secret_findings, secret_cov) =
+            crate::scanner::secrets::SecretScanner::scan_workspace_with_coverage(path);
+
+        output.scan_result.completeness.source_files_discovered += secret_cov.files_discovered;
+        output.scan_result.completeness.source_files_analysed += secret_cov.files_analysed;
+        output.scan_result.completeness.source_files_skipped += secret_cov.files_skipped;
+        output.scan_result.completeness.source_files_failed += secret_cov.files_failed;
+        if secret_cov.files_failed > 0 || !secret_cov.limits_hit.is_empty() {
+            output.scan_result.scan_status = ScanStatus::Incomplete;
+        }
+        for limit in secret_cov.limits_hit {
+            if !output.scan_result.completeness.limits_hit.contains(&limit) {
+                output.scan_result.completeness.limits_hit.push(limit);
+            }
+        }
+
         output.scan_result.code_findings.extend(secret_findings);
     }
     if let Some(sarif_path) = ingest_sarif {

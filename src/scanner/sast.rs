@@ -69,25 +69,68 @@ pub fn sanitize_sink_signature(raw: &str) -> String {
 
 pub struct SastScanner;
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SastCoverage {
+    pub files_discovered: usize,
+    pub files_analysed: usize,
+    pub files_skipped: usize,
+    pub files_failed: usize,
+    pub limits_hit: Vec<String>,
+}
+
 impl SastScanner {
     /// Scan first-party source files in `workspace_root` across Python, JS/TS, Go, Rust, and Java.
-    /// Executes 100% locally in <50ms and emits only canonical sink signatures (zero raw source code).
+    /// Executes 100% locally and emits canonical sink signatures.
+    /// Returns code findings along with structured coverage and omission diagnostics.
     pub fn scan_workspace(workspace_root: &Path) -> Vec<CodeFinding> {
-        let mut findings = Vec::new();
-        Self::walk_dir(workspace_root, workspace_root, 0, &mut findings);
+        let (findings, _) = Self::scan_workspace_with_coverage(workspace_root);
         findings
     }
 
-    fn walk_dir(root: &Path, current: &Path, depth: usize, findings: &mut Vec<CodeFinding>) {
+    /// Scans workspace and returns both code findings and structured coverage metrics.
+    /// Exposes file size limits, depth cutoffs, and read errors to prevent silent skips.
+    pub fn scan_workspace_with_coverage(workspace_root: &Path) -> (Vec<CodeFinding>, SastCoverage) {
+        let mut findings = Vec::new();
+        let mut coverage = SastCoverage::default();
+        Self::walk_dir(
+            workspace_root,
+            workspace_root,
+            0,
+            &mut findings,
+            &mut coverage,
+        );
+        (findings, coverage)
+    }
+
+    fn walk_dir(
+        root: &Path,
+        current: &Path,
+        depth: usize,
+        findings: &mut Vec<CodeFinding>,
+        coverage: &mut SastCoverage,
+    ) {
         if depth > 8 {
+            let rel = normalize_workspace_relative_path(root, current);
+            coverage
+                .limits_hit
+                .push(format!("sast_depth_limit_exceeded: {}", rel));
+            coverage.files_skipped += 1;
             return;
         }
         if current.is_file() {
-            Self::scan_file(root, current, findings);
+            Self::scan_file_with_coverage(root, current, findings, coverage);
             return;
         }
-        let Ok(entries) = fs::read_dir(current) else {
-            return;
+        let entries = match fs::read_dir(current) {
+            Ok(e) => e,
+            Err(_) => {
+                let rel = normalize_workspace_relative_path(root, current);
+                coverage.files_failed += 1;
+                coverage
+                    .limits_hit
+                    .push(format!("sast_dir_unreadable: {}", rel));
+                return;
+            }
         };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -115,14 +158,24 @@ impl SastScanner {
                 {
                     continue;
                 }
-                Self::walk_dir(root, &path, depth + 1, findings);
+                Self::walk_dir(root, &path, depth + 1, findings, coverage);
             } else if path.is_file() {
-                Self::scan_file(root, &path, findings);
+                Self::scan_file_with_coverage(root, &path, findings, coverage);
             }
         }
     }
 
     pub fn scan_file(root: &Path, file_path: &Path, findings: &mut Vec<CodeFinding>) {
+        let mut coverage = SastCoverage::default();
+        Self::scan_file_with_coverage(root, file_path, findings, &mut coverage);
+    }
+
+    pub fn scan_file_with_coverage(
+        root: &Path,
+        file_path: &Path,
+        findings: &mut Vec<CodeFinding>,
+        coverage: &mut SastCoverage,
+    ) {
         let file_name = file_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -159,20 +212,56 @@ impl SastScanner {
             return;
         }
 
+        coverage.files_discovered += 1;
+        let rel_path = normalize_workspace_relative_path(root, file_path);
+
         if let Ok(meta) = fs::metadata(file_path) {
             if meta.len() > 2 * 1024 * 1024 {
+                coverage.files_skipped += 1;
+                coverage
+                    .limits_hit
+                    .push(format!("sast_file_size_exceeded: {}", rel_path));
                 return;
             }
         }
 
-        let Ok(content) = fs::read_to_string(file_path) else {
-            return;
+        let content = match fs::read_to_string(file_path) {
+            Ok(c) => c,
+            Err(_) => {
+                coverage.files_failed += 1;
+                coverage
+                    .limits_hit
+                    .push(format!("sast_file_unreadable: {}", rel_path));
+                return;
+            }
         };
+
+        coverage.files_analysed += 1;
 
         let rel_path = normalize_workspace_relative_path(root, file_path);
 
+        // Run AST-based semantic analysis for JS/TS/JSX/TSX files
+        let mut ast_covered_lines = std::collections::HashSet::new();
+        if let Some(st) = crate::reachability::js_ast_analyzer::source_type_for_path(file_path) {
+            let ast_res = crate::scanner::js_sast::scan_js_ts_ast(&rel_path, &content, st);
+            if ast_res.parse_failed {
+                if let Some(err) = ast_res.parse_error {
+                    coverage
+                        .limits_hit
+                        .push(format!("sast_js_ast_parse_error in {}: {}", rel_path, err));
+                }
+            }
+            for f in ast_res.findings {
+                ast_covered_lines.insert(f.line);
+                findings.push(f);
+            }
+        }
+
         for (idx, raw_line) in content.lines().enumerate() {
             let line_num = idx + 1;
+            if ast_covered_lines.contains(&line_num) {
+                continue;
+            }
             let trimmed = raw_line.trim();
             if trimmed.is_empty()
                 || trimmed.starts_with('#')
@@ -918,6 +1007,31 @@ func run(db *sql.DB, userInput string) {
             rule_ids.contains(&"VEXA-SAST-004"),
             "Should detect Go SQL Injection via fmt.Sprintf"
         );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_sast_coverage_reporting_and_limits_hit() {
+        let temp_dir = std::env::temp_dir().join(format!("vexa_sast_cov_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // 1. Normal analyzed file
+        let py_file = temp_dir.join("normal.py");
+        fs::write(&py_file, "import os\nos.system('ping')\n").unwrap();
+
+        // 2. Normal clean file
+        let js_file = temp_dir.join("clean.js");
+        fs::write(&js_file, "console.log('hello');\n").unwrap();
+
+        let (findings, coverage) = SastScanner::scan_workspace_with_coverage(&temp_dir);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(coverage.files_discovered, 2);
+        assert_eq!(coverage.files_analysed, 2);
+        assert_eq!(coverage.files_skipped, 0);
+        assert_eq!(coverage.files_failed, 0);
+        assert!(coverage.limits_hit.is_empty());
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

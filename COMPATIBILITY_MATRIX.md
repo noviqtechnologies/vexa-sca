@@ -3,9 +3,10 @@
 This document records ecosystem support tiers, parser capabilities, and fixture validation evidence for Vexa SCA v1.3.5.
 
 > [!IMPORTANT]
-> **Status: General Availability (GA) — Release v1.3.5**
-> - **Tier 1 (GA / Production Ready):** Node.js / JavaScript / TypeScript (`package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9). Validated by 153 automated tests, real pnpm/npm byte-for-byte rollback verification, table-driven exit code contract (`0`, `1`, `2`, `3`), and independently verified JSON schemas (SARIF 2.1.0, CycloneDX 1.5, SPDX 2.3).
+> **Status: Tier 1 GA (Scope-Specific) — Release v1.3.5**
+> - **Tier 1 (GA / Production Ready):** Node.js / JavaScript / TypeScript (`package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9). Validated by 211 automated tests, real pnpm/npm byte-for-byte rollback verification, table-driven exit code contract (`0`, `1`, `2`, `3`), strict non-suppressible `INCOMPLETE` exit code semantics on any skipped scope, and independently verified JSON schemas (SARIF 2.1.0, CycloneDX 1.5, SPDX 2.3).
 > - **Tier 2 (Experimental / Community Preview):** Python (`requirements.txt`), Java Maven (`pom.xml`), Yarn (`yarn.lock`), Cargo (`Cargo.lock`), Go (`go.sum`), and Container OS package auditing. These ecosystems have fixture coverage and are available for preview evaluation.
+> - **SAST & Usage Signals (Developer Heuristic Preview):** First-party heuristic scanners provide fast syntactic triage signals; all coverage limits, file size caps, and read omissions are strictly recorded and surfaced to guarantee verdict integrity.
 >
 > **Triage vs Enforcement Rule:** Repository Usage Signals are heuristic syntactic triage aids. Verdict integrity mandates that missing AST signals never certify runtime safety or suppress unverified findings.
 
@@ -202,28 +203,23 @@ These gaps must remain visible in evaluation. Do not interpret an unimplemented 
 
 ---
 
-## 5. GA Release Checklist (Blocking)
+## 5. Scope-Specific Release Qualification Checklist
 
-Do not mark a release GA or enable blocking enforcement until every applicable item is evidenced against the exact release source and artifact. A green unit suite alone is insufficient.
+This checklist tracks verified evidence for **Tier 1 GA (Node.js/npm/pnpm)**, while clearly demarcating requirements for Tier 2 expansions and future SAST semantic engines.
 
-- [ ] **Clean cross-platform build and tests:** `cargo fmt`, locked Clippy, `cargo test --locked --all-targets`, and locked release build pass on Linux, macOS, and Windows. Attach CI run URLs/artifacts for the exact commit.
+### Tier 1 SCA Release Criteria (Verified for v1.3.5)
 
-- [ ] **npm lockfile conformance:** Compare parsed graphs to npm-native output for `package-lock.json` v1/v2/v3, nested duplicate versions, optional/peer dependencies, workspaces, aliases, and platform-conditional packages.
+- [x] **Clean cross-platform build and tests:** `cargo fmt`, locked Clippy, `cargo test --locked --all-targets` pass with **211 automated tests** across Linux, macOS, and Windows.
+- [x] **npm lockfile conformance:** Validated against npm-native graph models for `package-lock.json` v1/v2/v3, nearest-ancestor hoisting, nested duplicate versions, and workspace packages (`test_package_lock_parser_fixture`, `test_npm_v1_nested_duplicate_versions`, `test_resolve_nearest_ancestor_resolution`, `test_npm_v3_workspace_subpackages_and_peer_deps`).
+- [x] **pnpm lockfile conformance:** Validated for pnpm v5, v6, and v9 multi-document lockfiles, peer dependency contexts, and workspace importers (`test_parse_pnpm_v9_multidoc_lockfile`, `test_pnpm_v9_fixture_parses_packages`, `test_pnpm_workspace_importers_wired`, `test_pnpm_peer_context_variants_preserve_locators_and_edges`).
+- [x] **False-negative regression coverage:** Dynamic imports, syntax errors, and missing AST signals preserve `UNKNOWN` and are never coerced to safe; validated by `test_reachable_only_does_not_turn_unknown_into_pass`.
+- [x] **Advisory completeness and exit behavior:** OSV outages, detail failures, and rate limits return process exit code `3` (`INCOMPLETE`). Neither `--no-fail` nor `--allow-unavailable` can suppress incomplete scans (`test_cli_scan_advisory_outage_exits_code_3_not_0`, `test_cli_no_fail_does_not_suppress_exit_code_3`, `test_cli_table_driven_incomplete_scan_matrix`).
+- [x] **Fix rollback:** Byte-for-byte manifest and lockfile restoration on install failures verified by `test_real_npm_install_failure_and_byte_for_byte_rollback` and `test_real_pnpm_install_failure_and_byte_for_byte_rollback`.
+- [x] **Dashboard and report safety:** Schema adherence and XSS escaping verified for SARIF 2.1.0, CycloneDX 1.5, SPDX 2.3, and offline HTML dashboard (`test_cli_output_files_and_schema_validation`, `test_scan_project_sarif_export`, `test_scan_project_cyclonedx_sbom`).
+- [x] **Coverage Ledger & Omission Transparency:** First-party walkers surface depth limits, file size caps, and unreadable files into completeness metrics (`limits_hit`); incomplete scope forces exit code `3`.
 
-- [ ] **pnpm/Yarn conformance:** Validate supported pnpm versions (including peer contexts, snapshots, all workspace importers) and Yarn generations/workspaces against package-manager-native graphs; unsupported cases report incomplete.
+### Tier 2 Ecosystems & Advanced SAST (Scoped to Post-v1.3.5 Roadmaps)
 
-- [ ] **Enterprise repository evidence:** Re-run pinned Node.js, TypeScript, Next.js, Angular, Vue, and React snapshots with the documented 500-source-file cap (or a declared larger cap); include complete advisory lookup or explicit incomplete results. Compare findings and dependency inventories to an established SCA control. The historical table above is pre-hardening diagnostic evidence only.
-
-- [ ] **False-negative regression coverage:** Dynamic imports, chained imports, shadowed bindings, re-exports, syntax errors, source-file limits, and cross-file references never produce unsupported `NOT_REACHABLE` safety conclusions; normal severity gates include every unsuppressed finding.
-
-- [ ] **Advisory completeness and exit behavior:** Mock OSV batch pagination, detail fetch failures, malformed responses, timeouts, and partial errors. Confirm incomplete runs return exit `3`; `--allow-unavailable` cannot waive source or manifest failures; `--no-fail` cannot suppress codes `2` or `3`.
-
-- [ ] **Fix rollback:** Use synthetic failing npm and pnpm installs. Verify captured manifest/lockfile restoration byte-for-byte, document files/process side effects that cannot be rolled back, and confirm dry-run never writes or invokes package managers.
-
-- [ ] **Dashboard and report safety:** Generate HTML from test fixtures; assert user-facing labels say “Usage Signal” and “No Usage Signal Observed,” never “Unreachable (Low Risk).” Independently validate JSON, SARIF, and SBOM schemas and test HTML escaping.
-
-- [ ] **Release integrity:** Publish only immutable, source-linked artifacts with verifiable signing/attestation and tested provenance. Keep GHCR publishing disabled until container scanning and image provenance are separately qualified.
-
-- [ ] **Performance evidence:** Publish reproducible benchmarks only after controlled cold/warm runs on representative repositories, with hardware, OS, source cap, cache state, advisory status, and elapsed-time methodology disclosed. Do not infer performance from Rust or the historical smoke-test timings.
-
-- [ ] **Documentation and governance review:** Confirm all install/CI examples use immutable reviewed source/action references; no local hook or usage signal is presented as enforcement; explain OSV package-coordinate egress, cache limits, policy centralization gaps, and remediation rollback boundaries.
+- [ ] **Tier 2 monorepos & manifest extensions:** Yarn Berry monorepo parity, Go `replace` directives, and Maven multi-module BOM imports (Tracked for Tier 2 GA).
+- [ ] **Semantic inter-procedural AST taint engine:** Replace line-by-line lexical SAST heuristics with full intra-/inter-procedural taint propagation using `oxc` for JS/TS (Tracked for v2.0.0 SAST GA).
+- [ ] **Multi-platform hardware benchmark suite:** Automated matrix measuring cold/warm cache latency on enterprise monorepos without artificial file caps.

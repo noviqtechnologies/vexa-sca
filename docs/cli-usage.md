@@ -199,7 +199,7 @@ Vexa SCA includes a built-in, sub-50ms local static code analyzer (`src/scanner/
 
 | Flag / Environment Variable | Description |
 | :--- | :--- |
-| `--sast` | Enable first-party static code analysis (`VEXA-SAST-001` to `VEXA-SAST-008`: `CWE-78` OS Command Injection, `CWE-94` Code Eval, `CWE-502` Deserialization, `CWE-89` SQLi, `CWE-79` XSS, `CWE-22` Path Traversal, `CWE-327` Weak Crypto, `CWE-295` Disabled TLS). Also auto-invokes `opengrep`/`semgrep` if installed on `PATH`. |
+| `--sast` | Enable first-party static code analysis (`VEXA-SAST-001` to `VEXA-SAST-008`: `CWE-78` OS Command Injection, `CWE-94` Code Eval, `CWE-502` Deserialization, `CWE-89` SQLi, `CWE-79` XSS, `CWE-22` Path Traversal, `CWE-327` Weak Crypto, `CWE-295` Disabled TLS). External SARIF reports from OpenGrep/Semgrep/CodeQL can be ingested via `--ingest-sarif`. |
 | `--secrets` | Enable hardcoded secret & credential detection (`VEXA-SEC-001` to `VEXA-SEC-005`: AWS keys, GitHub PATs, Stripe/OpenAI/Anthropic keys, Private Keys, Vexa/Socket tokens). Raw secrets are immediately redacted to `PREFIX************`. |
 | `--ingest-sarif <FILE>` | Ingest external SARIF v2.1.0 files (OpenGrep, Semgrep, Trivy, TruffleHog, CodeQL) and strip raw code snippets before export. |
 | `--upload-facts` | Write `.vexa.facts.json` (schema `2.0`) locally with zero raw source code. |

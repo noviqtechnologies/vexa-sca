@@ -1,4 +1,5 @@
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
@@ -39,12 +40,36 @@ pub fn mask_secret(raw: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecretCoverage {
+    pub files_discovered: usize,
+    pub files_analysed: usize,
+    pub files_skipped: usize,
+    pub files_failed: usize,
+    pub limits_hit: Vec<String>,
+}
+
 impl SecretScanner {
     pub fn scan_workspace(workspace_root: &Path) -> Vec<CodeFinding> {
+        let (findings, _) = Self::scan_workspace_with_coverage(workspace_root);
+        findings
+    }
+
+    pub fn scan_workspace_with_coverage(
+        workspace_root: &Path,
+    ) -> (Vec<CodeFinding>, SecretCoverage) {
         let rules = Self::build_rules();
         let mut findings = Vec::new();
-        Self::walk_dir(workspace_root, workspace_root, 0, &rules, &mut findings);
-        findings
+        let mut coverage = SecretCoverage::default();
+        Self::walk_dir(
+            workspace_root,
+            workspace_root,
+            0,
+            &rules,
+            &mut findings,
+            &mut coverage,
+        );
+        (findings, coverage)
     }
 
     fn walk_dir(
@@ -53,13 +78,26 @@ impl SecretScanner {
         depth: usize,
         rules: &[SecretRule],
         findings: &mut Vec<CodeFinding>,
+        coverage: &mut SecretCoverage,
     ) {
         if depth > 8 {
+            let rel = normalize_workspace_relative_path(root, current);
+            coverage
+                .limits_hit
+                .push(format!("secrets_depth_limit_exceeded: {}", rel));
+            coverage.files_skipped += 1;
             return;
         }
         let entries = match fs::read_dir(current) {
             Ok(e) => e,
-            Err(_) => return,
+            Err(_) => {
+                let rel = normalize_workspace_relative_path(root, current);
+                coverage.files_failed += 1;
+                coverage
+                    .limits_hit
+                    .push(format!("secrets_dir_unreadable: {}", rel));
+                return;
+            }
         };
 
         for entry in entries.flatten() {
@@ -70,19 +108,33 @@ impl SecretScanner {
                 if Self::should_skip_dir(&file_name) {
                     continue;
                 }
-                Self::walk_dir(root, &path, depth + 1, rules, findings);
+                Self::walk_dir(root, &path, depth + 1, rules, findings, coverage);
             } else if path.is_file() {
                 if Self::should_skip_file(&file_name) {
                     continue;
                 }
+                coverage.files_discovered += 1;
+                let rel_path = normalize_workspace_relative_path(root, &path);
                 if let Ok(metadata) = entry.metadata() {
                     if metadata.len() > 1_048_576 {
+                        coverage.files_skipped += 1;
+                        coverage
+                            .limits_hit
+                            .push(format!("secrets_file_size_exceeded: {}", rel_path));
                         continue;
                     }
                 }
-                if let Ok(content) = fs::read_to_string(&path) {
-                    let rel_path = normalize_workspace_relative_path(root, &path);
-                    Self::scan_file_content(&rel_path, &content, rules, findings);
+                match fs::read_to_string(&path) {
+                    Ok(content) => {
+                        coverage.files_analysed += 1;
+                        Self::scan_file_content(&rel_path, &content, rules, findings);
+                    }
+                    Err(_) => {
+                        coverage.files_failed += 1;
+                        coverage
+                            .limits_hit
+                            .push(format!("secrets_file_unreadable: {}", rel_path));
+                    }
                 }
             }
         }
