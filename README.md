@@ -1046,9 +1046,14 @@ jobs:
 
 ---
 
-## 📈 EPSS Exploit Prediction Likelihood
+## 📈 EPSS & Multi-Source Exploit Weaponization Intelligence
 
-Standard CVSS scores reflect theoretical severity, not whether attackers are actively weaponizing a vulnerability in the wild. Vexa SCA integrates **FIRST.org EPSS (Exploit Prediction Scoring System)** probabilities directly into scan results:
+Standard CVSS scores reflect theoretical severity, not whether attackers are actively weaponizing a vulnerability in the wild. Vexa SCA synthesizes multi-layer threat intelligence directly into local scan results and pull request gates:
+
+1. **Google OSV & GHSA:** Maps dependency coordinates to CVE/GHSA IDs, patched versions, and CWE classifications.
+2. **NVD / CVSS v3.1:** Authoritative severity vectors and base metrics.
+3. **FIRST.org EPSS:** Batched 30-day statistical exploit prediction probabilities.
+4. **CISA KEV & Public PoC Tracking:** Flags vulnerabilities actively targeted in ransomware/campaigns (CISA KEV) and verifies whether functional exploit scripts exist on Exploit-DB, Packet Storm, or public PoC registries.
 
 ```bash
 # Prioritize vulnerabilities with a 20%+ probability of real-world exploitation

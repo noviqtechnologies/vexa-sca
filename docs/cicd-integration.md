@@ -206,3 +206,29 @@ All release criteria for Tier 1 GA enforcement have been evidenced and recorded 
 - Deterministic exit code precedence (`2` > `3` > `1` > `0`) verified by table-driven test suites.
 
 Teams can configure blocking gates (`--fail-on high`) with confidence that incomplete scans (`exit 3`) and invalid configurations (`exit 2`) fail closed predictably.
+
+---
+
+## GitHub Pull Request Feedback Surfaces
+
+When running in CI or via the Vexa GitHub App, Vexa SCA surfaces findings directly into pull requests via two tightly integrated surfaces:
+
+### 1. GitHub Check Runs (Vexa Shield / PR Security Gate)
+- Creates and updates a GitHub Check Run (`Vexa Shield / PR Security Gate`) on pull requests.
+- Emits line-level annotations on modified dependency manifests (`package-lock.json`, `Cargo.lock`, etc.).
+- Evaluates policy-based merge blocking based on configured thresholds (e.g., `--fail-on high`, active CISA KEV weaponization, or public exploit availability).
+
+### 2. Sticky PR Review Comments
+Posts and updates a single, deduplicated PR comment containing the consolidated Threat Table:
+
+| Package | Version | Severity (CVSS) | Threat Signal | AST Reachability | Safest Fix |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `tar` | `6.1.11` | CRITICAL (9.8) | 🚨 **Active KEV** | **REACHABLE** | `6.2.1` |
+| `axios` | `0.21.1` | HIGH (7.5) | 🔥 **Public PoC** | NOT_REACHABLE | `0.21.2` |
+
+#### Exploit Threat Tiers:
+- 🚨 **Active KEV:** Confirmed active in-the-wild exploitation campaigns (CISA KEV catalog).
+- 🔥 **Public PoC:** Functional, downloadable exploit code verified (Exploit-DB, Packet Storm, Metasploit, public PoC repositories).
+- ⚠️ **High EPSS:** Statistical 30-day exploit prediction probability $\ge 50\%$.
+- **— (Theoretical):** Baseline theoretical vulnerability with negligible exploit probability.
+

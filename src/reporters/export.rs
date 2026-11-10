@@ -337,8 +337,10 @@ pub fn format_github_step_summary(
 
     if !scan_result.vulnerabilities.is_empty() {
         out.push_str("### ⚡ Top Priority Findings\n\n");
-        out.push_str("| Package | Severity | Priority | Usage Signal | Safest Fix |\n");
-        out.push_str("| :--- | :--- | :--- | :--- | :--- |\n");
+        out.push_str(
+            "| Package | Severity | Threat Signal | Reachability | Priority | Safest Fix |\n",
+        );
+        out.push_str("| :--- | :--- | :--- | :--- | :--- | :--- |\n");
 
         let mut prioritized = scan_result.vulnerabilities.clone();
         prioritized.sort_by(|a, b| {
@@ -347,22 +349,49 @@ pub fn format_github_step_summary(
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        for v in prioritized.iter().take(3) {
+        for v in prioritized.iter().take(5) {
             let fix = v
                 .fixed_in
                 .first()
                 .cloned()
                 .unwrap_or_else(|| "No fix published".to_string());
+            let reach = match &v.reachability {
+                Some(r) if r.status == crate::types::ReachabilityStatus::Reachable => {
+                    "**REACHABLE**"
+                }
+                Some(r) if r.status == crate::types::ReachabilityStatus::Unreachable => {
+                    "NOT_REACHABLE"
+                }
+                _ => "UNKNOWN",
+            };
+            let threat_signal = match v.exploit_maturity {
+                crate::types::ExploitMaturity::ActiveKev => "🚨 **Active KEV**",
+                crate::types::ExploitMaturity::PublicPoc => "🔥 **Public PoC**",
+                crate::types::ExploitMaturity::HighProbability => "⚠️ **High EPSS**",
+                crate::types::ExploitMaturity::Theoretical => "—",
+            };
             out.push_str(&format!(
-                "| `{}` | `{}` | `{:.1}` | `{}` | `{}` |\n",
+                "| `{}` | `{}` | {} | {} | `{:.1}` | `{}` |\n",
                 v.package,
                 v.severity.level.as_str(),
+                threat_signal,
+                reach,
                 v.priority_score,
-                v.usage_signal.as_str(),
                 fix
             ));
         }
         out.push('\n');
+
+        out.push_str("<details>\n<summary>🔍 <b>Vulnerability Intelligence & Exploit Threat Provenance</b></summary>\n\n");
+        out.push_str("- **Google OSV & GHSA:** Canonical identifiers, fixed release versions, and CWE classifications.\n");
+        out.push_str(
+            "- **NVD / CVSS v3.1:** Industry baseline severity metrics and vector strings.\n",
+        );
+        out.push_str(
+            "- **FIRST.org EPSS:** Empirical 30-day statistical exploit prediction likelihood.\n",
+        );
+        out.push_str("- **CISA KEV & Exploit Repositories:** Real-world in-the-wild weaponized threats and public PoC code.\n\n");
+        out.push_str("</details>\n\n");
     }
 
     if !remediations.is_empty() {

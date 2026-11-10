@@ -404,6 +404,15 @@ impl VulnScanner {
             .enrich_findings(&mut vulnerabilities)
             .await;
 
+        // Re-classify exploit maturity now that EPSS scores are populated
+        for v in &mut vulnerabilities {
+            v.exploit_maturity = crate::scanner::exploit_intel::ExploitClassifier::classify(
+                v.is_kev,
+                &v.poc_urls,
+                v.epss.as_ref().map(|e| e.score),
+            );
+        }
+
         // Sort by severity (Critical -> High -> Medium -> Low)
         vulnerabilities.sort_by_key(|b| std::cmp::Reverse(b.severity.level.weight()));
 
@@ -1478,6 +1487,24 @@ impl VulnScanner {
             .max_by_key(|s| s.len())
             .map(|s| s.to_string());
 
+        // 9. CVSS Vector string & Public PoC URLs
+        let cvss_vector = cluster.iter().find_map(|adv| {
+            adv.get("severity")
+                .and_then(|s| s.as_array())
+                .and_then(|arr| {
+                    arr.iter().find_map(|item| {
+                        item.get("score")
+                            .and_then(|sc| sc.as_str())
+                            .filter(|sc| sc.starts_with("CVSS:3"))
+                            .map(|sc| sc.to_string())
+                    })
+                })
+        });
+        let poc_urls =
+            crate::scanner::exploit_intel::ExploitClassifier::extract_poc_references(&references);
+        let exploit_maturity =
+            crate::scanner::exploit_intel::ExploitClassifier::classify(is_kev, &poc_urls, None);
+
         let scope = if is_transitive {
             "transitive"
         } else {
@@ -1520,6 +1547,9 @@ impl VulnScanner {
             reason_code: None,
             priority_score: 0.0,
             is_new: false,
+            cvss_vector,
+            exploit_maturity,
+            poc_urls,
         };
         finding.priority_score = finding.compute_priority_score();
 

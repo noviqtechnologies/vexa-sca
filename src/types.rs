@@ -339,6 +339,31 @@ pub enum AdvisoryCategory {
     Informational,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ExploitMaturity {
+    /// Actively exploited in ransomware or active campaigns (CISA KEV)
+    ActiveKev,
+    /// Verified public exploit code exists (Exploit-DB, Metasploit, Packet Storm, PoC repos)
+    PublicPoc,
+    /// High statistical exploitation probability (EPSS >= 0.50)
+    HighProbability,
+    /// Low or negligible exploit probability (< 0.50)
+    #[default]
+    Theoretical,
+}
+
+impl ExploitMaturity {
+    pub fn badge(&self) -> &'static str {
+        match self {
+            Self::ActiveKev => "🚨 Active KEV",
+            Self::PublicPoc => "🔥 Public PoC",
+            Self::HighProbability => "⚠️ High EPSS",
+            Self::Theoretical => "—",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VulnerabilityFinding {
     pub id: String,
@@ -382,6 +407,12 @@ pub struct VulnerabilityFinding {
     pub priority_score: f64,
     #[serde(default)]
     pub is_new: bool,
+    #[serde(default)]
+    pub cvss_vector: Option<String>,
+    #[serde(default)]
+    pub exploit_maturity: ExploitMaturity,
+    #[serde(default)]
+    pub poc_urls: Vec<String>,
 }
 
 impl VulnerabilityFinding {
@@ -531,6 +562,9 @@ impl Default for VulnerabilityFinding {
             reason_code: None,
             priority_score: 0.0,
             is_new: false,
+            cvss_vector: None,
+            exploit_maturity: ExploitMaturity::Theoretical,
+            poc_urls: vec![],
         }
     }
 }

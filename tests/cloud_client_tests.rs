@@ -152,6 +152,7 @@ fn test_cloud_facts_zero_code_schema() {
         reason_code: None,
         priority_score: 80.0,
         is_new: false,
+        ..Default::default()
     });
 
     let facts = CloudClient::extract_facts(&graph, &scan_result);
