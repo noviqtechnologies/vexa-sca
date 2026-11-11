@@ -59,6 +59,10 @@ inputs:
     description: 'Target Vexa organization slug (e.g. codesecuredev-01)'
     required: false
     default: ''
+  project:
+    description: 'Target Vexa project name/slug override'
+    required: false
+    default: ''
   version:
     description: 'Vexa SCA CLI binary version to execute'
     required: false
@@ -76,8 +80,12 @@ runs:
         INPUT_TOKEN: ${{ inputs.token }}
         INPUT_API_URL: ${{ inputs.api-url }}
         INPUT_ORG: ${{ inputs.org }}
+        INPUT_PROJECT: ${{ inputs.project }}
       run: |
         printf 'VEXA_SCA_PATH=%s\n' "${INPUT_PATH}" >> "$GITHUB_ENV"
+        if [ -n "${INPUT_PROJECT}" ]; then
+          printf 'VEXA_PROJECT=%s\n' "${INPUT_PROJECT}" >> "$GITHUB_ENV"
+        fi
         if [ -n "${INPUT_TOKEN}" ]; then
           printf 'VEXA_SCA_SECURITY_API_KEY=%s\n' "${INPUT_TOKEN}" >> "$GITHUB_ENV"
           printf 'VEXA_SECURITY_API_KEY=%s\n' "${INPUT_TOKEN}" >> "$GITHUB_ENV"
@@ -170,8 +178,10 @@ runs:
         INPUT_UPLOAD_FACTS: ${{ inputs.upload-facts }}
         INPUT_API_URL: ${{ inputs.api-url }}
         INPUT_ORG: ${{ inputs.org }}
+        INPUT_PROJECT: ${{ inputs.project }}
         VEXA_ORG: ${{ inputs.org }}
         VEXA_ORG_SLUG: ${{ inputs.org }}
+        VEXA_PROJECT: ${{ inputs.project }}
         VEXA_API_URL: ${{ inputs.api-url }}
         VEXA_API_BASE_URL: ${{ inputs.api-url }}
         VEXA_SCA_SECURITY_API_KEY: ${{ inputs.token }}

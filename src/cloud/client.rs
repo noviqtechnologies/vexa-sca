@@ -387,17 +387,7 @@ impl CloudClient {
             });
         }
 
-        let project_name = if !dep_graph.root_pkg.name.trim().is_empty() {
-            dep_graph.root_pkg.name.clone()
-        } else if let Ok(repo) = std::env::var("GITHUB_REPOSITORY") {
-            if !repo.trim().is_empty() {
-                repo
-            } else {
-                "workspace".to_string()
-            }
-        } else {
-            "workspace".to_string()
-        };
+        let project_name = Self::resolve_project_name(dep_graph);
 
         VexaFactsPayload {
             version: 2,
@@ -415,6 +405,53 @@ impl CloudClient {
             findings: fact_findings,
             code_findings,
             components,
+        }
+    }
+
+    /// Resolve effective project name, prioritizing VEXA_PROJECT, then GITHUB_REPOSITORY
+    /// when the root package is generic or an upstream Go/Git module path (e.g. forks).
+    pub fn resolve_project_name(dep_graph: &DepGraph) -> String {
+        Self::resolve_project_name_from_env(
+            dep_graph,
+            std::env::var("VEXA_PROJECT").ok().as_deref(),
+            std::env::var("GITHUB_REPOSITORY").ok().as_deref(),
+        )
+    }
+
+    /// Pure resolver for project name given dependency graph and optional environment overrides
+    pub fn resolve_project_name_from_env(
+        dep_graph: &DepGraph,
+        env_project: Option<&str>,
+        env_github_repo: Option<&str>,
+    ) -> String {
+        if let Some(proj) = env_project.map(|s| s.trim()) {
+            if !proj.is_empty() {
+                return proj.to_string();
+            }
+        }
+
+        let pkg_name = dep_graph.root_pkg.name.trim();
+
+        // In GitHub Actions, prefer GITHUB_REPOSITORY if root_pkg is generic or an upstream Go/Git path
+        if let Some(gh_repo) = env_github_repo.map(|s| s.trim()) {
+            if !gh_repo.is_empty()
+                && (pkg_name.is_empty()
+                    || pkg_name == "root"
+                    || pkg_name == "workspace"
+                    || pkg_name == "project"
+                    || pkg_name.starts_with("github.com/")
+                    || pkg_name.starts_with("gitlab.com/")
+                    || pkg_name.starts_with("bitbucket.org/")
+                    || pkg_name.starts_with("gopkg.in/"))
+            {
+                return gh_repo.to_string();
+            }
+        }
+
+        if !pkg_name.is_empty() {
+            pkg_name.to_string()
+        } else {
+            "workspace".to_string()
         }
     }
 

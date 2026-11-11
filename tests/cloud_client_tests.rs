@@ -301,3 +301,68 @@ fn test_facts_payload_v2_contains_zero_raw_source_code() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_resolve_project_name_bulletproof_logic() {
+    use vexa_sca::cloud::client::CloudClient;
+    use vexa_sca::core::dep_graph::{DepGraph, PkgManagerInfo};
+    use vexa_sca::types::PkgInfo;
+
+    let make_graph = |pkg_name: &str| {
+        DepGraph::new(
+            PkgInfo::new(pkg_name, "1.0.0", "npm"),
+            PkgManagerInfo {
+                name: "npm".to_string(),
+                version: "10.0.0".to_string(),
+            },
+        )
+    };
+
+    // Case 1: Standard local repo without env vars
+    let g1 = make_graph("my-awesome-app");
+    assert_eq!(
+        CloudClient::resolve_project_name_from_env(&g1, None, None),
+        "my-awesome-app"
+    );
+
+    // Case 2: Upstream Go module / fork in GitHub Actions
+    let g2 = make_graph("github.com/AdguardTeam/AdGuardHome");
+    assert_eq!(
+        CloudClient::resolve_project_name_from_env(&g2, None, Some("vexasecdev/AdGuardHome")),
+        "vexasecdev/AdGuardHome"
+    );
+
+    // Case 3: Generic root names in GitHub Actions
+    let g3_root = make_graph("root");
+    let g3_proj = make_graph("project");
+    let g3_empty = make_graph("");
+    assert_eq!(
+        CloudClient::resolve_project_name_from_env(&g3_root, None, Some("vexasecdev/AdGuardHome")),
+        "vexasecdev/AdGuardHome"
+    );
+    assert_eq!(
+        CloudClient::resolve_project_name_from_env(&g3_proj, None, Some("vexasecdev/AdGuardHome")),
+        "vexasecdev/AdGuardHome"
+    );
+    assert_eq!(
+        CloudClient::resolve_project_name_from_env(&g3_empty, None, Some("vexasecdev/AdGuardHome")),
+        "vexasecdev/AdGuardHome"
+    );
+
+    // Case 4: Monorepo subpackage preserves its specific package name
+    let g4 = make_graph("@org/payment-service");
+    assert_eq!(
+        CloudClient::resolve_project_name_from_env(&g4, None, Some("my-org/monorepo")),
+        "@org/payment-service"
+    );
+
+    // Case 5: Explicit VEXA_PROJECT override always wins
+    assert_eq!(
+        CloudClient::resolve_project_name_from_env(
+            &g2,
+            Some("custom-project-slug"),
+            Some("vexasecdev/AdGuardHome")
+        ),
+        "custom-project-slug"
+    );
+}
