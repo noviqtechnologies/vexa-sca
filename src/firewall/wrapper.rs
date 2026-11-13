@@ -170,7 +170,8 @@ impl FirewallWrapper {
                             "ecosystem": pkg.ecosystem,
                         });
 
-                        let eval_url = format!("{}/firewall/evaluate", api_base.trim_end_matches('/'));
+                        let eval_url =
+                            format!("{}/firewall/evaluate", api_base.trim_end_matches('/'));
                         if let Ok(resp) = client
                             .post(&eval_url)
                             .header("Authorization", format!("Bearer {}", api_key.trim()))
