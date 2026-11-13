@@ -150,9 +150,15 @@ impl FirewallWrapper {
                     }
                 }
 
-                // 3. Authenticated Team+ Mode: Check cloud firewall if API key is present
-                if let Ok(api_key) = std::env::var("VEXA_SCA_API_KEY") {
-                    if !api_key.trim().is_empty() {
+                // 3. Authenticated Team+ Mode: Check cloud firewall if token is present
+                let api_base = crate::cloud::auth::AuthManager::resolve_api_base_url(None);
+                let cloud_token = crate::cloud::auth::AuthManager::get_token();
+                let offline = std::env::var("VEXA_FIREWALL_OFFLINE")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+
+                if !offline {
+                    if let Some(ref api_key) = cloud_token {
                         let client = reqwest::Client::builder()
                             .timeout(Duration::from_millis(1500))
                             .build()
@@ -164,8 +170,9 @@ impl FirewallWrapper {
                             "ecosystem": pkg.ecosystem,
                         });
 
+                        let eval_url = format!("{}/firewall/evaluate", api_base.trim_end_matches('/'));
                         if let Ok(resp) = client
-                            .post("https://api.vexasec.io/sca/v1/firewall/evaluate")
+                            .post(&eval_url)
                             .header("Authorization", format!("Bearer {}", api_key.trim()))
                             .json(&payload)
                             .send()
@@ -186,6 +193,61 @@ impl FirewallWrapper {
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // Emit Team+ firewall telemetry asynchronously (never blocks local install if offline)
+            let offline_mode = std::env::var("VEXA_FIREWALL_OFFLINE")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if !offline_mode {
+                if let Some(api_key) = crate::cloud::auth::AuthManager::get_token() {
+                    let api_base = crate::cloud::auth::AuthManager::resolve_api_base_url(None);
+                    let events_url = format!("{}/firewall/events", api_base.trim_end_matches('/'));
+                    let actor = std::env::var("USER")
+                        .or_else(|_| std::env::var("USERNAME"))
+                        .unwrap_or_else(|_| "unknown".to_string());
+                    let is_blocked = !blocked_reasons.is_empty();
+                    let action_str = if is_blocked { "BLOCKED" } else { "ALLOWED" };
+                    let combined_reason = blocked_reasons.join("; ");
+                    let rule_triggered = if is_blocked {
+                        blocked_reasons
+                            .first()
+                            .and_then(|r| r.split(']').next())
+                            .map(|s| s.trim_start_matches('[').to_string())
+                            .unwrap_or_else(|| "POLICY_BLOCK".to_string())
+                    } else {
+                        "PREFLIGHT_PASS".to_string()
+                    };
+
+                    for pkg in &packages {
+                        let ev_payload = serde_json::json!({
+                            "package": pkg.name,
+                            "version": pkg.version.as_deref().unwrap_or("latest"),
+                            "ecosystem": pkg.ecosystem,
+                            "action": action_str,
+                            "rule_triggered": rule_triggered,
+                            "reason": combined_reason,
+                            "actor": actor,
+                            "os": std::env::consts::OS,
+                            "timestamp": chrono::Utc::now().to_rfc3339(),
+                        });
+                        let url_c = events_url.clone();
+                        let tok_c = api_key.clone();
+                        tokio::spawn(async move {
+                            if let Ok(client) = reqwest::Client::builder()
+                                .timeout(Duration::from_millis(1200))
+                                .build()
+                            {
+                                let _ = client
+                                    .post(&url_c)
+                                    .header("Authorization", format!("Bearer {}", tok_c.trim()))
+                                    .json(&ev_payload)
+                                    .send()
+                                    .await;
+                            }
+                        });
                     }
                 }
             }
