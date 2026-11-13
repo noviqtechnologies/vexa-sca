@@ -499,6 +499,9 @@ impl CloudClient {
             req = req.header("X-Vexa-Org", org);
         }
 
+        // Log the resolved endpoint (stderr) so a wrong-environment upload is obvious.
+        eprintln!("Uploading scan facts to {}", base_url);
+
         let resp =
             req.json(payload).send().await.map_err(|e| {
                 format!("Failed to connect to Vexa SCA Cloud ({}): {}", sync_url, e)
@@ -507,9 +510,21 @@ impl CloudClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
+            let hint = if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                format!(
+                    " Hint: token was rejected by {}. If this key was issued for a different \
+                     environment (dev/staging/prod), set VEXA_API_URL or the action's `api-url` \
+                     input accordingly.",
+                    base_url
+                )
+            } else {
+                String::new()
+            };
             return Err(format!(
-                "Cloud upload failed with status {}: {}",
-                status, body
+                "Cloud upload failed with status {}: {}{}",
+                status, body, hint
             ));
         }
 
