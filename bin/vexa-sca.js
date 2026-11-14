@@ -74,11 +74,45 @@ if (!cmd) {
   }
 }
 
-// 4. Check ~/.vexa/bin/vexa-sca[.exe]
+// 4. Check ~/.vexa/bin/vexa-sca[.exe] or LOCALAPPDATA\vexa\bin\vexa-sca.exe
 if (!cmd) {
-  const homeBin = path.join(os.homedir(), '.vexa', 'bin', `vexa-sca${binExt}`);
-  if (fs.existsSync(homeBin)) {
-    cmd = homeBin;
+  const candidateDirs = [path.join(os.homedir(), '.vexa', 'bin'), path.join(os.homedir(), '.local', 'bin')];
+  if (isWin && process.env.LOCALAPPDATA) {
+    candidateDirs.unshift(path.join(process.env.LOCALAPPDATA, 'vexa', 'bin'));
+  }
+  for (const dir of candidateDirs) {
+    const binPath = path.join(dir, `vexa-sca${binExt}`);
+    if (fs.existsSync(binPath)) {
+      cmd = binPath;
+      break;
+    }
+  }
+}
+
+// 4.5. Auto-download prebuilt GitHub release binary if Cargo.toml is not present (e.g. `npx vexa-sca`)
+if (!cmd && !fs.existsSync(path.join(rootDir, 'Cargo.toml'))) {
+  const pkgVersion = require('../package.json').version || '1.3.5';
+  const tag = `v${pkgVersion}`;
+  const cacheDir = path.join(os.homedir(), '.vexa', 'bin');
+  const cachedBin = path.join(cacheDir, `vexa-sca${binExt}`);
+  try {
+    fs.mkdirSync(cacheDir, { recursive: true });
+    if (isWin) {
+      const zipUrl = `https://github.com/noviqtechnologies/vexa-sca/releases/download/${tag}/vexa-sca-windows-x86_64.zip`;
+      const tmpZip = path.join(os.tmpdir(), `vexa-sca-${pkgVersion}.zip`);
+      spawnSync('curl.exe', ['-sSLf', '-o', tmpZip, zipUrl], { stdio: 'inherit' });
+      spawnSync('powershell', ['-NoProfile', '-Command', `Expand-Archive -Path '${tmpZip}' -DestinationPath '${cacheDir}' -Force`], { stdio: 'inherit' });
+    } else {
+      const osSlug = process.platform === 'darwin' ? 'darwin' : 'linux';
+      const archSlug = process.arch === 'arm64' ? 'arm64' : 'x86_64';
+      const tarUrl = `https://github.com/noviqtechnologies/vexa-sca/releases/download/${tag}/vexa-sca-${osSlug}-${archSlug}.tar.gz`;
+      spawnSync('sh', ['-c', `curl -sSLf "${tarUrl}" | tar -xz -C "${cacheDir}" && chmod +x "${cachedBin}"`], { stdio: 'inherit' });
+    }
+    if (fs.existsSync(cachedBin)) {
+      cmd = cachedBin;
+    }
+  } catch (_) {
+    // Proceed to cargo fallback
   }
 }
 

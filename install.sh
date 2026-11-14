@@ -9,6 +9,9 @@ VERSION="${VERSION:-latest}"
 
 if [ "$VERSION" = "latest" ]; then
     VERSION_TAG=$(curl -sSf "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || echo "v1.3.5")
+    if [ -z "$VERSION_TAG" ]; then
+        VERSION_TAG="v1.3.5"
+    fi
 else
     case "$VERSION" in
         v*) VERSION_TAG="$VERSION" ;;
@@ -20,20 +23,20 @@ OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 
 case "$ARCH" in
-    x86_64|amd64) ARCH="x86_64" ;;
-    aarch64|arm64) ARCH="aarch64" ;;
+    x86_64|amd64) ARCH_SLUG="x86_64" ;;
+    aarch64|arm64) ARCH_SLUG="arm64" ;;
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
 
 case "$OS" in
-    linux)  TARGET="${ARCH}-unknown-linux-gnu" ;;
-    darwin) TARGET="${ARCH}-apple-darwin" ;;
+    linux)  OS_SLUG="linux" ;;
+    darwin) OS_SLUG="darwin" ;;
     *) echo "Unsupported OS: $OS" >&2; exit 1 ;;
 esac
 
-TAR_NAME="vexa-sca-${TARGET}.tar.gz"
+TAR_NAME="vexa-sca-${OS_SLUG}-${ARCH_SLUG}.tar.gz"
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION_TAG/$TAR_NAME"
-CHECKSUM_URL="https://github.com/$REPO/releases/download/$VERSION_TAG/checksums.txt"
+CHECKSUM_URL="https://github.com/$REPO/releases/download/$VERSION_TAG/${TAR_NAME}.sha256"
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 mkdir -p "$INSTALL_DIR"
@@ -41,26 +44,26 @@ mkdir -p "$INSTALL_DIR"
 TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'vexa-sca')"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-echo "Downloading Vexa SCA $VERSION_TAG for $TARGET..."
+echo "Downloading Vexa SCA $VERSION_TAG (${OS_SLUG}-${ARCH_SLUG})..."
 if ! curl -sSLf "$DOWNLOAD_URL" -o "$TMP_DIR/$TAR_NAME" 2>/dev/null; then
-    echo "Prebuilt release binary not found; attempting cargo install..." >&2
+    echo "Prebuilt release binary for ${OS_SLUG}-${ARCH_SLUG} not found; attempting cargo install from Git tag $VERSION_TAG..." >&2
     if command -v cargo >/dev/null 2>&1; then
-        cargo install vexa-sca --locked
+        cargo install --git "https://github.com/$REPO.git" --tag "$VERSION_TAG" --locked --bin vexa-sca
         echo "✔ vexa-sca installed successfully via cargo!"
         exit 0
     else
-        echo "Error: Failed to download prebuilt binary and cargo is not available." >&2
+        echo "Error: Failed to download prebuilt binary ($DOWNLOAD_URL) and cargo is not available." >&2
         exit 1
     fi
 fi
 
-if curl -sSLf "$CHECKSUM_URL" -o "$TMP_DIR/checksums.txt" 2>/dev/null; then
-    EXPECTED_HASH=$(grep "$TAR_NAME" "$TMP_DIR/checksums.txt" | awk '{print $1}')
+if curl -sSLf "$CHECKSUM_URL" -o "$TMP_DIR/${TAR_NAME}.sha256" 2>/dev/null; then
+    EXPECTED_HASH=$(awk '{print $1}' "$TMP_DIR/${TAR_NAME}.sha256" | tr '[:upper:]' '[:lower:]' | head -n 1)
     if [ -n "$EXPECTED_HASH" ]; then
         if command -v sha256sum >/dev/null 2>&1; then
-            ACTUAL_HASH=$(sha256sum "$TMP_DIR/$TAR_NAME" | awk '{print $1}')
+            ACTUAL_HASH=$(sha256sum "$TMP_DIR/$TAR_NAME" | awk '{print $1}' | tr '[:upper:]' '[:lower:]')
         elif command -v shasum >/dev/null 2>&1; then
-            ACTUAL_HASH=$(shasum -a 256 "$TMP_DIR/$TAR_NAME" | awk '{print $1}')
+            ACTUAL_HASH=$(shasum -a 256 "$TMP_DIR/$TAR_NAME" | awk '{print $1}' | tr '[:upper:]' '[:lower:]')
         fi
         if [ -n "$ACTUAL_HASH" ] && [ "$ACTUAL_HASH" != "$EXPECTED_HASH" ]; then
             echo "Error: SHA256 verification failed!" >&2
@@ -68,7 +71,7 @@ if curl -sSLf "$CHECKSUM_URL" -o "$TMP_DIR/checksums.txt" 2>/dev/null; then
             echo "Actual:   $ACTUAL_HASH" >&2
             exit 1
         fi
-        echo "✔ Checksum verified successfully."
+        echo "✔ Checksum verified ($ACTUAL_HASH)."
     fi
 fi
 

@@ -36,9 +36,9 @@ if ($Version -eq "latest") {
 
 Write-Host "Installing Vexa SCA $VersionTag..." -ForegroundColor Green
 
-$ZipName = "vexa-sca-x86_64-pc-windows-msvc.zip"
+$ZipName = "vexa-sca-windows-x86_64.zip"
 $DownloadUrl = "https://github.com/$Repo/releases/download/$VersionTag/$ZipName"
-$ChecksumUrl = "https://github.com/$Repo/releases/download/$VersionTag/checksums.txt"
+$ChecksumUrl = "https://github.com/$Repo/releases/download/$VersionTag/$ZipName.sha256"
 
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) "vexa-sca-install-$(Get-Random)"
 New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
@@ -49,25 +49,25 @@ try {
     try {
         Invoke-WebRequest -Uri $DownloadUrl -OutFile $ZipPath -UseBasicParsing
     } catch {
-        # Fallback to Cargo if release archive not found
-        Write-Host "Prebuilt release binary not found; falling back to cargo install..." -ForegroundColor Yellow
+        # Fallback to Cargo git install if release archive not found
+        Write-Host "Prebuilt release binary not found; falling back to cargo install from Git tag $VersionTag..." -ForegroundColor Yellow
         if (Get-Command cargo -ErrorAction SilentlyContinue) {
-            cargo install vexa-sca --locked --version ($VersionTag.TrimStart('v'))
+            cargo install --git "https://github.com/$Repo.git" --tag $VersionTag --locked --bin vexa-sca
             Write-Host "✔ vexa-sca installed successfully via cargo!" -ForegroundColor Green
             exit 0
         } else {
-            throw "Failed to download release zip and cargo is not installed."
+            throw "Failed to download release zip ($DownloadUrl) and cargo is not installed."
         }
     }
 
     if (-not $SkipHashCheck) {
         try {
-            $ChecksumPath = Join-Path $TempDir "checksums.txt"
+            $ChecksumPath = Join-Path $TempDir "$ZipName.sha256"
             Invoke-WebRequest -Uri $ChecksumUrl -OutFile $ChecksumPath -UseBasicParsing
-            $ExpectedHash = (Get-Content $ChecksumPath | Select-String $ZipName | ForEach-Object { ($_ -split '\s+')[0] }).Trim()
+            $ExpectedHash = ((Get-Content $ChecksumPath | Select-Object -First 1) -split '\s+')[0].Trim().ToLower()
             if ($ExpectedHash) {
                 $ActualHash = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToLower()
-                if ($ActualHash -ne $ExpectedHash.ToLower()) {
+                if ($ActualHash -ne $ExpectedHash) {
                     throw "SHA256 checksum mismatch! Expected: $ExpectedHash, Computed: $ActualHash"
                 }
                 Write-Host "✔ SHA256 Checksum verified: $ActualHash" -ForegroundColor Green
