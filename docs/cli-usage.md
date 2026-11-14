@@ -1,4 +1,4 @@
-# Vexa SCA CLI Usage Guide (v2.0 / GA v1.3.5+)
+# Vexa SCA CLI Usage Guide (v2.0 / GA v1.3.6+)
 
 ## Status & Operational Readiness
 
