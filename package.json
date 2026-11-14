@@ -2,6 +2,19 @@
   "name": "vexa-sca",
   "version": "1.3.5",
   "description": "Vexa SCA - Software Composition Analysis & Security Engine (High-Performance Rust Core)",
+  "homepage": "https://vexasec.io/sca",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/noviqtechnologies/vexa-sca.git"
+  },
+  "bugs": {
+    "url": "https://github.com/noviqtechnologies/vexa-sca/issues"
+  },
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
   "bin": {
     "vexa-sca": "bin/vexa-sca.js",
     "vexa": "bin/vexa.js",

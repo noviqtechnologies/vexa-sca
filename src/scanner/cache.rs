@@ -115,6 +115,31 @@ impl VulnCache {
         }
     }
 
+    fn atomic_write(target_path: &Path, content: &str) {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp_name = format!(
+            "{}.tmp.{}.{}",
+            target_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("cache"),
+            std::process::id(),
+            unique
+        );
+        let tmp_path = target_path.with_file_name(tmp_name);
+        if fs::write(&tmp_path, content).is_ok() {
+            if fs::rename(&tmp_path, target_path).is_err() {
+                let _ = fs::write(target_path, content);
+                let _ = fs::remove_file(&tmp_path);
+            }
+        } else {
+            let _ = fs::write(target_path, content);
+        }
+    }
+
     pub fn set(&self, pkg_info: &PkgInfo, vulns: &[Value]) {
         let key = self.get_key(pkg_info);
         let file_path = self.cache_dir.join(format!("{}.json", key));
@@ -131,7 +156,7 @@ impl VulnCache {
         });
 
         if let Ok(json_str) = serde_json::to_string(&data) {
-            let _ = fs::write(file_path, json_str);
+            Self::atomic_write(&file_path, &json_str);
         }
     }
 
@@ -229,7 +254,7 @@ impl VulnCache {
         });
 
         if let Ok(json_str) = serde_json::to_string(&wrapper) {
-            let _ = fs::write(file_path, json_str);
+            Self::atomic_write(&file_path, &json_str);
         }
     }
 }

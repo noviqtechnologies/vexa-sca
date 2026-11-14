@@ -144,6 +144,144 @@ impl ReachabilityEngine {
         known.insert("CVE-2024-35195", vec!["Session", "request"]);
         known.insert("GHSA-9wx4-h78v-vm56", vec!["Session", "request"]);
 
+        // Lodash additional prototype pollution CVEs
+        known.insert("CVE-2019-10744", vec!["defaultsDeep", "merge", "mergeWith"]);
+        known.insert(
+            "GHSA-jf85-cpcp-j695",
+            vec!["defaultsDeep", "merge", "mergeWith"],
+        );
+        known.insert("CVE-2018-16487", vec!["defaultsDeep", "merge", "mergeWith"]);
+        known.insert(
+            "GHSA-4xc9-xhrj-v574",
+            vec!["defaultsDeep", "merge", "mergeWith"],
+        );
+
+        // Urllib3
+        known.insert(
+            "CVE-2023-45803",
+            vec!["PoolManager", "ProxyManager", "request", "urlopen"],
+        );
+        known.insert(
+            "GHSA-g4mx-q9vg-27p4",
+            vec!["PoolManager", "ProxyManager", "request", "urlopen"],
+        );
+        known.insert(
+            "CVE-2023-43804",
+            vec!["PoolManager", "ProxyManager", "request", "urlopen"],
+        );
+        known.insert(
+            "GHSA-v845-jxx5-vc9f",
+            vec!["PoolManager", "ProxyManager", "request", "urlopen"],
+        );
+        known.insert(
+            "CVE-2024-37891",
+            vec!["PoolManager", "ProxyManager", "request", "urlopen"],
+        );
+        known.insert(
+            "GHSA-34jh-p97f-mpxf",
+            vec!["PoolManager", "ProxyManager", "request", "urlopen"],
+        );
+
+        // JsonWebToken
+        known.insert("CVE-2022-23529", vec!["verify"]);
+        known.insert("GHSA-27h2-hvpr-p74q", vec!["verify"]);
+        known.insert("CVE-2022-23540", vec!["verify"]);
+        known.insert("GHSA-qwph-4952-7xr6", vec!["verify"]);
+        known.insert("CVE-2022-23539", vec!["sign", "verify"]);
+        known.insert("GHSA-8cf7-32gw-wr33", vec!["sign", "verify"]);
+
+        // Axios
+        known.insert(
+            "CVE-2023-45857",
+            vec!["get", "post", "request", "create", "put", "delete"],
+        );
+        known.insert(
+            "GHSA-wf5p-g6vw-rhxx",
+            vec!["get", "post", "request", "create", "put", "delete"],
+        );
+        known.insert("CVE-2024-39338", vec!["get", "post", "request", "create"]);
+        known.insert(
+            "GHSA-8hc4-vh64-cxmj",
+            vec!["get", "post", "request", "create"],
+        );
+
+        // Semver & Minimatch & Braces & Micromatch & Cross-Spawn
+        known.insert(
+            "CVE-2022-25883",
+            vec!["coerce", "parse", "satisfies", "valid", "clean"],
+        );
+        known.insert(
+            "GHSA-c2qf-rxjj-qqgw",
+            vec!["coerce", "parse", "satisfies", "valid", "clean"],
+        );
+        known.insert(
+            "CVE-2022-3517",
+            vec!["minimatch", "braceExpand", "makeRe", "match"],
+        );
+        known.insert(
+            "GHSA-f8q6-p94x-37v3",
+            vec!["minimatch", "braceExpand", "makeRe", "match"],
+        );
+        known.insert(
+            "CVE-2026-27903",
+            vec!["minimatch", "braceExpand", "makeRe", "match"],
+        );
+        known.insert(
+            "CVE-2026-27904",
+            vec!["minimatch", "braceExpand", "makeRe", "match"],
+        );
+        known.insert("CVE-2024-4068", vec!["braces", "expand", "compile"]);
+        known.insert("GHSA-grv7-fg5c-xmjg", vec!["braces", "expand", "compile"]);
+        known.insert(
+            "CVE-2024-4067",
+            vec!["micromatch", "isMatch", "makeRe", "braces"],
+        );
+        known.insert(
+            "GHSA-952p-6rrq-rcjv",
+            vec!["micromatch", "isMatch", "makeRe", "braces"],
+        );
+        known.insert("CVE-2024-21538", vec!["spawn", "sync"]);
+        known.insert("GHSA-3xgq-45jj-v275", vec!["spawn", "sync"]);
+
+        // qs, PyYAML, Jinja2, Werkzeug, Express, tar, tough-cookie, postcss
+        known.insert("CVE-2022-24999", vec!["parse"]);
+        known.insert("GHSA-hrpp-h998-j3pp", vec!["parse"]);
+        known.insert(
+            "CVE-2020-14343",
+            vec!["load", "unsafe_load", "full_load", "load_all"],
+        );
+        known.insert(
+            "GHSA-8q59-q68h-6hv4",
+            vec!["load", "unsafe_load", "full_load", "load_all"],
+        );
+        known.insert(
+            "CVE-2024-22195",
+            vec!["xmlattr", "Environment", "Template", "from_string"],
+        );
+        known.insert(
+            "GHSA-h5c8-rqwp-cp95",
+            vec!["xmlattr", "Environment", "Template", "from_string"],
+        );
+        known.insert("CVE-2024-34069", vec!["DebuggedApplication", "run_simple"]);
+        known.insert(
+            "GHSA-2g68-c3qc-8985",
+            vec!["DebuggedApplication", "run_simple"],
+        );
+        known.insert("CVE-2024-29041", vec!["redirect", "location"]);
+        known.insert("GHSA-rv95-896h-c2vc", vec!["redirect", "location"]);
+        known.insert("CVE-2024-28863", vec!["extract", "x", "Unpack", "Parse"]);
+        known.insert(
+            "GHSA-f5x3-32g6-xq36",
+            vec!["extract", "x", "Unpack", "Parse"],
+        );
+        known.insert("CVE-2023-26136", vec!["CookieJar", "parse", "setCookie"]);
+        known.insert(
+            "GHSA-72xf-g2v4-qvf3",
+            vec!["CookieJar", "parse", "setCookie"],
+        );
+        known.insert("CVE-2023-44270", vec!["parse", "process"]);
+        known.insert("GHSA-7fh5-64p2-3v2j", vec!["parse", "process"]);
+
         let files_discovered = ast_index.files_discovered;
         let files_skipped = ast_index.files_skipped;
         let file_limit_hit = ast_index.file_limit_hit;
@@ -303,7 +441,8 @@ impl ReachabilityEngine {
             } else {
                 None
             }
-        });
+        })
+        .or_else(|| self.infer_functions_from_details(vuln));
 
         let raw_pkg = if let Some(idx) = vuln.package.find(':') {
             &vuln.package[idx + 1..]
@@ -425,6 +564,7 @@ impl ReachabilityEngine {
         }
 
         let has_prod_call_sites = !prod_call_sites.is_empty();
+        let has_targeted_prod_call_sites = target_functions.is_some() && has_prod_call_sites;
         let is_specific = prod_call_sites.iter().any(|c| c.is_specific_function_match)
             || test_call_sites.iter().any(|c| c.is_specific_function_match);
 
@@ -443,8 +583,8 @@ impl ReachabilityEngine {
         };
 
         // Determine Reachability Verdict under conservative positive-proof scope (DDD Section 3.2.3)
-        let (status, reason_code) = if has_prod_call_sites {
-            // Proven syntactic usage signal found in production code path
+        let (status, reason_code) = if has_targeted_prod_call_sites {
+            // Proven syntactic usage signal of target vulnerable symbol found in production code path
             (
                 ReachabilityStatus::Reachable,
                 Some(ReasonCode::DirectUsageFound),
@@ -493,8 +633,8 @@ impl ReachabilityEngine {
                     Some(ReasonCode::TransitiveNotAnalyzed),
                 )
             }
-        } else if imported_in_prod && target_functions.is_none() {
-            // Package is imported in production, but no structured symbol data is available
+        } else if (imported_in_prod || has_prod_call_sites) && target_functions.is_none() {
+            // Package is imported/used in production, but no structured symbol data is available
             (ReachabilityStatus::Unknown, Some(ReasonCode::NoSymbolData))
         } else {
             // Positive proof of unreachability under complete coverage (BUG-004):
@@ -555,9 +695,180 @@ impl ReachabilityEngine {
         true
     }
 
-    #[allow(dead_code)]
-    fn infer_functions_from_details(&self, _vuln: &VulnerabilityFinding) -> Option<Vec<String>> {
-        None
+    fn infer_functions_from_details(&self, vuln: &VulnerabilityFinding) -> Option<Vec<String>> {
+        let raw_pkg = vuln
+            .package
+            .split(':')
+            .next_back()
+            .unwrap_or(&vuln.package)
+            .split('@')
+            .next()
+            .unwrap_or(&vuln.package)
+            .trim();
+        let pkg_lower = raw_pkg.to_lowercase();
+        let pkg_ident = pkg_lower.replace('-', "_");
+        let pkg_short = pkg_lower.rsplit('/').next().unwrap_or(&pkg_lower);
+
+        let mut inferred = Vec::new();
+        let mut seen = HashSet::new();
+
+        let is_valid_symbol = |sym: &str| -> bool {
+            let s = sym.trim();
+            if s.len() < 2 || s.len() > 48 {
+                return false;
+            }
+            let mut chars = s.chars();
+            let Some(first) = chars.next() else {
+                return false;
+            };
+            if !(first.is_ascii_alphabetic() || first == '_' || first == '$') {
+                return false;
+            }
+            if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$') {
+                return false;
+            }
+            let sl = s.to_lowercase();
+            if sl == pkg_lower
+                || sl == pkg_ident
+                || sl == pkg_short
+                || sl.starts_with("cve_")
+                || sl.starts_with("ghsa_")
+                || matches!(
+                    sl.as_str(),
+                    "true"
+                        | "false"
+                        | "null"
+                        | "none"
+                        | "undefined"
+                        | "self"
+                        | "this"
+                        | "object"
+                        | "string"
+                        | "number"
+                        | "boolean"
+                        | "array"
+                        | "function"
+                        | "method"
+                        | "class"
+                        | "module"
+                        | "package"
+                        | "version"
+                        | "default"
+                        | "options"
+                        | "config"
+                        | "error"
+                        | "input"
+                        | "output"
+                        | "result"
+                        | "value"
+                        | "data"
+                        | "http"
+                        | "https"
+                        | "json"
+                        | "yaml"
+                        | "html"
+                )
+            {
+                return false;
+            }
+            true
+        };
+
+        let mut push_sym = |cand: &str| {
+            let clean = cand
+                .trim()
+                .trim_end_matches("()")
+                .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '$');
+            if is_valid_symbol(clean) && seen.insert(clean.to_string()) {
+                inferred.push(clean.to_string());
+            }
+        };
+
+        let mut inspect_text = |text: &str, is_title: bool| {
+            // 1. Extract backticked code spans: `pkg.fn()`, `fn()`, or `fn` in title
+            let mut rest = text;
+            while let Some(start) = rest.find('`') {
+                let after_start = &rest[start + 1..];
+                if let Some(end) = after_start.find('`') {
+                    let span = after_start[..end].trim();
+                    let has_parens = span.ends_with("()");
+                    let core = span.trim_end_matches("()");
+                    if let Some(dot_idx) = core.rfind('.') {
+                        let prefix = core[..dot_idx].trim().to_lowercase();
+                        let member = core[dot_idx + 1..].trim();
+                        if prefix == pkg_lower
+                            || prefix == pkg_ident
+                            || prefix == pkg_short
+                            || prefix == "_"
+                            || has_parens
+                            || is_title
+                        {
+                            push_sym(member);
+                        }
+                    } else if let Some(col_idx) = core.rfind("::") {
+                        let member = core[col_idx + 2..].trim();
+                        push_sym(member);
+                    } else if has_parens || is_title {
+                        push_sym(core);
+                    }
+                    rest = &after_start[end + 1..];
+                } else {
+                    break;
+                }
+            }
+
+            // 2. Extract unquoted <pkg>.<symbol> or <pkg>::<symbol> tokens
+            for raw_token in text.split_whitespace() {
+                let token = raw_token.trim_matches(|c: char| {
+                    matches!(
+                        c,
+                        ',' | ';' | ':' | '.' | '(' | ')' | '[' | ']' | '"' | '\'' | '`'
+                    )
+                });
+                let token_no_parens = raw_token
+                    .trim_matches(|c: char| matches!(c, ',' | ';' | '"' | '\'' | '`'))
+                    .trim_end_matches("()");
+                if let Some(dot_idx) = token_no_parens.find('.') {
+                    let prefix = token_no_parens[..dot_idx].to_lowercase();
+                    let suffix = &token_no_parens[dot_idx + 1..];
+                    if (prefix == pkg_lower || prefix == pkg_ident || prefix == pkg_short)
+                        && !suffix.contains('.')
+                        && !suffix
+                            .chars()
+                            .next()
+                            .map(|c| c.is_ascii_digit())
+                            .unwrap_or(true)
+                    {
+                        push_sym(suffix);
+                    }
+                } else if let Some(col_idx) = token_no_parens.rfind("::") {
+                    let prefix = token_no_parens[..col_idx].to_lowercase();
+                    let suffix = &token_no_parens[col_idx + 2..];
+                    if prefix.contains(&pkg_lower)
+                        || prefix.contains(&pkg_ident)
+                        || prefix.contains(pkg_short)
+                    {
+                        push_sym(suffix);
+                    }
+                } else if raw_token.ends_with("()")
+                    || raw_token.ends_with("(),")
+                    || raw_token.ends_with("().")
+                {
+                    push_sym(token);
+                }
+            }
+        };
+
+        inspect_text(&vuln.title, true);
+        if let Some(ref details) = vuln.details {
+            inspect_text(details, false);
+        }
+
+        if inferred.is_empty() {
+            None
+        } else {
+            Some(inferred)
+        }
     }
 
     pub fn inspect_file_path(
@@ -1106,6 +1417,82 @@ def load_config():
 
         let result2 = engine.check_vulnerability(&unused_vuln);
         assert_eq!(result2.status, ReachabilityStatus::Unreachable);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_imported_package_without_symbol_data_returns_unknown_no_symbol_data() {
+        let dir = temp_project(
+            "import customPkg from 'custom-pkg';\ncustomPkg.safeHelper('hello');\n",
+            "no-symbol-data",
+        );
+        let engine = ReachabilityEngine::new_with_limit(&dir, 100);
+        let vuln_without_symbols = VulnerabilityFinding {
+            id: "GHSA-0000-0000-0001".to_string(),
+            title: "Improper Input Validation in custom-pkg".to_string(),
+            package: "custom-pkg".to_string(),
+            version: "1.0.0".to_string(),
+            ecosystem: "npm".to_string(),
+            pkg_id: "custom-pkg@1.0.0".to_string(),
+            affected_symbols: vec![],
+            ..Default::default()
+        };
+
+        let (reach, usage) = engine.check_vulnerability_and_usage(&vuln_without_symbols);
+        assert_eq!(usage, UsageSignal::ImportedSource);
+        assert_eq!(reach.status, ReachabilityStatus::Unknown);
+        assert_eq!(reach.reason_code, Some(ReasonCode::NoSymbolData));
+        assert!(!reach.call_sites.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_infer_functions_from_details_extracts_symbols_and_proves_reachability() {
+        let dir = temp_project(
+            "import customPkg from 'custom-pkg';\ncustomPkg.safeHelper('hello');\n",
+            "inferred-symbols",
+        );
+        let engine = ReachabilityEngine::new_with_limit(&dir, 100);
+
+        // 1. Advisory mentions `custom-pkg.dangerousParse` which is NOT called -> Unreachable!
+        let uncalled_vuln = VulnerabilityFinding {
+            id: "GHSA-0000-0000-0002".to_string(),
+            title: "Prototype Pollution in custom-pkg.dangerousParse".to_string(),
+            details: Some(
+                "Calling `dangerousParse()` with untrusted input pollutes Object.prototype."
+                    .to_string(),
+            ),
+            package: "custom-pkg".to_string(),
+            version: "1.0.0".to_string(),
+            ecosystem: "npm".to_string(),
+            pkg_id: "custom-pkg@1.0.0".to_string(),
+            affected_symbols: vec![],
+            ..Default::default()
+        };
+        let (reach1, usage1) = engine.check_vulnerability_and_usage(&uncalled_vuln);
+        assert_eq!(usage1, UsageSignal::ImportedSource);
+        assert_eq!(reach1.status, ReachabilityStatus::Unreachable);
+        assert_eq!(
+            reach1.reason_code,
+            Some(ReasonCode::AnalysisCompleteNoUsage)
+        );
+
+        // 2. Advisory mentions `safeHelper()` which IS called -> Reachable!
+        let called_vuln = VulnerabilityFinding {
+            id: "GHSA-0000-0000-0003".to_string(),
+            title: "Command Injection in `safeHelper()`".to_string(),
+            package: "custom-pkg".to_string(),
+            version: "1.0.0".to_string(),
+            ecosystem: "npm".to_string(),
+            pkg_id: "custom-pkg@1.0.0".to_string(),
+            affected_symbols: vec![],
+            ..Default::default()
+        };
+        let (reach2, usage2) = engine.check_vulnerability_and_usage(&called_vuln);
+        assert_eq!(usage2, UsageSignal::ImportedSource);
+        assert_eq!(reach2.status, ReachabilityStatus::Reachable);
+        assert_eq!(reach2.reason_code, Some(ReasonCode::DirectUsageFound));
+
         let _ = std::fs::remove_dir_all(dir);
     }
 }

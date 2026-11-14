@@ -75,8 +75,9 @@ The source analyzer matches selected syntactic patterns using a **single-pass `W
 - **Go / Java**: Import statement scanning and method invocation patterns.
 
 Verdict integrity guarantees:
-- `UNREACHABLE` is only emitted when the index fully covered all source files (no file-limit hit, no parse failures, no unresolved dynamic imports, no barrel re-exports, not a transitive dependency) **and** no import or call site was found.
-- All other cases produce `UNKNOWN` — missing signals do not certify absence of use.
+- `UNREACHABLE` is only emitted when the index fully covered all source files (no file-limit hit, no parse failures, no unresolved dynamic imports, no barrel re-exports, not a transitive dependency) **and** no import or call site was found (or the package is imported, the vulnerable symbol is known via curated CVE map or `infer_functions_from_details`, and that symbol is never called).
+- When a package is imported and called in production code, but neither the curated CVE map nor advisory symbol inference yields a specific vulnerable function name, the engine records `UsageSignal::ImportedSource` and attaches call sites for developer context, but emits `ReachabilityStatus::Unknown` (`ReasonCode::NoSymbolData`) instead of over-claiming `Reachable`.
+- All other ambiguous cases produce `UNKNOWN` — missing signals do not certify absence of use.
 
 It does not establish execution, taint flow, exploitability, or general absence of use. It can miss or misattribute: dynamic loading, reflection, cross-file imports via barrel re-exports, framework/plugin entry points, workspace boundaries, unsupported syntax, and bundler resolution. `--reachable-only` is a presentation filter, not a safe vulnerability policy. Severity gates must include the complete unsuppressed finding set.
 

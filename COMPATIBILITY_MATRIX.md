@@ -151,6 +151,8 @@ underscore form (`_react@18.2.0`) is handled identically.
 | Dynamic `import(variable)` | Unresolved cases must remain `UNKNOWN`; no completeness guarantee | `js_ast_analyzer` unit tests; current working tree untested |
 | Re-exports `export … from 'pkg'` | Not a resolved cross-file dataflow path; uncertainty must remain `UNKNOWN` | `js_ast_analyzer` unit tests |
 | Namespace calls (`ns.fn()`) | Lexical heuristic only; scope collisions and reflection remain risks | `js_ast_analyzer` unit tests |
+| Advisory symbol inference (`infer_functions_from_details`) | Extracts backticked / qualified symbol names from OSV advisory descriptions when not in static CVE map; returns conservative `Unknown` (`NoSymbolData`) when no symbol is known | `test_infer_functions_from_details_extracts_symbols_and_proves_reachability`, `test_imported_package_without_symbol_data_returns_unknown_no_symbol_data` |
+| Intra-procedural multi-line SAST taint (`VEXA-SAST-004/006/009`) | Tracks tainted SQL query strings (Python f-strings, `.format()`, `%`, JS template literals) and tainted user-input variables across lines to execution sinks while preserving canonical sinks ≤64 chars | `test_multiline_python_sqli_and_taint_tracking` |
 | Cross-file call path resolution | Not implemented; classify as `UNKNOWN`, not proof of non-use | reachability engine tests |
 | `--reachable-only` behavior | Filter/gate behavior requires release-matched integration tests; never use it to suppress findings | CLI and quality-gate tests |
 | JSX / TSX support | Parser coverage only; no framework/module-resolution conformance claim | `js_ast_analyzer` (OXC parser) |

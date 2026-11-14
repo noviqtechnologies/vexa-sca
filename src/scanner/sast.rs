@@ -257,11 +257,14 @@ impl SastScanner {
             }
         }
 
-        for (idx, raw_line) in content.lines().enumerate() {
+        let all_lines: Vec<&str> = content.lines().collect();
+        let mut tainted_sql_vars: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut tainted_input_vars: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        for (idx, raw_line) in all_lines.iter().enumerate() {
             let line_num = idx + 1;
-            if ast_covered_lines.contains(&line_num) {
-                continue;
-            }
             let trimmed = raw_line.trim();
             if trimmed.is_empty()
                 || trimmed.starts_with('#')
@@ -269,6 +272,17 @@ impl SastScanner {
                 || trimmed.starts_with("/*")
                 || trimmed.starts_with('*')
             {
+                continue;
+            }
+
+            // Track intra-procedural variable taint assignments across lines
+            if let Some((lhs_var, rhs_expr)) = Self::split_var_assignment(trimmed) {
+                if Self::is_tainted_input_expr(rhs_expr) {
+                    tainted_input_vars.insert(lhs_var.to_string());
+                }
+            }
+
+            if ast_covered_lines.contains(&line_num) {
                 continue;
             }
 
@@ -321,8 +335,35 @@ impl SastScanner {
                 continue;
             }
 
-            // 4. VEXA-SAST-004: SQL Injection via String Interpolation (CWE-89)
+            // 4. VEXA-SAST-004: SQL Injection via String Interpolation or Multi-Line Tainted Query (CWE-89)
             if let Some((sink, remediation)) = Self::detect_sql_injection(trimmed) {
+                // Check if this line assigns a tainted SQL query variable that is consumed by a sink on a later line
+                if let Some((lhs_var, _)) = Self::split_var_assignment(trimmed) {
+                    if !Self::is_sql_execution_sink_line(trimmed)
+                        && all_lines[idx + 1..]
+                            .iter()
+                            .any(|later| Self::is_sql_sink_using_var(later.trim(), lhs_var))
+                    {
+                        tainted_sql_vars.insert(lhs_var.to_string());
+                        continue;
+                    }
+                }
+                findings.push(CodeFinding {
+                    rule_id: "VEXA-SAST-004".to_string(),
+                    category: "SAST".to_string(),
+                    severity: "CRITICAL".to_string(),
+                    title: "SQL Injection via Unparameterized Query".to_string(),
+                    cwe: Some("CWE-89".to_string()),
+                    file_path: rel_path.clone(),
+                    line: line_num,
+                    matched_sink: Some(sanitize_sink_signature(sink)),
+                    remediation: Some(remediation.to_string()),
+                });
+                continue;
+            }
+            if let Some((sink, remediation)) =
+                Self::detect_tainted_sql_sink(trimmed, &tainted_sql_vars)
+            {
                 findings.push(CodeFinding {
                     rule_id: "VEXA-SAST-004".to_string(),
                     category: "SAST".to_string(),
@@ -354,7 +395,9 @@ impl SastScanner {
             }
 
             // 6. VEXA-SAST-006: Path Traversal / Arbitrary File Access (CWE-22)
-            if let Some((sink, remediation)) = Self::detect_path_traversal(&ext, trimmed) {
+            if let Some((sink, remediation)) =
+                Self::detect_path_traversal_with_taint(&ext, trimmed, &tainted_input_vars)
+            {
                 findings.push(CodeFinding {
                     rule_id: "VEXA-SAST-006".to_string(),
                     category: "SAST".to_string(),
@@ -402,7 +445,9 @@ impl SastScanner {
             }
 
             // 9. VEXA-SAST-009: Server-Side Request Forgery (SSRF) (CWE-918)
-            if let Some((sink, remediation)) = Self::detect_ssrf(&ext, trimmed) {
+            if let Some((sink, remediation)) =
+                Self::detect_ssrf_with_taint(&ext, trimmed, &tainted_input_vars)
+            {
                 findings.push(CodeFinding {
                     rule_id: "VEXA-SAST-009".to_string(),
                     category: "SAST".to_string(),
@@ -598,6 +643,94 @@ impl SastScanner {
         None
     }
 
+    fn split_var_assignment(line: &str) -> Option<(&str, &str)> {
+        if line.contains("==") || line.contains("!=") || line.contains("<=") || line.contains(">=")
+        {
+            return None;
+        }
+        let (lhs, rhs) = if let Some(idx) = line.find(":=") {
+            (&line[..idx], &line[idx + 2..])
+        } else {
+            let idx = line.find('=')?;
+            (&line[..idx], &line[idx + 1..])
+        };
+        let lhs_trimmed = lhs
+            .trim()
+            .trim_start_matches("let ")
+            .trim_start_matches("mut ")
+            .trim_start_matches("const ")
+            .trim_start_matches("var ")
+            .trim();
+        let var_name = lhs_trimmed.split(':').next().unwrap_or(lhs_trimmed).trim();
+        if var_name.is_empty()
+            || !var_name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+        {
+            return None;
+        }
+        Some((var_name, rhs.trim()))
+    }
+
+    fn is_tainted_input_expr(rhs: &str) -> bool {
+        let lower = rhs.to_lowercase();
+        lower.contains("req.query")
+            || lower.contains("req.params")
+            || lower.contains("req.body")
+            || lower.contains("request.args")
+            || lower.contains("request.form")
+            || lower.contains("request.get")
+            || lower.contains("request.post")
+            || lower.contains("sys.argv")
+            || lower.contains("r.url.query")
+            || lower.contains("fmt.sprintf(")
+            || ((lower.starts_with("f\"") || lower.starts_with("f'"))
+                && rhs.contains('{')
+                && rhs.contains('}'))
+    }
+
+    fn is_sql_execution_sink_line(line: &str) -> bool {
+        let lower = line.to_lowercase();
+        lower.contains(".query(")
+            || lower.contains(".execute(")
+            || lower.contains(".exec(")
+            || lower.contains("rawquery(")
+            || lower.contains("queryrawunsafe(")
+            || lower.contains("$queryrawunsafe(")
+            || lower.contains("executequery(")
+    }
+
+    fn is_sql_sink_using_var(line: &str, var_name: &str) -> bool {
+        if !Self::is_sql_execution_sink_line(line) {
+            return false;
+        }
+        let pattern1 = format!("({}", var_name);
+        let pattern2 = format!("({},", var_name);
+        let pattern3 = format!("({})", var_name);
+        line.contains(&pattern3) || line.contains(&pattern2) || line.contains(&pattern1)
+    }
+
+    fn detect_tainted_sql_sink(
+        line: &str,
+        tainted_sql_vars: &std::collections::HashSet<String>,
+    ) -> Option<(&'static str, &'static str)> {
+        for var in tainted_sql_vars {
+            if Self::is_sql_sink_using_var(line, var) {
+                let lower = line.to_lowercase();
+                let sink = if lower.contains("cursor.execute(") {
+                    "cursor.execute(f\"SELECT ...\")"
+                } else {
+                    "db.query(\"SELECT ... \" + input)"
+                };
+                return Some((
+                    sink,
+                    "Use parameterized queries / prepared statements instead of string concatenation or template interpolation.",
+                ));
+            }
+        }
+        None
+    }
+
     fn detect_sql_injection(line: &str) -> Option<(&'static str, &'static str)> {
         let lower = line.to_lowercase();
         let has_sql_keyword = lower.contains("select ")
@@ -606,15 +739,20 @@ impl SastScanner {
             || lower.contains("delete from ");
 
         if has_sql_keyword {
-            let is_query_sink = lower.contains(".query(")
-                || lower.contains(".execute(")
-                || lower.contains("rawquery(")
-                || lower.contains("queryrawunsafe(")
-                || lower.contains("$queryrawunsafe(")
-                || lower.contains("cursor.execute(");
+            let is_query_sink = Self::is_sql_execution_sink_line(line);
 
-            let has_python_fstring =
-                lower.contains(".execute(f\"") || lower.contains(".execute(f'");
+            let has_python_fstring = lower.contains(".execute(f\"")
+                || lower.contains(".execute(f'")
+                || ((lower.contains("f\"select ")
+                    || lower.contains("f'select ")
+                    || lower.contains("f\"insert ")
+                    || lower.contains("f'insert ")
+                    || lower.contains("f\"update ")
+                    || lower.contains("f'update ")
+                    || lower.contains("f\"delete ")
+                    || lower.contains("f'delete "))
+                    && line.contains('{')
+                    && line.contains('}'));
             let has_go_sprintf = lower.contains("fmt.sprintf(");
             let has_template_interp = line.contains("${");
             let has_concat = line.contains('+');
@@ -629,16 +767,121 @@ impl SastScanner {
                 || lower.contains("\"delete")
                 || lower.contains("'delete");
 
+            let has_py_format = has_unparameterized_str
+                && (lower.contains(".format(")
+                    || ((lower.contains("%s") || lower.contains("%d")) && line.contains(" % ")));
+
             if has_python_fstring
                 || has_go_sprintf
+                || has_py_format
                 || (is_query_sink && (has_template_interp || has_concat))
                 || (has_unparameterized_str && (has_template_interp || has_concat))
             {
+                let sink = if lower.contains("cursor.execute(")
+                    || lower.contains("f\"select")
+                    || lower.contains("f'select")
+                {
+                    "cursor.execute(f\"SELECT ...\")"
+                } else {
+                    "db.query(\"SELECT ... \" + input)"
+                };
                 return Some((
-                    "db.query(\"SELECT ... \" + input)",
+                    sink,
                     "Use parameterized queries / prepared statements instead of string concatenation or template interpolation.",
                 ));
             }
+        }
+        None
+    }
+
+    fn detect_path_traversal_with_taint(
+        ext: &str,
+        line: &str,
+        tainted_vars: &std::collections::HashSet<String>,
+    ) -> Option<(&'static str, &'static str)> {
+        if let Some(res) = Self::detect_path_traversal(ext, line) {
+            return Some(res);
+        }
+        if tainted_vars.is_empty() {
+            return None;
+        }
+        let lower = line.to_lowercase();
+        let uses_tainted = tainted_vars.iter().any(|v| {
+            line.contains(&format!("({v})"))
+                || line.contains(&format!("({v},"))
+                || line.contains(&format!("( {v}"))
+        });
+        if !uses_tainted {
+            return None;
+        }
+        if ext == "py" && lower.contains("open(") {
+            return Some((
+                "open(user_path, ...)",
+                "Validate paths against an allowlist and ensure canonical paths stay inside the intended root directory.",
+            ));
+        } else if matches!(ext, "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs")
+            && (lower.contains("fs.readfile(")
+                || lower.contains("fs.readfilesync(")
+                || lower.contains("fs.writefile(")
+                || lower.contains("fs.writefilesync(")
+                || lower.contains("res.sendfile("))
+        {
+            return Some((
+                "fs.readFile(userInput, ...)",
+                "Validate and sanitize paths using path.resolve() against a safe base directory and disallow directory traversal ('..').",
+            ));
+        } else if ext == "go"
+            && (lower.contains("os.open(")
+                || lower.contains("os.openfile(")
+                || lower.contains("os.readfile("))
+        {
+            return Some((
+                "os.Open(userInput, ...)",
+                "Validate and clean paths using filepath.Clean() and ensure they stay within an intended base directory.",
+            ));
+        }
+        None
+    }
+
+    fn detect_ssrf_with_taint(
+        ext: &str,
+        line: &str,
+        tainted_vars: &std::collections::HashSet<String>,
+    ) -> Option<(&'static str, &'static str)> {
+        if let Some(res) = Self::detect_ssrf(ext, line) {
+            return Some(res);
+        }
+        if tainted_vars.is_empty() {
+            return None;
+        }
+        let lower = line.to_lowercase();
+        let uses_tainted = tainted_vars.iter().any(|v| {
+            line.contains(&format!("({v})"))
+                || line.contains(&format!("({v},"))
+                || line.contains(&format!("( {v}"))
+        });
+        if !uses_tainted {
+            return None;
+        }
+        if ext == "py"
+            && (lower.contains("requests.get(")
+                || lower.contains("requests.post(")
+                || lower.contains("httpx.get(")
+                || lower.contains("urllib.request.urlopen("))
+        {
+            return Some((
+                "requests.get(untrusted_url, ...)",
+                "Validate target URLs against a strict domain allowlist and block private IP ranges (127.0.0.1, 10.0.0.0/8, 169.254.169.254).",
+            ));
+        } else if matches!(ext, "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs")
+            && (lower.contains("axios.get(")
+                || lower.contains("axios.post(")
+                || lower.contains("fetch("))
+        {
+            return Some((
+                "fetch(untrustedUrl, ...)",
+                "Validate target URLs against a strict domain allowlist and block private IP ranges (127.0.0.1, 10.0.0.0/8, 169.254.169.254).",
+            ));
         }
         None
     }
@@ -1032,6 +1275,42 @@ func run(db *sql.DB, userInput string) {
         assert_eq!(coverage.files_skipped, 0);
         assert_eq!(coverage.files_failed, 0);
         assert!(coverage.limits_hit.is_empty());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_multiline_python_sqli_and_taint_tracking() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("vexa_sast_multiline_sqli_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let py_file = temp_dir.join("sql-ijection.py");
+        fs::write(
+            &py_file,
+            "import sqlite3\n\ndef get_user_data(username):\n    conn = sqlite3.connect('users.db')\n    cursor = conn.cursor()\n    query = f\"SELECT * FROM users WHERE username = '{username}'\"\n    cursor.execute(query)\n    return cursor.fetchall()\n",
+        )
+        .unwrap();
+
+        let findings = SastScanner::scan_workspace(&temp_dir);
+        assert_eq!(
+            findings.len(),
+            1,
+            "Should detect multi-line Python f-string SQL injection"
+        );
+        let f = &findings[0];
+        assert_eq!(f.rule_id, "VEXA-SAST-004");
+        assert_eq!(f.cwe.as_deref(), Some("CWE-89"));
+        assert_eq!(f.file_path, "sql-ijection.py");
+        assert_eq!(
+            f.line, 7,
+            "Should report the sink execution line (cursor.execute(query))"
+        );
+        assert_eq!(
+            f.matched_sink.as_deref(),
+            Some("cursor.execute(f\"SELECT ...\")")
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
