@@ -97,8 +97,13 @@ impl OfflineBundleVerifier {
             // Unparseable created_at is tolerated here; the Ed25519 step below validates it.
         }
 
-        // 2. Resolve Ed25519 verifying public key
-        let pubkey_hex = override_pubkey_hex.unwrap_or(VEXA_OFFLINE_ROOT_PUBKEY_HEX);
+        // 2. Resolve Ed25519 verifying public key (explicit arg -> VEXA_OFFLINE_PUBKEY_HEX -> embedded root)
+        let env_pubkey = std::env::var("VEXA_OFFLINE_PUBKEY_HEX")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let pubkey_hex = override_pubkey_hex
+            .or(env_pubkey.as_deref())
+            .unwrap_or(VEXA_OFFLINE_ROOT_PUBKEY_HEX);
         let pubkey_bytes = hex::decode(pubkey_hex)
             .map_err(|e| format!("Invalid hex for offline root public key: {}", e))?;
 
@@ -153,5 +158,51 @@ impl OfflineBundleVerifier {
         };
 
         Ok((verified, envelope))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    #[test]
+    fn test_offline_bundle_ed25519_verify_and_tamper_rejection() {
+        let signing_key = SigningKey::from_bytes(&[42u8; 32]);
+        let pubkey_hex = hex::encode(signing_key.verifying_key().to_bytes());
+
+        let payload_json = r#"{"advisories":[]}"#.to_string();
+        let mut hasher = Sha256::new();
+        hasher.update(payload_json.as_bytes());
+        let payload_sha256 = hex::encode(hasher.finalize());
+        let created_at = chrono::Utc::now().to_rfc3339();
+
+        let msg = format!("VEXA-OFFLINE-DB-V1:{created_at}:{payload_sha256}");
+        let sig_hex = hex::encode(signing_key.sign(msg.as_bytes()).to_bytes());
+
+        let envelope = OfflineDbEnvelope {
+            format_version: 1,
+            created_at: created_at.clone(),
+            issuer: "vexa-test".to_string(),
+            advisory_count: 0,
+            payload_sha256,
+            payload_json,
+            signature_ed25519_hex: sig_hex,
+        };
+        let raw = serde_json::to_string(&envelope).unwrap();
+
+        let (verified, _) =
+            OfflineBundleVerifier::verify_bundle_content(&raw, Some(&pubkey_hex)).unwrap();
+        assert_eq!(verified.issuer, "vexa-test");
+
+        // Tamper payload -> SHA-256 mismatch
+        let mut tampered = envelope.clone();
+        tampered.payload_json = r#"{"advisories":[{"id":"FAKE"}]}"#.to_string();
+        let tampered_raw = serde_json::to_string(&tampered).unwrap();
+        assert!(OfflineBundleVerifier::verify_bundle_content(&tampered_raw, Some(&pubkey_hex)).is_err());
+
+        // Wrong public key -> Ed25519 verification fails
+        let wrong_pub = hex::encode(SigningKey::from_bytes(&[99u8; 32]).verifying_key().to_bytes());
+        assert!(OfflineBundleVerifier::verify_bundle_content(&raw, Some(&wrong_pub)).is_err());
     }
 }

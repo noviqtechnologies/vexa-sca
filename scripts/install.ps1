@@ -27,7 +27,7 @@ if ($Version -eq "latest") {
         $Release = Invoke-RestMethod -Uri $ReleaseUrl -Headers @{"User-Agent"="vexa-sca-installer"}
         $VersionTag = $Release.tag_name
     } catch {
-        $VersionTag = "v1.3.6"
+        $VersionTag = "v1.3.7"
     }
 } else {
     $VersionTag = if ($Version.StartsWith("v")) { $Version } else { "v$Version" }

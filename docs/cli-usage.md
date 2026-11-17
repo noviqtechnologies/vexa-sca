@@ -1,4 +1,4 @@
-# Vexa SCA CLI Usage Guide (v2.0 / GA v1.3.6+)
+# Vexa SCA CLI Usage Guide (v2.0 / GA v1.3.7+)
 
 ## Status & Operational Readiness
 
@@ -9,7 +9,7 @@ Vexa SCA provides a deterministic, zero-external-dependency CLI engine for local
 ### Core Operational Principles
 - **Verdict Integrity:** The analyzer emits heuristic **Repository Usage Signals** based on static AST parsing via a single-pass `WorkspaceAstIndex`. It assists developers in prioritizing actionable items without unsafely suppressing unproven findings. Quality gates evaluate the complete unsuppressed vulnerability set.
 - **`UNREACHABLE` Verdict (v2.0):** Emitted only when AST coverage is complete (no file-limit hit, no parse failures, no unresolved dynamic imports, no barrel re-exports, not a transitive dependency) **and** no import or call site is found. All other cases produce `UNKNOWN`. This is a strict no-false-safe verdict — ambiguity always falls back to `UNKNOWN`.
-- **Multi-Language Coverage (v2.0):** JS/TS (full oxc AST), Python (import/call-site regex), Rust (`use` + direct call matching), Go, and Java are all indexed in one pass. Non-JS files are never fed to `oxc_parser`.
+- **Multi-Language Coverage (v2.0):** JS/TS (full `oxc_parser` AST) and Python (full `rustpython-parser` AST) perform real AST import and call-site resolution; Rust (`use` + direct call matching), Go, and Java use conservative import/call-site matchers. Non-JS files are never fed to `oxc_parser`.
 - **Deterministic Exit Contract:** Exit codes strictly follow the precedence: `2` (Config error) > `3` (Incomplete scan data) > `1` (Quality gate failure) > `0` (Success).
 - **Remediation Safety:** `vexa-sca fix` prioritizes same-major patch and minor updates, providing best-effort byte-for-byte rollback of captured root manifests and lockfiles upon install failure.
 - **Privacy & Upstream Queries:** Scans query public OSV advisories (`api.osv.dev`) with package coordinates (`ecosystem`, `name`, `version`). No first-party source code or git history is transmitted. The `.sca-cache/` directory accelerates repeat runs.

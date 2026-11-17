@@ -1,7 +1,7 @@
 class VexaSca < Formula
   desc "Evidence-aware Software Composition Analysis, AST Reachability, SAST & Supply-Chain Firewall"
   homepage "https://vexasec.io/sca"
-  version "1.3.6"
+  version "1.3.7"
   license "Apache-2.0"
 
   on_macos do

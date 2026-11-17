@@ -8,6 +8,16 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::Duration;
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FactCoverage {
+    #[serde(default)]
+    pub files_analysed: usize,
+    #[serde(default)]
+    pub files_skipped: usize,
+    #[serde(default)]
+    pub limits_hit: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VexaFactsPayload {
     pub version: u32,
@@ -21,12 +31,26 @@ pub struct VexaFactsPayload {
     pub packages: Vec<FactPackageItem>,
     pub reachable_vulnerabilities: usize,
     pub unreachable_vulnerabilities: usize,
+    #[serde(default)]
+    pub unknown_reachability_vulnerabilities: usize,
     pub total_vulnerabilities: usize,
     pub findings: Vec<FactFindingItem>,
     #[serde(default)]
     pub code_findings: Vec<FactCodeFindingItem>,
     #[serde(default)]
     pub components: Vec<FactComponentItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_default_branch: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<FactCoverage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +121,15 @@ pub struct SyncResult {
     pub project_slug: String,
     pub dashboard_url: String,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GitContext {
+    pub branch: Option<String>,
+    pub commit_sha: Option<String>,
+    pub is_default_branch: Option<bool>,
+    pub pr_number: Option<u64>,
+    pub repo_url: Option<String>,
 }
 
 pub struct CloudClient;
@@ -388,6 +421,11 @@ impl CloudClient {
         }
 
         let project_name = Self::resolve_project_name(dep_graph);
+        let unknown_reach_count = result
+            .vulnerabilities
+            .len()
+            .saturating_sub(reachable_count + unreachable_count);
+        let git_ctx = Self::detect_git_context(Path::new("."));
 
         VexaFactsPayload {
             version: 2,
@@ -401,10 +439,102 @@ impl CloudClient {
             packages: fact_pkgs,
             reachable_vulnerabilities: reachable_count,
             unreachable_vulnerabilities: unreachable_count,
+            unknown_reachability_vulnerabilities: unknown_reach_count,
             total_vulnerabilities: result.vulnerabilities.len(),
             findings: fact_findings,
             code_findings,
             components,
+            branch: git_ctx.branch,
+            commit_sha: git_ctx.commit_sha,
+            is_default_branch: git_ctx.is_default_branch,
+            pr_number: git_ctx.pr_number,
+            repo_url: git_ctx.repo_url,
+            coverage: None,
+        }
+    }
+
+    /// Cross-OS (Windows/macOS/Linux) git & CI context detector without spawning external processes.
+    pub fn detect_git_context(workspace_root: &Path) -> GitContext {
+        let gh_head_ref = std::env::var("GITHUB_HEAD_REF").ok().filter(|s| !s.trim().is_empty());
+        let gh_ref_name = std::env::var("GITHUB_REF_NAME").ok().filter(|s| !s.trim().is_empty());
+        let gh_base_ref = std::env::var("GITHUB_BASE_REF").ok().filter(|s| !s.trim().is_empty());
+        let ci_branch = std::env::var("CI_COMMIT_REF_NAME").ok().filter(|s| !s.trim().is_empty());
+
+        let pr_number = std::env::var("GITHUB_REF")
+            .ok()
+            .and_then(|r| {
+                r.strip_prefix("refs/pull/")
+                    .and_then(|rest| rest.split('/').next())
+                    .and_then(|num| num.parse::<u64>().ok())
+            })
+            .or_else(|| {
+                std::env::var("CI_MERGE_REQUEST_IID")
+                    .ok()
+                    .and_then(|s| s.parse::<u64>().ok())
+            });
+
+        let branch = gh_head_ref
+            .clone()
+            .or(gh_ref_name)
+            .or(ci_branch)
+            .or_else(|| Self::read_dot_git_branch(workspace_root));
+
+        let commit_sha = std::env::var("GITHUB_SHA")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| std::env::var("CI_COMMIT_SHA").ok().filter(|s| !s.trim().is_empty()))
+            .or_else(|| Self::read_dot_git_sha(workspace_root));
+
+        let is_default_branch = if pr_number.is_some() || gh_head_ref.is_some() || gh_base_ref.is_some() {
+            Some(false)
+        } else {
+            branch.as_deref().map(|b| b == "main" || b == "master")
+        };
+
+        let repo_url = match (
+            std::env::var("GITHUB_SERVER_URL").ok(),
+            std::env::var("GITHUB_REPOSITORY").ok(),
+        ) {
+            (Some(srv), Some(repo)) if !srv.trim().is_empty() && !repo.trim().is_empty() => {
+                Some(format!("{}/{}", srv.trim_end_matches('/'), repo.trim()))
+            }
+            _ => None,
+        };
+
+        GitContext {
+            branch,
+            commit_sha,
+            is_default_branch,
+            pr_number,
+            repo_url,
+        }
+    }
+
+    fn read_dot_git_branch(root: &Path) -> Option<String> {
+        let head = std::fs::read_to_string(root.join(".git").join("HEAD")).ok()?;
+        let trimmed = head.trim();
+        trimmed
+            .strip_prefix("ref: refs/heads/")
+            .map(|b| b.to_string())
+    }
+
+    fn read_dot_git_sha(root: &Path) -> Option<String> {
+        let git_dir = root.join(".git");
+        let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+        let trimmed = head.trim();
+        if let Some(rel_ref) = trimmed.strip_prefix("ref: ") {
+            let mut ref_path = git_dir;
+            for seg in rel_ref.split('/') {
+                ref_path = ref_path.join(seg);
+            }
+            std::fs::read_to_string(ref_path)
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        } else if trimmed.len() >= 7 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+            Some(trimmed.to_string())
+        } else {
+            None
         }
     }
 
@@ -534,5 +664,62 @@ impl CloudClient {
             .map_err(|e| format!("Failed to parse sync response: {}", e))?;
 
         Ok(sync_result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vexa_facts_payload_backward_compat_and_branch_fields() {
+        // Legacy v2 payload without branch/commit/coverage fields must deserialize cleanly
+        let legacy_json = r#"{
+            "version": 2,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "project_name": "acme/api",
+            "project_version": "1.0.0",
+            "ecosystem": "npm",
+            "total_packages": 10,
+            "direct_dependencies": 2,
+            "transitive_dependencies": 8,
+            "packages": [],
+            "reachable_vulnerabilities": 1,
+            "unreachable_vulnerabilities": 2,
+            "total_vulnerabilities": 5,
+            "findings": []
+        }"#;
+        let parsed: VexaFactsPayload = serde_json::from_str(legacy_json).expect("legacy v2 parse");
+        assert_eq!(parsed.unknown_reachability_vulnerabilities, 0);
+        assert!(parsed.branch.is_none());
+        assert!(parsed.commit_sha.is_none());
+        assert!(parsed.coverage.is_none());
+
+        // Cross-OS .git/HEAD detection in temp directory
+        let tmp = std::env::temp_dir().join(format!("vexa_git_ctx_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join(".git").join("refs").join("heads")).unwrap();
+        std::fs::write(tmp.join(".git").join("HEAD"), "ref: refs/heads/feat/ast\n").unwrap();
+        std::fs::write(
+            tmp.join(".git").join("refs").join("heads").join("feat").join("ast"),
+            "",
+        )
+        .ok();
+        std::fs::create_dir_all(tmp.join(".git").join("refs").join("heads").join("feat")).unwrap();
+        std::fs::write(
+            tmp.join(".git").join("refs").join("heads").join("feat").join("ast"),
+            "0123456789abcdef0123456789abcdef01234567\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            CloudClient::read_dot_git_branch(&tmp).as_deref(),
+            Some("feat/ast")
+        );
+        assert_eq!(
+            CloudClient::read_dot_git_sha(&tmp).as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

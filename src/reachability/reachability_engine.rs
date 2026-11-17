@@ -890,8 +890,17 @@ impl ReachabilityEngine {
             if !ast_res.parse_failed && ast_res.is_imported {
                 return (true, ast_res.call_sites);
             }
-        } else if ext == "rs" || ext == "py" || ext == "go" || ext == "java" {
-            // Non-JS languages: do NOT pass to oxc_parser (BUG-003)
+        } else if ext == "py" {
+            let py_res = crate::reachability::python_ast_analyzer::analyze_python_file(
+                content,
+                pkg_name,
+                target_functions,
+            );
+            if !py_res.parse_failed && py_res.is_imported {
+                return (true, py_res.call_sites);
+            }
+        } else if ext == "rs" || ext == "go" || ext == "java" {
+            // Other non-JS/non-Python languages: fall through to conservative heuristic
         } else {
             // Unknown extensions: do NOT pass to oxc_parser or map to mjs (BUG-003)
             return (false, Vec::new());
@@ -914,7 +923,16 @@ impl ReachabilityEngine {
         let is_go = content.contains("package ") || content.contains("func ");
         let is_java = content.contains("public class ") || content.contains("package ");
 
-        if !is_rust && !is_python && !is_go && !is_java {
+        if is_python {
+            let py_res = crate::reachability::python_ast_analyzer::analyze_python_file(
+                content,
+                pkg_name,
+                target_functions,
+            );
+            if !py_res.parse_failed && py_res.is_imported {
+                return (true, py_res.call_sites);
+            }
+        } else if !is_rust && !is_go && !is_java {
             let ast_res = analyze_file(
                 content,
                 oxc_span::SourceType::mjs(),

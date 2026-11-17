@@ -1,3 +1,4 @@
 pub mod js_ast_analyzer;
+pub mod python_ast_analyzer;
 pub mod reachability_engine;
 pub mod workspace_index;

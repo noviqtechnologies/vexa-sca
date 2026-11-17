@@ -91,7 +91,7 @@ if (!cmd) {
 
 // 4.5. Auto-download prebuilt GitHub release binary if Cargo.toml is not present (e.g. `npx vexa-sca`)
 if (!cmd && !fs.existsSync(path.join(rootDir, 'Cargo.toml'))) {
-  const pkgVersion = require('../package.json').version || '1.3.6';
+  const pkgVersion = require('../package.json').version || '1.3.7';
   const tag = `v${pkgVersion}`;
   const cacheDir = path.join(os.homedir(), '.vexa', 'bin');
   const cachedBin = path.join(cacheDir, `vexa-sca${binExt}`);

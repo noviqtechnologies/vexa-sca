@@ -1,6 +1,6 @@
 # Vexa SCA: Enterprise-Grade Software Composition Analysis & Security Engine
 
-[![Release](https://img.shields.io/badge/Release-v1.3.6%20Tier%201%20GA-brightgreen.svg?logo=github)](https://github.com/noviqtechnologies/vexa-sca/releases)
+[![Release](https://img.shields.io/badge/Release-v1.3.7%20Tier%201%20GA-brightgreen.svg?logo=github)](https://github.com/noviqtechnologies/vexa-sca/releases)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg?logo=githubactions)](https://github.com/noviqtechnologies/vexa-sca/actions)
 [![Tests](https://img.shields.io/badge/Tests-211%20Passing-success.svg)](#automated-tests--verification)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
@@ -33,7 +33,7 @@
 
 | Key Feature | Security & Developer Value | Quick Command |
 | :--- | :--- | :--- |
-| 🔍 [**Repository Usage Signals**](#1-repository-usage-signal-analysis) | Classifies dependencies as `IMPORTED_SOURCE`, `REFERENCED_CONFIG_OR_SCRIPT`, or `NO_REFERENCE_FOUND_WITHIN_SCOPE`, extracts vulnerable symbols directly from advisory text (`infer_functions_from_details`), and preserves conservative `NoSymbolData` (`Unknown`) verdicts when symbol mappings are unavailable. | `vexa-sca scan` |
+| 🔍 [**Repository Usage Signals**](#1-repository-usage-signal-analysis) | Uses real AST analysis for **JS/TS (`oxc_parser`) and Python (`rustpython-parser`)**, plus conservative import heuristics for Rust/Go/Java. Classifies dependencies as `IMPORTED_SOURCE`, `REFERENCED_CONFIG_OR_SCRIPT`, or `NO_REFERENCE_FOUND_WITHIN_SCOPE`, and preserves conservative `NoSymbolData` (`Unknown`) verdicts when symbol mappings or dynamic coverage are incomplete. | `vexa-sca scan` |
 | ⚡ [**Pure Rust Core & Cross-Platform**](#cross-platform-installation--setup) | High-throughput multi-threaded analysis with **zero external C / OpenSSL runtime dependencies** and atomic cross-OS cache persistence (`.sca-cache`). Native single binaries for Linux, macOS & Windows. | `vexa-sca scan` |
 | 🔄 [**PR-Differential Scanning**](#pr-differential-scanning---baseline) | Compares PR findings against a baseline report (`--baseline`). Blocks only on newly introduced vulnerabilities while reporting baseline findings as non-blocking. | `vexa-sca scan --baseline base.json --fail-on high` |
 | 🤖 [**GitHub Actions Native CI/CD**](#two-operational-profiles-scan-vs-ci) | Generates rich GitHub Job Summaries (`$GITHUB_STEP_SUMMARY`) and annotations that succeed even under restricted read-only tokens (Dependabot/Fork PRs). | `vexa-sca ci --fail-on high` |
@@ -47,8 +47,8 @@
 | 🔬 [**Supply Chain Behavioral Analysis**](#9-supply-chain-behavioral-analysis) | 15 static-analysis rules (SC-001–SC-015) detecting typosquatting, CI/CD poisoning, secrets, reverse shells, and MCP prompt-injection in manifests and workflows. | `vexa-sca scan` |
 | 🧪 [**Zero-Code-Sync CI SAST & Secret Detection**](#12-zero-code-sync-ci-sast--secret-detection) | Local fast sink & intra-procedural multi-line taint analysis (`CWE-78` OS Command Injection, `CWE-89` multi-line SQLi / Python f-strings, `CWE-22` Path Traversal, `CWE-918` SSRF, `CWE-94` Eval, `CWE-502` Deserialization) + redacted Secret Scanning (`AKIA****`) + SARIF v2.1.0 ingestion, working even in lockfile-less repositories. | `npx vexa-sca scan --sast --secrets` |
 | 🔥 [**Package Manager Firewall (`wrap`)**](#10-package-manager-firewall-wrap) | Pre-installation zero-shell security gate for npm, pnpm, yarn, bun, pip, uv, and cargo. Blocks typosquatted packages, CISA KEV hits, and OSV advisories before install. | `vexa-sca wrap npm install lodash` |
-| 🤖 [**MCP Server (`mcp`)**](#11-mcp-server-integration-mcp) | JSON-RPC 2.0 MCP server exposing 4 tools to AI coding assistants (Cursor, Claude Code, Windsurf, GitHub Copilot). | `vexa-sca mcp` |
-| 📤 [**Zero-Code-Retention Facts Export (v2.0)**](#1-vexa-sca-scan) | Generates `.vexa.facts.json` (schema `2.0`) with dependency graph, AST reachability, and stripped SAST/Secret metadata (`file_path`, `line`, `cwe`, canonical `matched_sink` ≤64 chars)—**zero raw source code ever leaves your machine**. | `vexa-sca scan --upload-facts` |
+| 🤖 [**MCP Server (`mcp`)**](#11-mcp-server-integration-mcp) | JSON-RPC 2.0 MCP server exposing 4 tools to AI coding assistants (Cursor, Claude Code, Windsurf, GitHub Copilot) with exact `call_site` (`file:line`) and same-major `fixed_in` remediation targets. | `vexa-sca mcp` |
+| 📤 [**Zero-Code-Retention Facts Export (v2.0)**](#1-vexa-sca-scan) | Generates `.vexa.facts.json` (schema `2.0`) with dependency graph, AST reachability, branch/commit/PR context, and stripped SAST/Secret metadata (`file_path`, `line`, `cwe`, canonical `matched_sink` ≤64 chars)—**zero raw source code ever leaves your machine**. | `vexa-sca scan --upload-facts` |
 | 🛡️ [**Vexa Cloud 60-Second CI Sync**](#12-zero-code-sync-ci-sast--secret-detection) | Set `VEXA_SCA_SECURITY_API_KEY` in GitHub Actions and run `npx vexa-sca scan` to automatically run Dependency SCA + Code SAST + Secret Detection and stream results to Vexa Cloud (`500 / 500` Free Tier monthly scans). | `VEXA_SCA_SECURITY_API_KEY=vexa_sec_... npx vexa-sca scan` |
 | 📦 [**Offline Advisory Bundles (`.vexadb`)**](#12-vexa-sca-db) | Cryptographically verify and use signed offline database bundles via Ed25519 signatures for isolated or air-gapped CI/CD. | `vexa-sca db verify --offline-db bundle.vexadb` |
 | 🚦 [**Process Exit Code Contract**](#process-exit-code-contract) | Deterministic automation contract: `0` (clean/pass), `1` (quality gate failure), `2` (config error), `3` (advisory outage / incomplete data). | `vexa-sca ci` |
@@ -60,7 +60,7 @@
 > ```bash
 > git clone https://github.com/noviqtechnologies/vexa-sca.git
 > cd vexa-sca
-> git checkout v1.3.6
+> git checkout v1.3.7
 > cargo build --locked --release
 > ```
 > 
@@ -244,8 +244,8 @@ Download prebuilt archives and cosign attestations directly from [GitHub Release
 ### Building from Source
 
 ```bash
-# Clone the repository at the v1.3.6 release tag
-git clone --branch v1.3.6 --depth 1 https://github.com/noviqtechnologies/vexa-sca.git
+# Clone the repository at the v1.3.7 release tag
+git clone --branch v1.3.7 --depth 1 https://github.com/noviqtechnologies/vexa-sca.git
 cd vexa-sca
 
 # Compile release binaries with locked dependencies

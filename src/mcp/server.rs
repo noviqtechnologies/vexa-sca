@@ -338,19 +338,26 @@ impl McpServer {
                         ));
 
                         if !result.scan_result.vulnerabilities.is_empty() {
-                            out.push_str("\n| Severity | Package | Vulnerability | Reachability | Fixed In |\n| :--- | :--- | :--- | :--- | :--- |\n");
+                            out.push_str("\n| Severity | Package | Vulnerability | Reachability | Call Site | Fixed In |\n| :--- | :--- | :--- | :--- | :--- | :--- |\n");
                             for f in result.scan_result.vulnerabilities.iter().take(20) {
                                 let reach_status = f
                                     .reachability
                                     .as_ref()
                                     .map(|r| format!("{:?}", r.status))
                                     .unwrap_or_else(|| "UNKNOWN".to_string());
+                                let call_site = f
+                                    .reachability
+                                    .as_ref()
+                                    .and_then(|r| r.call_sites.first())
+                                    .map(|cs| format!("{}:{} ({})", cs.file, cs.line, cs.matched_function))
+                                    .unwrap_or_else(|| "-".to_string());
                                 out.push_str(&format!(
-                                    "| {:?} | {} | {} | {} | {} |\n",
+                                    "| {:?} | {} | {} | {} | {} | {} |\n",
                                     f.severity.level,
                                     f.package,
                                     f.id,
                                     reach_status,
+                                    call_site,
                                     if f.fixed_in.is_empty() {
                                         "None".to_string()
                                     } else {
