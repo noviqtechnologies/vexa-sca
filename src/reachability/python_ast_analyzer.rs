@@ -153,11 +153,8 @@ fn collect_imports(
                             if sym == "*" {
                                 *has_star_import = true;
                             } else {
-                                let local = alias
-                                    .asname
-                                    .as_ref()
-                                    .map(|a| a.as_str())
-                                    .unwrap_or(sym);
+                                let local =
+                                    alias.asname.as_ref().map(|a| a.as_str()).unwrap_or(sym);
                                 named_imports.insert(local.to_string(), sym.to_string());
                             }
                         }
@@ -192,31 +189,129 @@ fn collect_imports(
                 has_star_import,
             ),
             Stmt::If(s) => {
-                collect_imports(&s.body, pkg_name, out, pkg_aliases, named_imports, has_star_import);
-                collect_imports(&s.orelse, pkg_name, out, pkg_aliases, named_imports, has_star_import);
+                collect_imports(
+                    &s.body,
+                    pkg_name,
+                    out,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                );
+                collect_imports(
+                    &s.orelse,
+                    pkg_name,
+                    out,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                );
             }
-            Stmt::With(s) => collect_imports(&s.body, pkg_name, out, pkg_aliases, named_imports, has_star_import),
-            Stmt::AsyncWith(s) => collect_imports(&s.body, pkg_name, out, pkg_aliases, named_imports, has_star_import),
+            Stmt::With(s) => collect_imports(
+                &s.body,
+                pkg_name,
+                out,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+            ),
+            Stmt::AsyncWith(s) => collect_imports(
+                &s.body,
+                pkg_name,
+                out,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+            ),
             Stmt::For(s) => {
-                collect_imports(&s.body, pkg_name, out, pkg_aliases, named_imports, has_star_import);
-                collect_imports(&s.orelse, pkg_name, out, pkg_aliases, named_imports, has_star_import);
+                collect_imports(
+                    &s.body,
+                    pkg_name,
+                    out,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                );
+                collect_imports(
+                    &s.orelse,
+                    pkg_name,
+                    out,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                );
             }
             Stmt::AsyncFor(s) => {
-                collect_imports(&s.body, pkg_name, out, pkg_aliases, named_imports, has_star_import);
-                collect_imports(&s.orelse, pkg_name, out, pkg_aliases, named_imports, has_star_import);
+                collect_imports(
+                    &s.body,
+                    pkg_name,
+                    out,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                );
+                collect_imports(
+                    &s.orelse,
+                    pkg_name,
+                    out,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                );
             }
             Stmt::While(s) => {
-                collect_imports(&s.body, pkg_name, out, pkg_aliases, named_imports, has_star_import);
-                collect_imports(&s.orelse, pkg_name, out, pkg_aliases, named_imports, has_star_import);
+                collect_imports(
+                    &s.body,
+                    pkg_name,
+                    out,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                );
+                collect_imports(
+                    &s.orelse,
+                    pkg_name,
+                    out,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                );
             }
             Stmt::Try(s) => {
-                collect_imports(&s.body, pkg_name, out, pkg_aliases, named_imports, has_star_import);
+                collect_imports(
+                    &s.body,
+                    pkg_name,
+                    out,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                );
                 for h in &s.handlers {
                     let ast::ExceptHandler::ExceptHandler(eh) = h;
-                    collect_imports(&eh.body, pkg_name, out, pkg_aliases, named_imports, has_star_import);
+                    collect_imports(
+                        &eh.body,
+                        pkg_name,
+                        out,
+                        pkg_aliases,
+                        named_imports,
+                        has_star_import,
+                    );
                 }
-                collect_imports(&s.orelse, pkg_name, out, pkg_aliases, named_imports, has_star_import);
-                collect_imports(&s.finalbody, pkg_name, out, pkg_aliases, named_imports, has_star_import);
+                collect_imports(
+                    &s.orelse,
+                    pkg_name,
+                    out,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                );
+                collect_imports(
+                    &s.finalbody,
+                    pkg_name,
+                    out,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                );
             }
             _ => {}
         }
@@ -267,48 +362,255 @@ fn walk_stmts(
                 out,
             ),
             Stmt::If(s) => {
-                walk_expr(&s.test, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
-                walk_stmts(&s.body, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
-                walk_stmts(&s.orelse, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                walk_expr(
+                    &s.test,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
+                walk_stmts(
+                    &s.body,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
+                walk_stmts(
+                    &s.orelse,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
             }
             Stmt::Return(s) => {
                 if let Some(ref v) = s.value {
-                    walk_expr(v, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                    walk_expr(
+                        v,
+                        lines_vec,
+                        line_idx,
+                        target_functions,
+                        pkg_aliases,
+                        named_imports,
+                        has_star_import,
+                        out,
+                    );
                 }
             }
-            Stmt::Assign(s) => walk_expr(&s.value, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out),
+            Stmt::Assign(s) => walk_expr(
+                &s.value,
+                lines_vec,
+                line_idx,
+                target_functions,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+                out,
+            ),
             Stmt::AnnAssign(s) => {
                 if let Some(ref v) = s.value {
-                    walk_expr(v, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                    walk_expr(
+                        v,
+                        lines_vec,
+                        line_idx,
+                        target_functions,
+                        pkg_aliases,
+                        named_imports,
+                        has_star_import,
+                        out,
+                    );
                 }
             }
-            Stmt::AugAssign(s) => walk_expr(&s.value, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out),
-            Stmt::Expr(s) => walk_expr(&s.value, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out),
-            Stmt::With(s) => walk_stmts(&s.body, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out),
-            Stmt::AsyncWith(s) => walk_stmts(&s.body, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out),
+            Stmt::AugAssign(s) => walk_expr(
+                &s.value,
+                lines_vec,
+                line_idx,
+                target_functions,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+                out,
+            ),
+            Stmt::Expr(s) => walk_expr(
+                &s.value,
+                lines_vec,
+                line_idx,
+                target_functions,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+                out,
+            ),
+            Stmt::With(s) => walk_stmts(
+                &s.body,
+                lines_vec,
+                line_idx,
+                target_functions,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+                out,
+            ),
+            Stmt::AsyncWith(s) => walk_stmts(
+                &s.body,
+                lines_vec,
+                line_idx,
+                target_functions,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+                out,
+            ),
             Stmt::For(s) => {
-                walk_expr(&s.iter, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
-                walk_stmts(&s.body, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
-                walk_stmts(&s.orelse, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                walk_expr(
+                    &s.iter,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
+                walk_stmts(
+                    &s.body,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
+                walk_stmts(
+                    &s.orelse,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
             }
             Stmt::AsyncFor(s) => {
-                walk_expr(&s.iter, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
-                walk_stmts(&s.body, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
-                walk_stmts(&s.orelse, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                walk_expr(
+                    &s.iter,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
+                walk_stmts(
+                    &s.body,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
+                walk_stmts(
+                    &s.orelse,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
             }
             Stmt::While(s) => {
-                walk_expr(&s.test, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
-                walk_stmts(&s.body, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
-                walk_stmts(&s.orelse, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                walk_expr(
+                    &s.test,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
+                walk_stmts(
+                    &s.body,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
+                walk_stmts(
+                    &s.orelse,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
             }
             Stmt::Try(s) => {
-                walk_stmts(&s.body, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                walk_stmts(
+                    &s.body,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
                 for h in &s.handlers {
                     let ast::ExceptHandler::ExceptHandler(eh) = h;
-                    walk_stmts(&eh.body, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                    walk_stmts(
+                        &eh.body,
+                        lines_vec,
+                        line_idx,
+                        target_functions,
+                        pkg_aliases,
+                        named_imports,
+                        has_star_import,
+                        out,
+                    );
                 }
-                walk_stmts(&s.orelse, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
-                walk_stmts(&s.finalbody, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                walk_stmts(
+                    &s.orelse,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
+                walk_stmts(
+                    &s.finalbody,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
             }
             _ => {}
         }
@@ -345,12 +647,18 @@ fn walk_expr(
                             .map(|fns| fns.iter().any(|tf| tf == orig || tf == name))
                             .unwrap_or(false);
                         if target_functions.is_none() || is_spec {
-                            out.call_sites.push((line_num, snippet.clone(), orig.clone(), is_spec));
+                            out.call_sites
+                                .push((line_num, snippet.clone(), orig.clone(), is_spec));
                         }
                     } else if has_star_import {
                         if let Some(fns) = target_functions {
                             if fns.iter().any(|tf| tf == name) {
-                                out.call_sites.push((line_num, snippet.clone(), name.to_string(), true));
+                                out.call_sites.push((
+                                    line_num,
+                                    snippet.clone(),
+                                    name.to_string(),
+                                    true,
+                                ));
                             }
                         }
                     }
@@ -367,7 +675,12 @@ fn walk_expr(
                                 .map(|fns| fns.iter().any(|tf| tf == method))
                                 .unwrap_or(false);
                             if target_functions.is_none() || is_spec {
-                                out.call_sites.push((line_num, snippet.clone(), method.to_string(), is_spec));
+                                out.call_sites.push((
+                                    line_num,
+                                    snippet.clone(),
+                                    method.to_string(),
+                                    is_spec,
+                                ));
                             }
                         }
                     }
@@ -375,40 +688,157 @@ fn walk_expr(
                 _ => {}
             }
 
-            walk_expr(&call.func, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+            walk_expr(
+                &call.func,
+                lines_vec,
+                line_idx,
+                target_functions,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+                out,
+            );
             for arg in &call.args {
-                walk_expr(arg, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                walk_expr(
+                    arg,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
             }
             for kw in &call.keywords {
-                walk_expr(&kw.value, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                walk_expr(
+                    &kw.value,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
             }
         }
         Expr::BinOp(b) => {
-            walk_expr(&b.left, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
-            walk_expr(&b.right, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+            walk_expr(
+                &b.left,
+                lines_vec,
+                line_idx,
+                target_functions,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+                out,
+            );
+            walk_expr(
+                &b.right,
+                lines_vec,
+                line_idx,
+                target_functions,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+                out,
+            );
         }
-        Expr::UnaryOp(u) => walk_expr(&u.operand, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out),
+        Expr::UnaryOp(u) => walk_expr(
+            &u.operand,
+            lines_vec,
+            line_idx,
+            target_functions,
+            pkg_aliases,
+            named_imports,
+            has_star_import,
+            out,
+        ),
         Expr::IfExp(i) => {
-            walk_expr(&i.test, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
-            walk_expr(&i.body, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
-            walk_expr(&i.orelse, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+            walk_expr(
+                &i.test,
+                lines_vec,
+                line_idx,
+                target_functions,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+                out,
+            );
+            walk_expr(
+                &i.body,
+                lines_vec,
+                line_idx,
+                target_functions,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+                out,
+            );
+            walk_expr(
+                &i.orelse,
+                lines_vec,
+                line_idx,
+                target_functions,
+                pkg_aliases,
+                named_imports,
+                has_star_import,
+                out,
+            );
         }
         Expr::List(l) => {
             for e in &l.elts {
-                walk_expr(e, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                walk_expr(
+                    e,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
             }
         }
         Expr::Tuple(t) => {
             for e in &t.elts {
-                walk_expr(e, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                walk_expr(
+                    e,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
             }
         }
         Expr::Dict(d) => {
             for v in &d.values {
-                walk_expr(v, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out);
+                walk_expr(
+                    v,
+                    lines_vec,
+                    line_idx,
+                    target_functions,
+                    pkg_aliases,
+                    named_imports,
+                    has_star_import,
+                    out,
+                );
             }
         }
-        Expr::Await(a) => walk_expr(&a.value, lines_vec, line_idx, target_functions, pkg_aliases, named_imports, has_star_import, out),
+        Expr::Await(a) => walk_expr(
+            &a.value,
+            lines_vec,
+            line_idx,
+            target_functions,
+            pkg_aliases,
+            named_imports,
+            has_star_import,
+            out,
+        ),
         _ => {}
     }
 }

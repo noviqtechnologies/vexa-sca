@@ -199,10 +199,16 @@ mod tests {
         let mut tampered = envelope.clone();
         tampered.payload_json = r#"{"advisories":[{"id":"FAKE"}]}"#.to_string();
         let tampered_raw = serde_json::to_string(&tampered).unwrap();
-        assert!(OfflineBundleVerifier::verify_bundle_content(&tampered_raw, Some(&pubkey_hex)).is_err());
+        assert!(
+            OfflineBundleVerifier::verify_bundle_content(&tampered_raw, Some(&pubkey_hex)).is_err()
+        );
 
         // Wrong public key -> Ed25519 verification fails
-        let wrong_pub = hex::encode(SigningKey::from_bytes(&[99u8; 32]).verifying_key().to_bytes());
+        let wrong_pub = hex::encode(
+            SigningKey::from_bytes(&[99u8; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
         assert!(OfflineBundleVerifier::verify_bundle_content(&raw, Some(&wrong_pub)).is_err());
     }
 }

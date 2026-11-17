@@ -455,10 +455,18 @@ impl CloudClient {
 
     /// Cross-OS (Windows/macOS/Linux) git & CI context detector without spawning external processes.
     pub fn detect_git_context(workspace_root: &Path) -> GitContext {
-        let gh_head_ref = std::env::var("GITHUB_HEAD_REF").ok().filter(|s| !s.trim().is_empty());
-        let gh_ref_name = std::env::var("GITHUB_REF_NAME").ok().filter(|s| !s.trim().is_empty());
-        let gh_base_ref = std::env::var("GITHUB_BASE_REF").ok().filter(|s| !s.trim().is_empty());
-        let ci_branch = std::env::var("CI_COMMIT_REF_NAME").ok().filter(|s| !s.trim().is_empty());
+        let gh_head_ref = std::env::var("GITHUB_HEAD_REF")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let gh_ref_name = std::env::var("GITHUB_REF_NAME")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let gh_base_ref = std::env::var("GITHUB_BASE_REF")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let ci_branch = std::env::var("CI_COMMIT_REF_NAME")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
 
         let pr_number = std::env::var("GITHUB_REF")
             .ok()
@@ -482,14 +490,19 @@ impl CloudClient {
         let commit_sha = std::env::var("GITHUB_SHA")
             .ok()
             .filter(|s| !s.trim().is_empty())
-            .or_else(|| std::env::var("CI_COMMIT_SHA").ok().filter(|s| !s.trim().is_empty()))
+            .or_else(|| {
+                std::env::var("CI_COMMIT_SHA")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            })
             .or_else(|| Self::read_dot_git_sha(workspace_root));
 
-        let is_default_branch = if pr_number.is_some() || gh_head_ref.is_some() || gh_base_ref.is_some() {
-            Some(false)
-        } else {
-            branch.as_deref().map(|b| b == "main" || b == "master")
-        };
+        let is_default_branch =
+            if pr_number.is_some() || gh_head_ref.is_some() || gh_base_ref.is_some() {
+                Some(false)
+            } else {
+                branch.as_deref().map(|b| b == "main" || b == "master")
+            };
 
         let repo_url = match (
             std::env::var("GITHUB_SERVER_URL").ok(),
@@ -701,13 +714,21 @@ mod tests {
         std::fs::create_dir_all(tmp.join(".git").join("refs").join("heads")).unwrap();
         std::fs::write(tmp.join(".git").join("HEAD"), "ref: refs/heads/feat/ast\n").unwrap();
         std::fs::write(
-            tmp.join(".git").join("refs").join("heads").join("feat").join("ast"),
+            tmp.join(".git")
+                .join("refs")
+                .join("heads")
+                .join("feat")
+                .join("ast"),
             "",
         )
         .ok();
         std::fs::create_dir_all(tmp.join(".git").join("refs").join("heads").join("feat")).unwrap();
         std::fs::write(
-            tmp.join(".git").join("refs").join("heads").join("feat").join("ast"),
+            tmp.join(".git")
+                .join("refs")
+                .join("heads")
+                .join("feat")
+                .join("ast"),
             "0123456789abcdef0123456789abcdef01234567\n",
         )
         .unwrap();

@@ -349,7 +349,9 @@ impl McpServer {
                                     .reachability
                                     .as_ref()
                                     .and_then(|r| r.call_sites.first())
-                                    .map(|cs| format!("{}:{} ({})", cs.file, cs.line, cs.matched_function))
+                                    .map(|cs| {
+                                        format!("{}:{} ({})", cs.file, cs.line, cs.matched_function)
+                                    })
                                     .unwrap_or_else(|| "-".to_string());
                                 out.push_str(&format!(
                                     "| {:?} | {} | {} | {} | {} | {} |\n",
