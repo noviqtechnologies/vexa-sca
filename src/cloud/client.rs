@@ -352,7 +352,9 @@ impl CloudClient {
 
             sc_count += 1;
             let cwe = match sc.rule_id.as_str() {
-                "SC-014" => Some("CWE-829".to_string()),
+                "SC-014" | "SC-015" => Some("CWE-829".to_string()),
+                "SC-016" => Some("CWE-1036".to_string()),
+                "SC-017" => Some("CWE-506".to_string()),
                 "SC-007" => Some("CWE-200".to_string()),
                 "SC-003" => Some("CWE-94".to_string()),
                 "SC-004" => Some("CWE-78".to_string()),
@@ -364,6 +366,14 @@ impl CloudClient {
             let remediation = match sc.rule_id.as_str() {
                 "SC-014" => Some(
                     "Pin GitHub Action to an immutable 40-character commit SHA (e.g. uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1) to prevent supply chain tampering."
+                        .to_string(),
+                ),
+                "SC-015" => Some(
+                    "Pin MCP server packages to an explicit version (e.g. npx -y @pkg/server@1.2.3), use HTTPS for remote MCP endpoints, and scope filesystem paths to the project directory."
+                        .to_string(),
+                ),
+                "SC-016" => Some(
+                    "Remove invisible Unicode characters and prompt-injection / credential-exfiltration directives from AI coding agent instruction files."
                         .to_string(),
                 ),
                 "SC-007" => Some(

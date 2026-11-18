@@ -112,8 +112,9 @@ vexa-sca wrap npm ci
 
 1. **Typosquatting detection (SC-010)** — Computes Damerau-Levenshtein edit distance ≤ 1 across a curated index of 250+ popular packages across npm, PyPI, crates.io, Go, and Maven. Employs length pruning for microsecond validation. Blocks `loadsh`, `reqests`, `expres`, `fast1fy`, `playwr1ght`, `serde-json` (vs `serde_json`), etc.
 2. **Pre-flight Manifest & Lifecycle Script Inspection** — Queries the upstream registry API (e.g. `https://registry.npmjs.org/<package>/<version>`) prior to package installation. Inspects lifecycle scripts (`preinstall`, `install`, `postinstall`) for unauthorized network egress (`curl`, `wget`, `powershell`, `Invoke-WebRequest`), reverse shells (`nc -e`, `sh -i`, `bash -i >& /dev/tcp`), and obfuscated execution (`eval()`, base64 decoding). Blocks execution if risky payload patterns are identified.
-3. **CISA KEV check** — Fetches and caches the CISA Known Exploited Vulnerabilities catalog (24 h TTL at `.sca-cache/cisa_kev.json`). Blocks any package with a KEV-listed CVE.
-4. **OSV advisory scan** — Queries `api.osv.dev` for published advisories against each package name + version.
+3. **Live Slopsquatting Reputation Gate (SC-017)** — Checks live npm and crates.io metadata for newly registered (`< 14 days`) or low-download (`< 500`) packages within edit distance ≤ 2 of popular packages to block AI-hallucinated slopsquat dependencies.
+4. **CISA KEV check** — Fetches and caches the CISA Known Exploited Vulnerabilities catalog (24 h TTL at `.sca-cache/cisa_kev.json`). Blocks any package with a KEV-listed CVE.
+5. **OSV advisory scan** — Queries `api.osv.dev` for published advisories against each package name + version.
 
 ### Exit codes
 

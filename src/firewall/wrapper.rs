@@ -445,6 +445,64 @@ impl FirewallWrapper {
 
                         let script_findings = Self::inspect_package_scripts(&pkg.name, scripts_opt);
                         reasons.extend(script_findings);
+
+                        // SC-017: Live creation-age check for newly registered slopsquat packages
+                        if let Some(created_str) = json
+                            .get("time")
+                            .and_then(|t| t.get("created"))
+                            .and_then(|c| c.as_str())
+                        {
+                            if let Ok(created_dt) =
+                                chrono::DateTime::parse_from_rfc3339(created_str)
+                            {
+                                let age_days = chrono::Utc::now()
+                                    .signed_duration_since(created_dt.with_timezone(&chrono::Utc))
+                                    .num_days()
+                                    .max(0) as u64;
+                                if let Some(msg) = Self::evaluate_slopsquat_reputation(
+                                    &pkg.name,
+                                    Some(age_days),
+                                    None,
+                                ) {
+                                    reasons.push(msg);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if pkg.ecosystem.eq_ignore_ascii_case("crates.io")
+            || pkg.ecosystem.eq_ignore_ascii_case("cargo")
+        {
+            let url = format!("https://crates.io/api/v1/crates/{}", pkg.name);
+            if let Ok(resp) = client
+                .get(&url)
+                .header("User-Agent", "vexa-sca-firewall/1.3.7")
+                .send()
+                .await
+            {
+                if resp.status().is_success() {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        let downloads = json
+                            .get("crate")
+                            .and_then(|c| c.get("downloads"))
+                            .and_then(|d| d.as_u64());
+                        let age_days = json
+                            .get("crate")
+                            .and_then(|c| c.get("created_at"))
+                            .and_then(|s| s.as_str())
+                            .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                            .map(|dt| {
+                                chrono::Utc::now()
+                                    .signed_duration_since(dt.with_timezone(&chrono::Utc))
+                                    .num_days()
+                                    .max(0) as u64
+                            });
+                        if let Some(msg) =
+                            Self::evaluate_slopsquat_reputation(&pkg.name, age_days, downloads)
+                        {
+                            reasons.push(msg);
+                        }
                     }
                 }
             }
@@ -476,6 +534,38 @@ impl FirewallWrapper {
         }
 
         reasons
+    }
+
+    /// Rule SC-017: Evaluates live package registry creation age (`< 14 days`) or low download volume (`< 500`)
+    /// combined with edit distance `<= 2` from popular packages to catch AI-hallucinated slopsquat packages.
+    pub fn evaluate_slopsquat_reputation(
+        pkg_name: &str,
+        age_days: Option<u64>,
+        downloads: Option<u64>,
+    ) -> Option<String> {
+        let is_new = age_days.is_some_and(|d| d < 14);
+        let is_low_dl = downloads.is_some_and(|dl| dl < 500);
+        if !is_new && !is_low_dl {
+            return None;
+        }
+
+        let lower = pkg_name.trim().to_ascii_lowercase();
+        for &pop in crate::supply_chain::local_analyzer::POPULAR_PACKAGES {
+            if lower == pop {
+                return None;
+            }
+            if (lower.len() as isize - pop.len() as isize).abs() <= 2 {
+                let dist =
+                    crate::supply_chain::local_analyzer::damerau_levenshtein_distance(&lower, pop);
+                if dist <= 2 {
+                    return Some(format!(
+                        "[SLOPSQUAT REPUTATION GATE (SC-017)] Package '{}' resembles popular package '{}' (distance {}) with low registry reputation (age_days={:?}, downloads={:?})",
+                        pkg_name, pop, dist, age_days, downloads
+                    ));
+                }
+            }
+        }
+        None
     }
 
     pub fn extract_packages_to_install(pm: &str, args: &[String]) -> Vec<PackageToEvaluate> {
@@ -689,5 +779,16 @@ mod tests {
         let shell_reasons = FirewallWrapper::inspect_package_scripts("bad-dep", Some(&bidi_shell));
         assert!(!shell_reasons.is_empty());
         assert!(shell_reasons[0].contains("REVERSE SHELL DETECTED"));
+
+        let slop = FirewallWrapper::evaluate_slopsquat_reputation("reactt-dom", Some(3), Some(45));
+        assert!(slop.is_some());
+        assert!(slop.unwrap().contains("SC-017"));
+
+        let established = FirewallWrapper::evaluate_slopsquat_reputation(
+            "react-dom",
+            Some(3000),
+            Some(5_000_000),
+        );
+        assert!(established.is_none());
     }
 }

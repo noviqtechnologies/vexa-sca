@@ -1,6 +1,6 @@
 # Vexa SCA: Enterprise-Grade Software Composition Analysis & Security Engine
 
-[![Release](https://img.shields.io/badge/Release-v1.3.7%20Tier%201%20GA-brightgreen.svg?logo=github)](https://github.com/noviqtechnologies/vexa-sca/releases)
+[![Release](https://img.shields.io/badge/Release-v1.3.8%20Tier%201%20GA-brightgreen.svg?logo=github)](https://github.com/noviqtechnologies/vexa-sca/releases)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg?logo=githubactions)](https://github.com/noviqtechnologies/vexa-sca/actions)
 [![Tests](https://img.shields.io/badge/Tests-211%20Passing-success.svg)](#automated-tests--verification)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
@@ -626,7 +626,9 @@ Vexa SCA v2.0 includes a **static supply chain behavioral analyzer** that scans 
 | SC-012 | `crypto_miner_stratum` | 🔴 Critical | Cryptocurrency miner signatures: `stratum+tcp://`, `stratum+ssl://`, `xmrig`, `cryptonight` |
 | SC-013 | `reverse_shell_signature` | 🔴 Critical | Reverse shell patterns: `/bin/bash -i`, `bash -i >& /dev/tcp/`, `nc -e`, `sh -i >& /dev/tcp/`, `pty.spawn('/bin/bash')` |
 | SC-014 | `github_actions_unpinned_ref` | 🔴 High | GitHub Actions `uses:` references not pinned to immutable 40-hex-char commit SHA (e.g. `@v2`, `@main`, `@latest`); dangerous `pull_request_target` + head checkout |
-| SC-015 | `mcp_unsafe_tool_config` | 🔴 High | MCP server config executes `npx -y <unpinned-pkg>`, or grants unrestricted host filesystem root (`/`, `C:\`) |
+| SC-015 | `mcp_unsafe_tool_config` | 🔴 High | MCP server config (`mcp.json`, `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.claude.json`, `.windsurf/mcp.json`) executes unpinned `npx -y` / `uvx`, connects over unencrypted remote `http://`, or grants unrestricted host filesystem root (`/`, `C:\`) |
+| SC-016 | `ai_instruction_prompt_injection` | 🔴 Critical | AI coding agent instruction & skill files (`CLAUDE.md`, `.cursorrules`, `.windsurfrules`, `AGENTS.md`, `SKILL.md`, `.cursor/rules/*.mdc`) contain hidden BiDi / zero-width / tag Unicode or covert prompt-injection / credential-exfiltration directives |
+| SC-017 | `slopsquat_low_reputation_package` | 🔴 High | Pre-install package firewall (`vexa-sca wrap`) detects newly registered (`<14 days`) or low-download (`<500`) packages within edit distance ≤2 of popular packages |
 
 ```bash
 # Supply chain analysis runs automatically during a normal scan
