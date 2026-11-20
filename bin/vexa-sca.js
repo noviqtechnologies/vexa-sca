@@ -105,14 +105,17 @@ if (!cmd && !fs.existsSync(path.join(rootDir, 'Cargo.toml'))) {
       const archiveName = isWin
         ? 'vexa-sca-windows-x86_64.zip'
         : `vexa-sca-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x86_64'}.tar.gz`;
-      const tmpArchive = path.join(os.tmpdir(), `${archiveName}.${process.pid}`);
+      const tmpArchive = path.join(os.tmpdir(), `${process.pid}-${archiveName}`);
       const tmpSums = path.join(os.tmpdir(), `vexa-sca-sums-${process.pid}.txt`);
       const curlBin = isWin ? 'curl.exe' : 'curl';
 
       const dlRes = spawnSync(curlBin, ['-sSLf', '-o', tmpArchive, `${baseUrl}/${archiveName}`], { stdio: 'inherit' });
       if (dlRes.status === 0 && fs.existsSync(tmpArchive)) {
-        // Verify SHA-256 against release checksums manifest if published
-        let sumsRes = spawnSync(curlBin, ['-sSLf', '-o', tmpSums, `${baseUrl}/SHA256SUMS.txt`], { stdio: 'ignore' });
+        // Verify SHA-256 against release checksum file (${archiveName}.sha256, SHA256SUMS.txt, or checksums.txt)
+        let sumsRes = spawnSync(curlBin, ['-sSLf', '-o', tmpSums, `${baseUrl}/${archiveName}.sha256`], { stdio: 'ignore' });
+        if (sumsRes.status !== 0) {
+          sumsRes = spawnSync(curlBin, ['-sSLf', '-o', tmpSums, `${baseUrl}/SHA256SUMS.txt`], { stdio: 'ignore' });
+        }
         if (sumsRes.status !== 0) {
           sumsRes = spawnSync(curlBin, ['-sSLf', '-o', tmpSums, `${baseUrl}/checksums.txt`], { stdio: 'ignore' });
         }
