@@ -2435,7 +2435,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vexa-core"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -2450,7 +2450,7 @@ dependencies = [
 
 [[package]]
 name = "vexa-sca"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "blake3",
  "chrono",
