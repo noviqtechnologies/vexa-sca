@@ -8,9 +8,9 @@ REPO="noviqtechnologies/vexa-sca"
 VERSION="${VERSION:-latest}"
 
 if [ "$VERSION" = "latest" ]; then
-    VERSION_TAG=$(curl -sSf "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || echo "v1.3.7")
+    VERSION_TAG=$(curl -sSf "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || echo "v1.5.0")
     if [ -z "$VERSION_TAG" ]; then
-        VERSION_TAG="v1.3.7"
+        VERSION_TAG="v1.5.0"
     fi
 else
     case "$VERSION" in
@@ -87,8 +87,16 @@ fi
 echo ""
 echo "✔ Vexa SCA successfully installed to $INSTALL_DIR/vexa-sca"
 case ":$PATH:" in
-    *":$INSTALL_DIR:"*) ;;
+    *":$INSTALL_DIR:"*)
+        RESOLVED_BIN="$(command -v vexa-sca 2>/dev/null || true)"
+        if [ -n "$RESOLVED_BIN" ] && [ "$RESOLVED_BIN" != "$INSTALL_DIR/vexa-sca" ]; then
+            echo "[WARN] Another 'vexa-sca' binary earlier in PATH is shadowing this installation:" >&2
+            echo "       Shadowing: $RESOLVED_BIN" >&2
+            echo "       Installed: $INSTALL_DIR/vexa-sca" >&2
+            echo "       Remove the older binary or prepend $INSTALL_DIR to your PATH." >&2
+        fi
+        ;;
     *) echo "Notice: Add $INSTALL_DIR to your PATH in ~/.bashrc or ~/.zshrc:"
-       echo "  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+       echo "  export PATH=\"$INSTALL_DIR:\$PATH\"" ;;
 esac
 echo "Run 'vexa-sca --version' to get started."

@@ -1,6 +1,6 @@
 [package]
 name = "vexa-sca"
-version = "1.4.1"
+version = "1.5.0"
 edition = "2021"
 authors = ["Noviq Technologies <support@vexasec.io>"]
 description = "Vexa SCA - Evidence-aware Software Composition Analysis, AST Reachability, SAST & Supply-Chain Firewall"

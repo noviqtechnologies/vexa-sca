@@ -198,12 +198,17 @@ fn discover_recursive(dir: &Path, depth: usize, max_depth: usize, results: &mut 
 
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
+            if vexa_core::fs_guard::is_symlink_or_reparse_point(&entry) {
+                continue;
+            }
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
             let path = entry.path();
-            if path.is_dir() {
+            if ft.is_dir() {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 if name.starts_with('.')
-                    || name == "node_modules"
-                    || name == "target"
+                    || vexa_core::fs_guard::is_os_heavy_dir(name)
                     || name == "vendor"
                     || name == "dist"
                     || name == "build"
@@ -212,7 +217,6 @@ fn discover_recursive(dir: &Path, depth: usize, max_depth: usize, results: &mut 
                     || name == "completed"
                     || name == "fixtures"
                     || name == "test-fixtures"
-                    || name == ".work"
                 {
                     continue;
                 }

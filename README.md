@@ -1,6 +1,6 @@
 # Vexa SCA: Enterprise-Grade Software Composition Analysis & Security Engine
 
-[![Release](https://img.shields.io/badge/Release-v1.4.1%20Tier%201%20GA-brightgreen.svg?logo=github)](https://github.com/noviqtechnologies/vexa-sca/releases)
+[![Release](https://img.shields.io/badge/Release-v1.5.0%20Tier%201%20GA-brightgreen.svg?logo=github)](https://github.com/noviqtechnologies/vexa-sca/releases)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg?logo=githubactions)](https://github.com/noviqtechnologies/vexa-sca/actions)
 [![Tests](https://img.shields.io/badge/Tests-190%20Unit%20Passing-success.svg)](#automated-tests--verification)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
@@ -60,7 +60,7 @@
 > ```bash
 > git clone https://github.com/noviqtechnologies/vexa-sca.git
 > cd vexa-sca
-> git checkout v1.4.1
+> git checkout v1.5.0
 > cargo build --locked --release
 > ```
 > 

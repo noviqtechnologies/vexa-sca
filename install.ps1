@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Vexa SCA CLI Official Windows Installer with Cryptographic Checksum Verification.
 .DESCRIPTION
@@ -28,7 +28,7 @@ if ($Version -eq "latest") {
         $Release = Invoke-RestMethod -Uri $ReleaseUrl -Headers @{"User-Agent"="vexa-sca-installer"}
         $VersionTag = $Release.tag_name
     } catch {
-        $VersionTag = "v1.3.7"
+        $VersionTag = "v1.5.0"
     }
 } else {
     $VersionTag = if ($Version.StartsWith("v")) { $Version } else { "v$Version" }
@@ -94,15 +94,32 @@ try {
         throw "Binary executable not found inside archive."
     }
 
-    # Add to user PATH if not present
+    # Prepend to user PATH if not present so the newly installed binary takes precedence
     $UserPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
     if ($UserPath -notlike "*$InstallDir*") {
-        [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", [EnvironmentVariableTarget]::User)
-        $env:Path = "$env:Path;$InstallDir"
+        $NewUserPath = if ([string]::IsNullOrWhiteSpace($UserPath)) { $InstallDir } else { "$InstallDir;$UserPath" }
+        [Environment]::SetEnvironmentVariable("Path", $NewUserPath, [EnvironmentVariableTarget]::User)
         Write-Host "Added $InstallDir to user PATH." -ForegroundColor Cyan
     }
+    if ($env:Path -notlike "*$InstallDir*") {
+        $env:Path = "$InstallDir;$env:Path"
+    }
 
-    Write-Host "`n✔ Vexa SCA successfully installed to $InstallDir\vexa-sca.exe" -ForegroundColor Green
+    # Warn if an older vexa-sca binary earlier in PATH shadows the newly installed one
+    $InstalledExe = Join-Path $InstallDir "vexa-sca.exe"
+    $Shadowing = Get-Command vexa-sca -All -ErrorAction SilentlyContinue |
+        Where-Object { $_.Source -and ($_.Source -ne $InstalledExe) }
+    $FirstResolved = Get-Command vexa-sca -ErrorAction SilentlyContinue
+    if ($FirstResolved -and $FirstResolved.Source -and ($FirstResolved.Source -ne $InstalledExe)) {
+        Write-Host "`n[WARN] Another 'vexa-sca' binary earlier in PATH is shadowing this installation:" -ForegroundColor Yellow
+        Write-Host "       Shadowing: $($FirstResolved.Source)" -ForegroundColor Yellow
+        Write-Host "       Installed: $InstalledExe" -ForegroundColor Yellow
+        Write-Host "       Remove the older binary (e.g. Remove-Item '$($FirstResolved.Source)') or move $InstallDir earlier in PATH." -ForegroundColor Yellow
+    } elseif ($Shadowing) {
+        Write-Host "Note: Older vexa-sca binary also exists at $($Shadowing[0].Source) (currently shadowed by $InstalledExe)." -ForegroundColor Gray
+    }
+
+    Write-Host "`n✔ Vexa SCA successfully installed to $InstalledExe" -ForegroundColor Green
     Write-Host "To verify, run: vexa-sca --version" -ForegroundColor Cyan
 } finally {
     Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue

@@ -6,6 +6,7 @@
 //! reachability using one authoritative engine.
 
 pub mod cvss;
+pub mod fs_guard;
 pub mod js_ast;
 pub mod malware;
 pub mod py_ast;

@@ -841,7 +841,9 @@ impl WorkspaceAstIndex {
         let walker = WalkDir::new(source_dir).into_iter().filter_entry(|e| {
             if e.file_type().is_dir() {
                 let name = e.file_name().to_string_lossy();
-                !ignore_dirs.contains(name.as_ref()) && !name.starts_with('.')
+                !ignore_dirs.contains(name.as_ref())
+                    && !name.starts_with('.')
+                    && !vexa_core::fs_guard::is_os_heavy_dir(&name)
             } else {
                 true
             }

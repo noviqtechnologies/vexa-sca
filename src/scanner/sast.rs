@@ -133,19 +133,21 @@ impl SastScanner {
             }
         };
         for entry in entries.flatten() {
+            if vexa_core::fs_guard::is_symlink_or_reparse_point(&entry) {
+                continue;
+            }
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
             let path = entry.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if path.is_dir() {
+            if ft.is_dir() {
                 let lower = name.to_ascii_lowercase();
                 if name.starts_with('.')
-                    || name == "node_modules"
-                    || name == "target"
+                    || vexa_core::fs_guard::is_os_heavy_dir(name)
                     || name == "vendor"
                     || name == "dist"
                     || name == "build"
-                    || name == "__pycache__"
-                    || name == "venv"
-                    || name == ".venv"
                     || lower == "__tests__"
                     || lower == "testdata"
                     || lower == "fixtures"
@@ -159,7 +161,7 @@ impl SastScanner {
                     continue;
                 }
                 Self::walk_dir(root, &path, depth + 1, findings, coverage);
-            } else if path.is_file() {
+            } else if ft.is_file() {
                 Self::scan_file_with_coverage(root, &path, findings, coverage);
             }
         }

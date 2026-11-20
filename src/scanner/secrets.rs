@@ -101,15 +101,23 @@ impl SecretScanner {
         };
 
         for entry in entries.flatten() {
+            if vexa_core::fs_guard::is_symlink_or_reparse_point(&entry) {
+                continue;
+            }
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
             let path = entry.path();
             let file_name = entry.file_name().to_string_lossy().to_string();
 
-            if path.is_dir() {
-                if Self::should_skip_dir(&file_name) {
+            if ft.is_dir() {
+                if Self::should_skip_dir(&file_name)
+                    || vexa_core::fs_guard::is_os_heavy_dir(&file_name)
+                {
                     continue;
                 }
                 Self::walk_dir(root, &path, depth + 1, rules, findings, coverage);
-            } else if path.is_file() {
+            } else if ft.is_file() {
                 if Self::should_skip_file(&file_name) {
                     continue;
                 }

@@ -2818,6 +2818,20 @@ pub async fn run() {
         }
 
         Commands::Init { path, enforce } => {
+            if vexa_core::fs_guard::is_unsafe_recursive_scan_root(&path) {
+                eprintln!(
+                    "{} Refusing to initialize a project workflow in your home or filesystem root directory ({}).",
+                    "Error:".red(),
+                    path.display()
+                );
+                eprintln!(
+                    "  {} Run {} inside a project repository, or specify a project directory: {}",
+                    "Hint:".cyan(),
+                    "vexa-sca init".bold(),
+                    "vexa-sca init <project-dir>".bold()
+                );
+                exit(2);
+            }
             let workflows_dir = path.join(".github").join("workflows");
             if let Err(e) = std::fs::create_dir_all(&workflows_dir) {
                 eprintln!(
