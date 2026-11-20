@@ -1,8 +1,8 @@
 # Vexa SCA: Enterprise-Grade Software Composition Analysis & Security Engine
 
-[![Release](https://img.shields.io/badge/Release-v1.3.8%20Tier%201%20GA-brightgreen.svg?logo=github)](https://github.com/noviqtechnologies/vexa-sca/releases)
+[![Release](https://img.shields.io/badge/Release-v1.4.0%20Tier%201%20GA-brightgreen.svg?logo=github)](https://github.com/noviqtechnologies/vexa-sca/releases)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg?logo=githubactions)](https://github.com/noviqtechnologies/vexa-sca/actions)
-[![Tests](https://img.shields.io/badge/Tests-211%20Passing-success.svg)](#automated-tests--verification)
+[![Tests](https://img.shields.io/badge/Tests-190%20Unit%20Passing-success.svg)](#automated-tests--verification)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/Rust-2021%20%7C%20MSRV%201.99.1%2B-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-brightgreen.svg)](#cross-platform-installation--setup)
@@ -33,20 +33,20 @@
 
 | Key Feature | Security & Developer Value | Quick Command |
 | :--- | :--- | :--- |
-| 🔍 [**Repository Usage Signals**](#1-repository-usage-signal-analysis) | Uses real AST analysis for **JS/TS (`oxc_parser`) and Python (`rustpython-parser`)**, plus conservative import heuristics for Rust/Go/Java. Classifies dependencies as `IMPORTED_SOURCE`, `REFERENCED_CONFIG_OR_SCRIPT`, or `NO_REFERENCE_FOUND_WITHIN_SCOPE`, and preserves conservative `NoSymbolData` (`Unknown`) verdicts when symbol mappings or dynamic coverage are incomplete. | `vexa-sca scan` |
-| ⚡ [**Pure Rust Core & Cross-Platform**](#cross-platform-installation--setup) | High-throughput multi-threaded analysis with **zero external C / OpenSSL runtime dependencies** and atomic cross-OS cache persistence (`.sca-cache`). Native single binaries for Linux, macOS & Windows. | `vexa-sca scan` |
+| 🔍 [**Repository Usage Signals**](#1-repository-usage-signal-analysis) | Uses real single-pass AST analysis for **JS/TS (`oxc_parser`) and Python 3 (`rustpython-parser`, via shared `vexa-core::py_ast`, ignoring comments/docstrings)**, canonicalized cross-OS multi-hop barrel/wrapper resolution (`.ts`/`.tsx`/`.js`/`.py`), synced `vuln_symbols_v1.json` ingestion (`VEXA_VULN_SYMBOLS_PATH`), and full transitive dependency graphs for `uv.lock`/`poetry.lock`. Preserves conservative `NoSymbolData` (`Unknown`) verdicts when symbol mappings or dynamic coverage are incomplete. | `vexa-sca scan` |
+| ⚡ [**Pure Rust Core & Shared `vexa-core` Crate**](#cross-platform-installation--setup) | High-throughput multi-threaded analysis with **zero external C / OpenSSL runtime dependencies** and atomic cross-OS cache persistence (`.sca-cache`). Exposes a pure-in-memory shared `crates/vexa-core` crate (CVSS v3/v4, OpenSSF `MAL-*` classification, `uv.lock`/`poetry.lock` graph parser, single-pass `oxc_parser` JS/TS AST) consumed identically by `vexa-sca`, `vexa-arc`, and `vexa-sca-cloud`. | `vexa-sca scan` |
 | 🔄 [**PR-Differential Scanning**](#pr-differential-scanning---baseline) | Compares PR findings against a baseline report (`--baseline`). Blocks only on newly introduced vulnerabilities while reporting baseline findings as non-blocking. | `vexa-sca scan --baseline base.json --fail-on high` |
 | 🤖 [**GitHub Actions Native CI/CD**](#two-operational-profiles-scan-vs-ci) | Generates rich GitHub Job Summaries (`$GITHUB_STEP_SUMMARY`) and annotations that succeed even under restricted read-only tokens (Dependabot/Fork PRs). | `vexa-sca ci --fail-on high` |
 | 🚀 [**1-Command Workflow Setup**](#github-actions-initialization-vexa-sca-init) | Bootstrap pinned GitHub Actions CI workflow in `.github/workflows/vexa-sca.yml` with immutable commit SHA action references. | `vexa-sca init --enforce` |
 | 🛠️ [**Same-Major Remediation & Fixer**](#2-automated-lockfile-patcher--pr-opener-fix) | Prioritizes non-breaking same-major patch/minor updates over breaking major bumps. Issues `[MAJOR UPGRADE WARNING]` when major jumps are unavoidable. | `vexa-sca fix --create-pr` |
 | 📊 [**Standalone Interactive HTML Dashboard**](#6-standalone-interactive-html-audit-dashboard) | Offline-ready single-file HTML report with glassmorphism dark UI, live search/filtering, and finding inspector—**zero external CDNs**. | `vexa-sca scan --html-file sca.html` |
-| 📋 [**CycloneDX & SPDX SBOM Generator**](#5-software-bill-of-materials-sbom-cyclonedx--spdx) | Export compliant **CycloneDX v1.5 JSON** (with VEX status) and **SPDX v2.3 JSON** with package URLs (PURLs) and vulnerability metadata. | `vexa-sca scan --sbom cyclonedx` |
+| 📋 [**CycloneDX & SPDX SBOM + VEX Generator**](#5-software-bill-of-materials-sbom-cyclonedx--spdx) | Export compliant **CycloneDX v1.5 JSON** (with positive-proof VEX `not_affected` + `code_not_reachable` justification only when `AnalysisCompleteNoUsage` passes, `exploitable` for reachable, `in_triage` for unknown) and **SPDX v2.3 JSON** with PURLs and vulnerability metadata. Also scans Alpine APK, Debian/Ubuntu DPKG, and **Google Distroless `/var/lib/dpkg/status.d/*`** container rootfs images. | `vexa-sca scan --sbom cyclonedx` |
 | 🛡️ [**Policy-as-Code & Suppression Engine**](#3-policy--suppression-engine-vexa-sca) | Define accepted risks in `.vexa-sca` YAML/JSON with mandatory expiration dates and alias matching (CVE/GHSA/Package). | `vexa-sca scan --policy .vexa-sca` |
 | 📈 [**EPSS Exploit Prediction**](#epss-exploit-prediction-likelihood) | Prioritizes CVEs by real-world 30-day exploit likelihood (FIRST.org EPSS) with fail-closed retention during upstream outages. | `vexa-sca scan --epss-threshold 0.50` |
 | 🚨 [**CISA KEV Integration**](#9-supply-chain-behavioral-analysis) | Flags CVEs confirmed exploited in the wild via the CISA Known Exploited Vulnerabilities catalog (cached, 24h TTL, +35 priority score boost). | `vexa-sca scan` |
 | 🔬 [**Supply Chain Behavioral Analysis**](#9-supply-chain-behavioral-analysis) | 15 static-analysis rules (SC-001–SC-015) detecting typosquatting, CI/CD poisoning, secrets, reverse shells, and MCP prompt-injection in manifests and workflows. | `vexa-sca scan` |
 | 🧪 [**Zero-Code-Sync CI SAST & Secret Detection**](#12-zero-code-sync-ci-sast--secret-detection) | Local fast sink & intra-procedural multi-line taint analysis (`CWE-78` OS Command Injection, `CWE-89` multi-line SQLi / Python f-strings, `CWE-22` Path Traversal, `CWE-918` SSRF, `CWE-94` Eval, `CWE-502` Deserialization) + redacted Secret Scanning (`AKIA****`) + SARIF v2.1.0 ingestion, working even in lockfile-less repositories. | `npx vexa-sca scan --sast --secrets` |
-| 🔥 [**Package Manager Firewall (`wrap`)**](#10-package-manager-firewall-wrap) | Pre-installation zero-shell security gate for npm, pnpm, yarn, bun, pip, uv, and cargo. Blocks typosquatted packages, CISA KEV hits, and OSV advisories before install. | `vexa-sca wrap npm install lodash` |
+| 🔥 [**Package Manager Firewall (`wrap`)**](#10-package-manager-firewall-wrap) | Pre-installation zero-shell security gate for npm, pnpm, yarn, bun, pip, uv, and cargo. Immediately blocks OpenSSF Malicious Packages (`MAL-*`), typosquatted packages, CISA KEV hits, and OSV advisories before install with bounded cloud telemetry flushing. | `vexa-sca wrap npm install lodash` |
 | 🤖 [**MCP Server (`mcp`)**](#11-mcp-server-integration-mcp) | JSON-RPC 2.0 MCP server exposing 4 tools to AI coding assistants (Cursor, Claude Code, Windsurf, GitHub Copilot) with exact `call_site` (`file:line`) and same-major `fixed_in` remediation targets. | `vexa-sca mcp` |
 | 📤 [**Zero-Code-Retention Facts Export (v2.0)**](#1-vexa-sca-scan) | Generates `.vexa.facts.json` (schema `2.0`) with dependency graph, AST reachability, branch/commit/PR context, and stripped SAST/Secret metadata (`file_path`, `line`, `cwe`, canonical `matched_sink` ≤64 chars)—**zero raw source code ever leaves your machine**. | `vexa-sca scan --upload-facts` |
 | 🛡️ [**Vexa Cloud 60-Second CI Sync**](#12-zero-code-sync-ci-sast--secret-detection) | Set `VEXA_SCA_SECURITY_API_KEY` in GitHub Actions and run `npx vexa-sca scan` to automatically run Dependency SCA + Code SAST + Secret Detection and stream results to Vexa Cloud (`500 / 500` Free Tier monthly scans). | `VEXA_SCA_SECURITY_API_KEY=vexa_sec_... npx vexa-sca scan` |
@@ -60,7 +60,7 @@
 > ```bash
 > git clone https://github.com/noviqtechnologies/vexa-sca.git
 > cd vexa-sca
-> git checkout v1.3.7
+> git checkout v1.4.0
 > cargo build --locked --release
 > ```
 > 

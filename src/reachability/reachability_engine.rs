@@ -29,6 +29,9 @@ pub struct ReachabilityEngine {
     pub indexed_files: Vec<IndexedFile>,
     pub ast_index: WorkspaceAstIndex,
     pub known_functions: HashMap<&'static str, Vec<&'static str>>,
+    /// Authoritative vulnerable symbol map loaded from synced `vuln_symbols_v1.json`
+    /// (`VEXA_VULN_SYMBOLS_PATH` or `<source_dir>/.sca-cache/vuln_symbols_v1.json`).
+    pub external_vuln_symbols: HashMap<String, Vec<String>>,
     pub max_files: usize,
     pub files_discovered: usize,
     pub files_skipped: usize,
@@ -306,12 +309,15 @@ impl ReachabilityEngine {
             })
             .collect();
 
+        let external_vuln_symbols = Self::load_external_vuln_symbols(source_dir);
+
         Self {
             source_dir: source_dir.to_path_buf(),
             source_files,
             indexed_files,
             ast_index,
             known_functions: known,
+            external_vuln_symbols,
             max_files,
             files_discovered,
             files_skipped,
@@ -321,6 +327,40 @@ impl ReachabilityEngine {
             has_any_unresolved_dynamic,
             config_referenced_pkgs,
         }
+    }
+
+    fn load_external_vuln_symbols(source_dir: &Path) -> HashMap<String, Vec<String>> {
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        let candidate_path = std::env::var("VEXA_VULN_SYMBOLS_PATH")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| source_dir.join(".sca-cache").join("vuln_symbols_v1.json"));
+
+        let Ok(raw) = fs::read_to_string(&candidate_path) else {
+            return map;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return map;
+        };
+        if let Some(entries) = json.get("entries").and_then(|e| e.as_array()) {
+            for entry in entries {
+                let Some(id) = entry.get("advisory_id").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                if let Some(syms) = entry.get("symbols").and_then(|v| v.as_array()) {
+                    let collected: Vec<String> = syms
+                        .iter()
+                        .filter_map(|s| s.as_str().map(|x| x.trim().to_string()))
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if !collected.is_empty() {
+                        map.entry(id.to_string()).or_default().extend(collected);
+                    }
+                }
+            }
+        }
+        map
     }
 
     fn find_config_referenced_pkgs(dir: &Path) -> HashSet<String> {
@@ -417,22 +457,37 @@ impl ReachabilityEngine {
         vuln: &VulnerabilityFinding,
     ) -> (ReachabilityResult, UsageSignal) {
         let target_functions: Option<Vec<String>> = if let Some(cve) = &vuln.cve {
-            self.known_functions
+            self.external_vuln_symbols
                 .get(cve.as_str())
-                .map(|list| list.iter().map(|s| s.to_string()).collect())
+                .cloned()
+                .or_else(|| {
+                    self.known_functions
+                        .get(cve.as_str())
+                        .map(|list| list.iter().map(|s| s.to_string()).collect())
+                })
         } else {
             None
         }
         .or_else(|| {
-            self.known_functions
+            self.external_vuln_symbols
                 .get(vuln.id.as_str())
-                .map(|list| list.iter().map(|s| s.to_string()).collect())
+                .cloned()
+                .or_else(|| {
+                    self.known_functions
+                        .get(vuln.id.as_str())
+                        .map(|list| list.iter().map(|s| s.to_string()).collect())
+                })
         })
         .or_else(|| {
             vuln.aliases.iter().find_map(|alias| {
-                self.known_functions
+                self.external_vuln_symbols
                     .get(alias.as_str())
-                    .map(|list| list.iter().map(|s| s.to_string()).collect())
+                    .cloned()
+                    .or_else(|| {
+                        self.known_functions
+                            .get(alias.as_str())
+                            .map(|list| list.iter().map(|s| s.to_string()).collect())
+                    })
             })
         })
         .or_else(|| {
@@ -1510,6 +1565,69 @@ def load_config():
         assert_eq!(usage2, UsageSignal::ImportedSource);
         assert_eq!(reach2.status, ReachabilityStatus::Reachable);
         assert_eq!(reach2.reason_code, Some(ReasonCode::DirectUsageFound));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_external_vuln_symbols_json_and_cross_file_python_ast() {
+        let dir = std::env::temp_dir().join("vexa_test_ext_symbols_and_py_ast");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("pkg")).unwrap();
+        std::fs::create_dir_all(dir.join(".sca-cache")).unwrap();
+
+        // Write synced vuln_symbols_v1.json (same schema produced by vexa-indexer-jobs)
+        std::fs::write(
+            dir.join(".sca-cache").join("vuln_symbols_v1.json"),
+            r#"{"entries":[{"advisory_id":"CVE-2099-9001","symbols":["unsafe_deserialize"]}]}"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.join("pkg").join("helpers.py"),
+            r#"
+"""
+import fake_pkg
+fake_pkg.unsafe_deserialize("x")
+"""
+from custom_ser import (
+    unsafe_deserialize as parse_blob,
+)
+
+def decode(raw):
+    return parse_blob(raw)
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.join("pkg").join("app.py"),
+            "from .helpers import decode\n\ndef main(x):\n    return decode(x)\n",
+        )
+        .unwrap();
+
+        let engine = ReachabilityEngine::new(&dir);
+        let vuln = VulnerabilityFinding {
+            id: "GHSA-9999-0000-0001".to_string(),
+            cve: Some("CVE-2099-9001".to_string()),
+            title: "Arbitrary deserialization".to_string(),
+            package: "custom-ser".to_string(),
+            version: "1.0.0".to_string(),
+            ecosystem: "PyPI".to_string(),
+            pkg_id: "custom-ser@1.0.0".to_string(),
+            affected_symbols: vec![],
+            ..Default::default()
+        };
+
+        let (reach, usage) = engine.check_vulnerability_and_usage(&vuln);
+        assert_eq!(usage, UsageSignal::ImportedSource);
+        assert_eq!(reach.status, ReachabilityStatus::Reachable);
+        assert_eq!(reach.reason_code, Some(ReasonCode::DirectUsageFound));
+
+        // Verify cross-file propagation attached `custom-ser` to `pkg/app.py` via `from .helpers import decode`
+        let app_path = dir.join("pkg").join("app.py");
+        let app_facts = engine.ast_index.files.get(&app_path).expect("app.py indexed");
+        assert!(app_facts.external_imports.contains_key("custom-ser"));
 
         let _ = std::fs::remove_dir_all(dir);
     }

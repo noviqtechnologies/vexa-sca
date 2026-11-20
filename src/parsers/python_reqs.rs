@@ -60,9 +60,6 @@ impl PythonRequirementsParser {
             return Err("Lockfile exceeds maximum size limit of 15 MB".to_string());
         }
 
-        let parsed: toml::Value = toml::from_str(&content)
-            .map_err(|e| format!("Failed to parse TOML in {}: {}", lock_path.display(), e))?;
-
         let root_name = project_dir
             .file_name()
             .and_then(|n| n.to_str())
@@ -77,27 +74,41 @@ impl PythonRequirementsParser {
             },
         );
 
-        if let Some(packages) = parsed.get("package").and_then(|p| p.as_array()) {
-            for pkg in packages {
-                if let (Some(name), Some(version)) = (
-                    pkg.get("name").and_then(|n| n.as_str()),
-                    pkg.get("version").and_then(|v| v.as_str()),
-                ) {
-                    let pkg_info = PkgInfo::new(name, version, "PyPI");
-                    graph.add_pkg(pkg_info.clone());
+        let lock_graph = vexa_core::python_lock::parse_python_toml_lock(&content)?;
+        let mut norm_to_node_id: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let root_id = graph.root_node_id.clone();
 
-                    let node_id = format!("pip:{}@{}", name, version);
-                    graph.add_node(
-                        node_id.clone(),
-                        pkg_info.id,
-                        NodeInfo {
-                            scope: "prod".to_string(),
-                            path: None,
-                            integrity: None,
-                        },
-                    );
+        for pkg in &lock_graph.packages {
+            let pkg_info = PkgInfo::new(&pkg.name, &pkg.version, "PyPI");
+            graph.add_pkg(pkg_info.clone());
 
-                    let _ = graph.add_edge(&graph.root_node_id.clone(), &node_id);
+            let node_id = format!("pip:{}@{}", pkg.name, pkg.version);
+            graph.add_node(
+                node_id.clone(),
+                pkg_info.id,
+                NodeInfo {
+                    scope: pkg.scope.clone(),
+                    path: None,
+                    integrity: None,
+                },
+            );
+            norm_to_node_id.insert(pkg.normalized_name.clone(), node_id);
+        }
+
+        for (parent_norm, child_norm) in &lock_graph.edges {
+            if let (Some(parent_id), Some(child_id)) = (
+                norm_to_node_id.get(parent_norm),
+                norm_to_node_id.get(child_norm),
+            ) {
+                let _ = graph.add_edge(parent_id, child_id);
+            }
+        }
+
+        for pkg in &lock_graph.packages {
+            if pkg.is_direct {
+                if let Some(node_id) = norm_to_node_id.get(&pkg.normalized_name) {
+                    let _ = graph.add_edge(&root_id, node_id);
                 }
             }
         }
@@ -439,5 +450,143 @@ source = { registry = "https://pypi.org/simple" }
                 constraint: "<8.0.0".to_string()
             }
         );
+    }
+
+    #[test]
+    fn test_uv_lock_preserves_transitive_edges_and_dev_scope() {
+        let temp_dir = std::env::temp_dir().join("vexa_test_uv_lock_edges");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let uv_lock = temp_dir.join("uv.lock");
+        fs::write(
+            &uv_lock,
+            r#"version = 1
+
+[[package]]
+name = "my-app"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "fastapi" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[[package]]
+name = "fastapi"
+version = "0.115.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "starlette" },
+]
+
+[[package]]
+name = "starlette"
+version = "0.40.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "pytest"
+version = "8.3.0"
+source = { registry = "https://pypi.org/simple" }
+"#,
+        )
+        .unwrap();
+
+        let graph = PythonRequirementsParser::parse(&uv_lock).expect("should parse uv.lock");
+        let root_deps = &graph
+            .get_node(&graph.root_node_id)
+            .expect("root node")
+            .deps;
+        assert!(root_deps.contains(&"pip:fastapi@0.115.0".to_string()));
+        assert!(root_deps.contains(&"pip:pytest@8.3.0".to_string()));
+        assert!(
+            !root_deps.contains(&"pip:starlette@0.40.0".to_string()),
+            "transitive dep starlette must NOT be attached directly to root"
+        );
+
+        let fastapi_deps = &graph
+            .get_node("pip:fastapi@0.115.0")
+            .expect("fastapi node")
+            .deps;
+        assert!(fastapi_deps.contains(&"pip:starlette@0.40.0".to_string()));
+        assert_eq!(
+            graph
+                .nodes
+                .get("pip:pytest@8.3.0")
+                .map(|n| n.info.scope.as_str()),
+            Some("dev")
+        );
+        assert_eq!(
+            graph
+                .nodes
+                .get("pip:fastapi@0.115.0")
+                .map(|n| n.info.scope.as_str()),
+            Some("prod")
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_poetry_lock_preserves_transitive_edges_and_dev_scope() {
+        let temp_dir = std::env::temp_dir().join("vexa_test_poetry_lock_edges");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let poetry_lock = temp_dir.join("poetry.lock");
+        fs::write(
+            &poetry_lock,
+            r#"[[package]]
+name = "requests"
+version = "2.32.3"
+groups = ["main"]
+
+[package.dependencies]
+urllib3 = ">=1.21.1,<3"
+
+[[package]]
+name = "urllib3"
+version = "2.2.3"
+groups = ["main"]
+
+[[package]]
+name = "pytest"
+version = "8.3.2"
+groups = ["dev"]
+"#,
+        )
+        .unwrap();
+
+        let graph = PythonRequirementsParser::parse(&poetry_lock).expect("should parse poetry.lock");
+        let root_deps = &graph
+            .get_node(&graph.root_node_id)
+            .expect("root node")
+            .deps;
+        assert!(root_deps.contains(&"pip:requests@2.32.3".to_string()));
+        assert!(root_deps.contains(&"pip:pytest@8.3.2".to_string()));
+        assert!(
+            !root_deps.contains(&"pip:urllib3@2.2.3".to_string()),
+            "transitive dep urllib3 must NOT be attached directly to root"
+        );
+
+        let req_deps = &graph
+            .get_node("pip:requests@2.32.3")
+            .expect("requests node")
+            .deps;
+        assert!(req_deps.contains(&"pip:urllib3@2.2.3".to_string()));
+        assert_eq!(
+            graph
+                .nodes
+                .get("pip:pytest@8.3.2")
+                .map(|n| n.info.scope.as_str()),
+            Some("dev")
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

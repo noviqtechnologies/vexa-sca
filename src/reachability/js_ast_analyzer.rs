@@ -123,6 +123,131 @@ pub fn analyze_file(
     }
 }
 
+/// Result of a single-parse JS/TS AST analysis across all imported packages in a file.
+/// Eliminates the `N+1` `oxc_parser` re-parse overhead when indexing workspace files.
+#[derive(Debug, Default, Clone)]
+pub struct SinglePassFileAnalysis {
+    pub general: FileAnalysis,
+    pub package_call_sites: HashMap<String, Vec<(usize, String, String, bool)>>,
+}
+
+/// Parses a JavaScript/TypeScript file **once** with `oxc_parser` and extracts both
+/// file-level import states and per-package call sites for every discovered external package.
+pub fn analyze_file_single_pass(source: &str, source_type: SourceType) -> SinglePassFileAnalysis {
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, source_type)
+        .with_options(ParseOptions {
+            parse_regular_expression: false,
+            ..ParseOptions::default()
+        })
+        .parse();
+
+    let parse_failed = !ret.diagnostics.is_empty();
+    let program = ret.program;
+
+    // Pass 0: Collect local constant string declarations once.
+    let mut const_collector = ConstantCollector {
+        constants: HashMap::new(),
+        shadowed: HashSet::new(),
+    };
+    walk::walk_program(&mut const_collector, &program);
+
+    // Pass 1: Collect all import states and file-level flags once.
+    let mut general_collector = BindingCollector {
+        pkg_name: "",
+        constants: &const_collector.constants,
+        bindings: HashMap::new(),
+        named_imports: HashSet::new(),
+        import_states: Vec::new(),
+        is_imported: false,
+        has_reexports: false,
+        has_unresolved_dynamic: false,
+        has_dynamic_construct: false,
+        handled_spans: HashSet::new(),
+    };
+    walk::walk_program(&mut general_collector, &program);
+
+    let mut discovered_packages: Vec<String> = Vec::new();
+    let mut seen_packages: HashSet<String> = HashSet::new();
+    for state in &general_collector.import_states {
+        if let ImportResolutionState::LiteralPackageSpecifier(pkg)
+        | ImportResolutionState::ResolvedConstantSpecifier(pkg) = state
+        {
+            let clean = pkg.trim().trim_matches('\'').trim_matches('"');
+            let base_pkg = if clean.starts_with('@') {
+                let parts: Vec<&str> = clean.split('/').collect();
+                if parts.len() >= 2 {
+                    format!("{}/{}", parts[0], parts[1])
+                } else {
+                    clean.to_string()
+                }
+            } else if let Some(idx) = clean.find('/') {
+                clean[..idx].to_string()
+            } else {
+                clean.to_string()
+            };
+            if !base_pkg.is_empty() && seen_packages.insert(base_pkg.clone()) {
+                discovered_packages.push(base_pkg.clone());
+            }
+            if !clean.is_empty() && clean != base_pkg && seen_packages.insert(clean.to_string()) {
+                discovered_packages.push(clean.to_string());
+            }
+        }
+    }
+
+    // Pass 2: Reuse the already-parsed AST and constant table for each imported package.
+    let mut package_call_sites: HashMap<String, Vec<(usize, String, String, bool)>> =
+        HashMap::new();
+    let mut any_dynamic_construct = general_collector.has_dynamic_construct;
+
+    for pkg_name in &discovered_packages {
+        let mut collector = BindingCollector {
+            pkg_name,
+            constants: &const_collector.constants,
+            bindings: HashMap::new(),
+            named_imports: HashSet::new(),
+            import_states: Vec::new(),
+            is_imported: false,
+            has_reexports: false,
+            has_unresolved_dynamic: false,
+            has_dynamic_construct: false,
+            handled_spans: HashSet::new(),
+        };
+        walk::walk_program(&mut collector, &program);
+
+        let mut checker = CallSiteChecker {
+            _pkg_name: pkg_name,
+            bindings: &collector.bindings,
+            named_imports: &collector.named_imports,
+            target_functions: None,
+            source,
+            call_sites: Vec::new(),
+            has_dynamic_construct: collector.has_dynamic_construct,
+        };
+        walk::walk_program(&mut checker, &program);
+
+        if checker.has_dynamic_construct {
+            any_dynamic_construct = true;
+        }
+        if !checker.call_sites.is_empty() {
+            package_call_sites.insert(pkg_name.clone(), checker.call_sites);
+        }
+    }
+
+    SinglePassFileAnalysis {
+        general: FileAnalysis {
+            is_imported: !discovered_packages.is_empty(),
+            import_states: general_collector.import_states,
+            call_sites: Vec::new(),
+            has_dynamic_construct: any_dynamic_construct,
+            has_unresolved_dynamic: general_collector.has_unresolved_dynamic,
+            has_reexports: general_collector.has_reexports,
+            parse_failed,
+        },
+        package_call_sites,
+    }
+}
+
 /// Normalise package match: import source `'lodash'` matches `"lodash"`;
 /// `'lodash/template'` also matches because it is a sub-path import.
 #[inline]

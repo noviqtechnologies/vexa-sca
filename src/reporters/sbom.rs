@@ -262,24 +262,27 @@ pub fn format_cyclonedx_sbom(
                 vuln_obj["cwes"] = json!(cwe_ids);
             }
 
-            // VEX / Reachability analysis state (FR-009: do not emit not_affected without positive proof)
+            // VEX / Reachability analysis state (FR-009: emit `not_affected` ONLY with positive proof)
             if let Some(reach) = &v.reachability {
-                use crate::types::ReachabilityStatus;
-                let state = match reach.status {
-                    ReachabilityStatus::Reachable => "exploitable",
-                    ReachabilityStatus::Unreachable => "in_triage",
-                    ReachabilityStatus::Unknown => "in_triage",
+                use crate::types::{ReachabilityStatus, ReasonCode};
+                let is_positive_proof_unreachable = reach.status == ReachabilityStatus::Unreachable
+                    && reach.reason_code == Some(ReasonCode::AnalysisCompleteNoUsage);
+
+                let analysis = match reach.status {
+                    ReachabilityStatus::Reachable => json!({
+                        "state": "exploitable",
+                        "detail": "Direct call site detected to vulnerable symbol in analyzed source."
+                    }),
+                    ReachabilityStatus::Unreachable if is_positive_proof_unreachable => json!({
+                        "state": "not_affected",
+                        "justification": "code_not_reachable",
+                        "detail": "Positive-proof AST reachability confirmed no import or call path to the vulnerable symbol within analyzed scope."
+                    }),
+                    _ => json!({
+                        "state": "in_triage",
+                        "detail": "Under triage; inconclusive evidence in current analysis scope."
+                    }),
                 };
-                let mut analysis = json!({
-                    "state": state
-                });
-                if reach.status == ReachabilityStatus::Reachable {
-                    analysis["detail"] =
-                        json!("Direct call site detected to vulnerable symbol in analyzed source.");
-                } else {
-                    analysis["detail"] =
-                        json!("Under triage; inconclusive evidence in current analysis scope.");
-                }
                 vuln_obj["analysis"] = analysis;
             }
 
@@ -792,5 +795,77 @@ mod tests {
             "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
         );
         assert_eq!(vuln["cwes"][0], 843);
+    }
+
+    #[test]
+    fn test_cyclonedx_vex_emits_not_affected_only_with_positive_proof() {
+        let root_pkg = PkgInfo::new("demo-app", "1.0.0", "npm");
+        let mut graph = DepGraph::new(
+            root_pkg,
+            PkgManagerInfo {
+                name: "npm".to_string(),
+                version: "10".to_string(),
+            },
+        );
+        let lodash = PkgInfo::new("lodash", "4.17.20", "npm");
+        graph.add_pkg(lodash.clone());
+        graph.add_node(
+            "npm:lodash@4.17.20".to_string(),
+            lodash.id,
+            NodeInfo {
+                scope: "prod".to_string(),
+                path: None,
+                integrity: None,
+            },
+        );
+        let _ = graph.add_edge(&graph.root_node_id.clone(), "npm:lodash@4.17.20");
+
+        let scan_result = ScanResult {
+            vulnerabilities: vec![
+                crate::types::VulnerabilityFinding {
+                    id: "CVE-2021-23337".to_string(),
+                    package: "lodash".to_string(),
+                    version: "4.17.20".to_string(),
+                    ecosystem: "npm".to_string(),
+                    pkg_id: "lodash@4.17.20".to_string(),
+                    reachability: Some(crate::types::ReachabilityResult {
+                        status: crate::types::ReachabilityStatus::Unreachable,
+                        is_direct_call: false,
+                        call_sites: vec![],
+                        target_functions: vec!["template".to_string()],
+                        reason_code: Some(crate::types::ReasonCode::AnalysisCompleteNoUsage),
+                        analyzer_version: env!("CARGO_PKG_VERSION").to_string(),
+                    }),
+                    ..Default::default()
+                },
+                crate::types::VulnerabilityFinding {
+                    id: "CVE-2020-8203".to_string(),
+                    package: "lodash".to_string(),
+                    version: "4.17.20".to_string(),
+                    ecosystem: "npm".to_string(),
+                    pkg_id: "lodash@4.17.20".to_string(),
+                    reachability: Some(crate::types::ReachabilityResult {
+                        status: crate::types::ReachabilityStatus::Unknown,
+                        is_direct_call: false,
+                        call_sites: vec![],
+                        target_functions: vec![],
+                        reason_code: Some(crate::types::ReasonCode::NoSymbolData),
+                        analyzer_version: env!("CARGO_PKG_VERSION").to_string(),
+                    }),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let cdx_json = format_cyclonedx_sbom(&graph, Some(&scan_result), None);
+        let parsed: Value = serde_json::from_str(&cdx_json).expect("valid CycloneDX JSON");
+        assert_eq!(parsed["vulnerabilities"][0]["analysis"]["state"], "not_affected");
+        assert_eq!(
+            parsed["vulnerabilities"][0]["analysis"]["justification"],
+            "code_not_reachable"
+        );
+        assert_eq!(parsed["vulnerabilities"][1]["analysis"]["state"], "in_triage");
+        assert!(parsed["vulnerabilities"][1]["analysis"]["justification"].is_null());
     }
 }

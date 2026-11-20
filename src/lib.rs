@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub use vexa_core;
+
 pub mod cli;
 pub mod cloud;
 pub mod container;

@@ -383,13 +383,41 @@ impl OsPackageDetector {
             }
         }
 
-        // 3. Try Debian/Ubuntu
+        // 3. Try Debian/Ubuntu (`/var/lib/dpkg/status`) and Google Distroless (`/var/lib/dpkg/status.d/*`)
         let debian_status = dir.join("var/lib/dpkg/status");
         if debian_status.exists() {
             if let Ok(content) = fs::read_to_string(&debian_status) {
                 return (
                     os_info.clone(),
                     Self::parse_debian_status(&content, &os_info.id, Some(&os_info.version_id)),
+                );
+            }
+        }
+
+        let distroless_status_dir = dir.join("var/lib/dpkg/status.d");
+        if distroless_status_dir.is_dir() {
+            let mut combined = String::new();
+            if let Ok(entries) = fs::read_dir(&distroless_status_dir) {
+                let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+                paths.sort();
+                for path in paths {
+                    if path.is_file() {
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            combined.push_str(&content);
+                            combined.push_str("\n\n");
+                        }
+                    }
+                }
+            }
+            if !combined.is_empty() {
+                let distro_id = if os_info.id == "linux" {
+                    "debian"
+                } else {
+                    os_info.id.as_str()
+                };
+                return (
+                    os_info.clone(),
+                    Self::parse_debian_status(&combined, distro_id, Some(&os_info.version_id)),
                 );
             }
         }
@@ -841,5 +869,31 @@ Version: 7.74.0-1.3+deb11u11
         assert_eq!(pkgs[0].name, "libc6");
         assert_eq!(pkgs[0].version, "2.31-13+deb11u7");
         assert_eq!(pkgs[0].ecosystem, "Debian");
+    }
+
+    #[test]
+    fn test_scan_distroless_dpkg_status_d() {
+        let dir = std::env::temp_dir().join("vexa_test_distroless_status_d");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("var/lib/dpkg/status.d")).unwrap();
+        fs::create_dir_all(dir.join("etc")).unwrap();
+        fs::write(
+            dir.join("etc/os-release"),
+            "ID=debian\nNAME=\"Debian GNU/Linux\"\nVERSION_ID=\"12\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("var/lib/dpkg/status.d/openssl"),
+            "Package: libssl3\nStatus: install ok installed\nArchitecture: amd64\nVersion: 3.0.11-1~deb12u2\n",
+        )
+        .unwrap();
+
+        let (os_info, pkgs) = OsPackageDetector::scan_rootfs_dir(&dir);
+        assert_eq!(os_info.id, "debian");
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "libssl3");
+        assert_eq!(pkgs[0].version, "3.0.11-1~deb12u2");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

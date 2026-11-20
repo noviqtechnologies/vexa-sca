@@ -133,6 +133,12 @@ impl FirewallWrapper {
 
                 if let Ok(scan_res) = scanner.scan_graph(&graph).await {
                     for v in scan_res.vulnerabilities {
+                        if vexa_core::malware::is_malicious_advisory_id(&v.id) {
+                            blocked_reasons.push(format!(
+                                "[MALICIOUS PACKAGE] OpenSSF Malware Advisory {} in {}@{}: {}",
+                                v.id, pkg.name, ver, v.title
+                            ));
+                        }
                         if v.severity.level == SeverityLevel::Critical {
                             blocked_reasons.push(format!(
                                 "[CRITICAL VULNERABILITY] {} in {}@{}: {}",
@@ -222,6 +228,7 @@ impl FirewallWrapper {
                         "PREFLIGHT_PASS".to_string()
                     };
 
+                    let mut telemetry_handles = Vec::with_capacity(packages.len());
                     for pkg in &packages {
                         let ev_payload = serde_json::json!({
                             "package": pkg.name,
@@ -236,7 +243,7 @@ impl FirewallWrapper {
                         });
                         let url_c = events_url.clone();
                         let tok_c = api_key.clone();
-                        tokio::spawn(async move {
+                        telemetry_handles.push(tokio::spawn(async move {
                             if let Ok(client) = reqwest::Client::builder()
                                 .timeout(Duration::from_millis(1200))
                                 .build()
@@ -248,8 +255,15 @@ impl FirewallWrapper {
                                     .send()
                                     .await;
                             }
-                        });
+                        }));
                     }
+                    // Await bounded telemetry flush so events are not dropped on immediate CLI exit (e.g. exit code 1)
+                    let _ = tokio::time::timeout(Duration::from_millis(1500), async move {
+                        for handle in telemetry_handles {
+                            let _ = handle.await;
+                        }
+                    })
+                    .await;
                 }
             }
 

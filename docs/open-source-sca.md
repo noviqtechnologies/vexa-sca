@@ -15,7 +15,9 @@ Starting with v2.0, the reachability engine has been substantially improved per 
 
 ### Key Capabilities at GA
 - **Zero-Dependency Native Core:** Pure Rust execution with zero external C / OpenSSL dependencies (`rustls-tls`). Single static binaries for Linux, macOS, and Windows.
-- **Single-Pass Multi-Language AST Index:** `WorkspaceAstIndex` indexes JS/TS (oxc), Python, Rust, Go, and Java source files in one pass, building inverted indexes (`package_importers`, `symbol_calls`) for O(1) per-vulnerability lookup.
+- **Single-Pass Multi-Language AST Index:** `WorkspaceAstIndex` indexes JS/TS (single-parse `analyze_file_single_pass` via `oxc_parser`, eliminating `N+1` re-parses per imported package), Python (`rustpython-parser`), Rust, Go, and Java source files in one pass, building inverted indexes (`package_importers`, `symbol_calls`) for O(1) per-vulnerability lookup.
+- **Full Python Lockfile Graph Fidelity:** `uv.lock` (including virtual/editable roots and `[package.dev-dependencies]`) and `poetry.lock` (`groups` / `category`) preserve real parent-to-child transitive edges and `prod`/`dev` scopes instead of flattening transitive packages under root.
+- **Malware-First Package Firewall (`wrap`):** Immediately blocks OpenSSF Malicious Packages (`MAL-*`) regardless of CVSS score before package manager execution, with bounded cloud telemetry flushing prior to process exit.
 - **Repository Usage Signals:** AST inspection flags directly referenced dependencies (`IMPORTED_SOURCE`, `REFERENCED_CONFIG_OR_SCRIPT`) while preserving verdict integrity (conservative `UNKNOWN`, never false-safe suppression). `UNREACHABLE` is only emitted when all coverage guards are satisfied.
 - **Automated Remediation (`fix`):** Prioritizes non-breaking same-major patch and minor updates with byte-for-byte rollback protection for captured root manifests and lockfiles.
 - **Deterministic DevSecOps Exit Codes:** Strict precedence contract (`2` > `3` > `1` > `0`) for seamless pipeline integration.
@@ -69,8 +71,9 @@ Use the CLI guide for report and exit behavior. A zero exit is not a coverage ce
 
 The source analyzer matches selected syntactic patterns using a **single-pass `WorkspaceAstIndex`** built at engine startup. It analyzes:
 
-- **JavaScript / TypeScript**: Full AST parsing via `oxc` — ESM `import`, CJS `require()`, dynamic `import()`, barrel re-exports, and named call sites.
-- **Python**: Regex-based `import pkg`, `from pkg import fn`, and `alias.fn()` call-site detection.
+- **JavaScript / TypeScript**: Full single-pass AST parsing via `oxc_parser` — ESM `import`, CJS `require()`, dynamic `import()`, canonicalized cross-OS multi-hop barrel/wrapper resolution, and named call sites.
+- **Python**: Full single-pass Python 3 AST parsing via `rustpython-parser` (`vexa-core::py_ast`) — multiline `from pkg import (...)`, aliases, relative cross-file imports (`.utils`, `..shared`), docstring/comment exclusion, and conservative dynamic-import flagging (`eval`, `exec`, `__import__`, `importlib.import_module`).
+- **Dynamic Vulnerable Symbol Ingestion**: `ReachabilityEngine` automatically ingests synced `vuln_symbols_v1.json` (`VEXA_VULN_SYMBOLS_PATH` or `.sca-cache/vuln_symbols_v1.json`) produced by `vexa-indexer-jobs` alongside built-in curated symbol maps.
 - **Rust**: `use crate::pkg::fn` import detection plus direct named function call matching (`fn_name(...)`).
 - **Go / Java**: Import statement scanning and method invocation patterns.
 
