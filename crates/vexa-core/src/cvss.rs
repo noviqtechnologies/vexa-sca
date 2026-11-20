@@ -310,10 +310,9 @@ mod tests {
             Some(9.8)
         );
         assert_eq!(severity_from_cvss_score(9.8), "CRITICAL");
-        let v4 = parse_cvss_v4_vector(
-            "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N",
-        )
-        .expect("valid v4 vector");
+        let v4 =
+            parse_cvss_v4_vector("CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N")
+                .expect("valid v4 vector");
         assert!(v4 >= 9.0);
         assert_eq!(parse_cvss_score("not-a-score"), None);
     }

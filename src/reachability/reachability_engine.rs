@@ -1626,7 +1626,11 @@ def decode(raw):
 
         // Verify cross-file propagation attached `custom-ser` to `pkg/app.py` via `from .helpers import decode`
         let app_path = dir.join("pkg").join("app.py");
-        let app_facts = engine.ast_index.files.get(&app_path).expect("app.py indexed");
+        let app_facts = engine
+            .ast_index
+            .files
+            .get(&app_path)
+            .expect("app.py indexed");
         assert!(app_facts.external_imports.contains_key("custom-ser"));
 
         let _ = std::fs::remove_dir_all(dir);

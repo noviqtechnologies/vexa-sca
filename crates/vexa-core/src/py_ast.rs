@@ -311,10 +311,24 @@ fn walk_stmts_for_calls(
                 {
                     continue;
                 }
-                walk_expr(&e.value, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_expr(
+                    &e.value,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             Stmt::Assign(a) => {
-                walk_expr(&a.value, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_expr(
+                    &a.value,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             Stmt::AnnAssign(a) => {
                 if let Some(v) = &a.value {
@@ -322,7 +336,14 @@ fn walk_stmts_for_calls(
                 }
             }
             Stmt::AugAssign(a) => {
-                walk_expr(&a.value, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_expr(
+                    &a.value,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             Stmt::Return(r) => {
                 if let Some(v) = &r.value {
@@ -331,79 +352,303 @@ fn walk_stmts_for_calls(
             }
             Stmt::FunctionDef(f) => {
                 for dec in &f.decorator_list {
-                    walk_expr(dec, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                    walk_expr(
+                        dec,
+                        lines_vec,
+                        line_idx,
+                        module_aliases,
+                        named_aliases,
+                        facts,
+                    );
                 }
-                walk_stmts_for_calls(&f.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_stmts_for_calls(
+                    &f.body,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             Stmt::AsyncFunctionDef(f) => {
                 for dec in &f.decorator_list {
-                    walk_expr(dec, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                    walk_expr(
+                        dec,
+                        lines_vec,
+                        line_idx,
+                        module_aliases,
+                        named_aliases,
+                        facts,
+                    );
                 }
-                walk_stmts_for_calls(&f.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_stmts_for_calls(
+                    &f.body,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             Stmt::ClassDef(c) => {
                 for dec in &c.decorator_list {
-                    walk_expr(dec, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                    walk_expr(
+                        dec,
+                        lines_vec,
+                        line_idx,
+                        module_aliases,
+                        named_aliases,
+                        facts,
+                    );
                 }
-                walk_stmts_for_calls(&c.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_stmts_for_calls(
+                    &c.body,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             Stmt::If(i) => {
-                walk_expr(&i.test, lines_vec, line_idx, module_aliases, named_aliases, facts);
-                walk_stmts_for_calls(&i.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
-                walk_stmts_for_calls(&i.orelse, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_expr(
+                    &i.test,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
+                walk_stmts_for_calls(
+                    &i.body,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
+                walk_stmts_for_calls(
+                    &i.orelse,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             Stmt::For(f) => {
-                walk_expr(&f.iter, lines_vec, line_idx, module_aliases, named_aliases, facts);
-                walk_stmts_for_calls(&f.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
-                walk_stmts_for_calls(&f.orelse, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_expr(
+                    &f.iter,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
+                walk_stmts_for_calls(
+                    &f.body,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
+                walk_stmts_for_calls(
+                    &f.orelse,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             Stmt::AsyncFor(f) => {
-                walk_expr(&f.iter, lines_vec, line_idx, module_aliases, named_aliases, facts);
-                walk_stmts_for_calls(&f.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
-                walk_stmts_for_calls(&f.orelse, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_expr(
+                    &f.iter,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
+                walk_stmts_for_calls(
+                    &f.body,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
+                walk_stmts_for_calls(
+                    &f.orelse,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             Stmt::While(w) => {
-                walk_expr(&w.test, lines_vec, line_idx, module_aliases, named_aliases, facts);
-                walk_stmts_for_calls(&w.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
-                walk_stmts_for_calls(&w.orelse, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_expr(
+                    &w.test,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
+                walk_stmts_for_calls(
+                    &w.body,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
+                walk_stmts_for_calls(
+                    &w.orelse,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             Stmt::With(w) => {
                 for item in &w.items {
-                    walk_expr(&item.context_expr, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                    walk_expr(
+                        &item.context_expr,
+                        lines_vec,
+                        line_idx,
+                        module_aliases,
+                        named_aliases,
+                        facts,
+                    );
                 }
-                walk_stmts_for_calls(&w.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_stmts_for_calls(
+                    &w.body,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             Stmt::AsyncWith(w) => {
                 for item in &w.items {
-                    walk_expr(&item.context_expr, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                    walk_expr(
+                        &item.context_expr,
+                        lines_vec,
+                        line_idx,
+                        module_aliases,
+                        named_aliases,
+                        facts,
+                    );
                 }
-                walk_stmts_for_calls(&w.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_stmts_for_calls(
+                    &w.body,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             Stmt::Try(t) => {
-                walk_stmts_for_calls(&t.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
-                walk_stmts_for_calls(&t.orelse, lines_vec, line_idx, module_aliases, named_aliases, facts);
-                walk_stmts_for_calls(&t.finalbody, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_stmts_for_calls(
+                    &t.body,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
+                walk_stmts_for_calls(
+                    &t.orelse,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
+                walk_stmts_for_calls(
+                    &t.finalbody,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
                 for h in &t.handlers {
                     let ast::ExceptHandler::ExceptHandler(eh) = h;
-                    walk_stmts_for_calls(&eh.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                    walk_stmts_for_calls(
+                        &eh.body,
+                        lines_vec,
+                        line_idx,
+                        module_aliases,
+                        named_aliases,
+                        facts,
+                    );
                 }
             }
             Stmt::TryStar(t) => {
-                walk_stmts_for_calls(&t.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
-                walk_stmts_for_calls(&t.orelse, lines_vec, line_idx, module_aliases, named_aliases, facts);
-                walk_stmts_for_calls(&t.finalbody, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_stmts_for_calls(
+                    &t.body,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
+                walk_stmts_for_calls(
+                    &t.orelse,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
+                walk_stmts_for_calls(
+                    &t.finalbody,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
                 for h in &t.handlers {
                     let ast::ExceptHandler::ExceptHandler(eh) = h;
-                    walk_stmts_for_calls(&eh.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                    walk_stmts_for_calls(
+                        &eh.body,
+                        lines_vec,
+                        line_idx,
+                        module_aliases,
+                        named_aliases,
+                        facts,
+                    );
                 }
             }
             Stmt::Raise(r) => {
                 if let Some(exc) = &r.exc {
-                    walk_expr(exc, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                    walk_expr(
+                        exc,
+                        lines_vec,
+                        line_idx,
+                        module_aliases,
+                        named_aliases,
+                        facts,
+                    );
                 }
             }
             Stmt::Assert(a) => {
-                walk_expr(&a.test, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_expr(
+                    &a.test,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             _ => {}
         }
@@ -474,35 +719,119 @@ fn walk_expr(
                 _ => {}
             }
 
-            walk_expr(&call.func, lines_vec, line_idx, module_aliases, named_aliases, facts);
+            walk_expr(
+                &call.func,
+                lines_vec,
+                line_idx,
+                module_aliases,
+                named_aliases,
+                facts,
+            );
             for arg in &call.args {
-                walk_expr(arg, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_expr(
+                    arg,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
             for kw in &call.keywords {
-                walk_expr(&kw.value, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_expr(
+                    &kw.value,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
         }
-        Expr::Await(a) => walk_expr(&a.value, lines_vec, line_idx, module_aliases, named_aliases, facts),
+        Expr::Await(a) => walk_expr(
+            &a.value,
+            lines_vec,
+            line_idx,
+            module_aliases,
+            named_aliases,
+            facts,
+        ),
         Expr::BinOp(b) => {
-            walk_expr(&b.left, lines_vec, line_idx, module_aliases, named_aliases, facts);
-            walk_expr(&b.right, lines_vec, line_idx, module_aliases, named_aliases, facts);
+            walk_expr(
+                &b.left,
+                lines_vec,
+                line_idx,
+                module_aliases,
+                named_aliases,
+                facts,
+            );
+            walk_expr(
+                &b.right,
+                lines_vec,
+                line_idx,
+                module_aliases,
+                named_aliases,
+                facts,
+            );
         }
-        Expr::UnaryOp(u) => walk_expr(&u.operand, lines_vec, line_idx, module_aliases, named_aliases, facts),
+        Expr::UnaryOp(u) => walk_expr(
+            &u.operand,
+            lines_vec,
+            line_idx,
+            module_aliases,
+            named_aliases,
+            facts,
+        ),
         Expr::BoolOp(b) => {
             for v in &b.values {
                 walk_expr(v, lines_vec, line_idx, module_aliases, named_aliases, facts);
             }
         }
         Expr::Compare(c) => {
-            walk_expr(&c.left, lines_vec, line_idx, module_aliases, named_aliases, facts);
+            walk_expr(
+                &c.left,
+                lines_vec,
+                line_idx,
+                module_aliases,
+                named_aliases,
+                facts,
+            );
             for cmp in &c.comparators {
-                walk_expr(cmp, lines_vec, line_idx, module_aliases, named_aliases, facts);
+                walk_expr(
+                    cmp,
+                    lines_vec,
+                    line_idx,
+                    module_aliases,
+                    named_aliases,
+                    facts,
+                );
             }
         }
         Expr::IfExp(i) => {
-            walk_expr(&i.test, lines_vec, line_idx, module_aliases, named_aliases, facts);
-            walk_expr(&i.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
-            walk_expr(&i.orelse, lines_vec, line_idx, module_aliases, named_aliases, facts);
+            walk_expr(
+                &i.test,
+                lines_vec,
+                line_idx,
+                module_aliases,
+                named_aliases,
+                facts,
+            );
+            walk_expr(
+                &i.body,
+                lines_vec,
+                line_idx,
+                module_aliases,
+                named_aliases,
+                facts,
+            );
+            walk_expr(
+                &i.orelse,
+                lines_vec,
+                line_idx,
+                module_aliases,
+                named_aliases,
+                facts,
+            );
         }
         Expr::List(l) => {
             for e in &l.elts {
@@ -525,17 +854,52 @@ fn walk_expr(
             }
         }
         Expr::FormattedValue(f) => {
-            walk_expr(&f.value, lines_vec, line_idx, module_aliases, named_aliases, facts);
+            walk_expr(
+                &f.value,
+                lines_vec,
+                line_idx,
+                module_aliases,
+                named_aliases,
+                facts,
+            );
         }
         Expr::Subscript(s) => {
-            walk_expr(&s.value, lines_vec, line_idx, module_aliases, named_aliases, facts);
-            walk_expr(&s.slice, lines_vec, line_idx, module_aliases, named_aliases, facts);
+            walk_expr(
+                &s.value,
+                lines_vec,
+                line_idx,
+                module_aliases,
+                named_aliases,
+                facts,
+            );
+            walk_expr(
+                &s.slice,
+                lines_vec,
+                line_idx,
+                module_aliases,
+                named_aliases,
+                facts,
+            );
         }
         Expr::Attribute(a) => {
-            walk_expr(&a.value, lines_vec, line_idx, module_aliases, named_aliases, facts);
+            walk_expr(
+                &a.value,
+                lines_vec,
+                line_idx,
+                module_aliases,
+                named_aliases,
+                facts,
+            );
         }
         Expr::Lambda(l) => {
-            walk_expr(&l.body, lines_vec, line_idx, module_aliases, named_aliases, facts);
+            walk_expr(
+                &l.body,
+                lines_vec,
+                line_idx,
+                module_aliases,
+                named_aliases,
+                facts,
+            );
         }
         _ => {}
     }

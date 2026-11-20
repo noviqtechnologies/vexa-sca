@@ -166,8 +166,7 @@ impl<'a> Visit<'a> for JsImportAndBindingCollector<'a> {
                                 if let Some(pkg) = self.record_specifier(raw, line) {
                                     match &decl.id {
                                         BindingPattern::BindingIdentifier(id) => {
-                                            self.namespace_aliases
-                                                .insert(id.name.to_string(), pkg);
+                                            self.namespace_aliases.insert(id.name.to_string(), pkg);
                                         }
                                         BindingPattern::ObjectPattern(obj) => {
                                             for prop in &obj.properties {

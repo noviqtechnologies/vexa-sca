@@ -860,12 +860,18 @@ mod tests {
 
         let cdx_json = format_cyclonedx_sbom(&graph, Some(&scan_result), None);
         let parsed: Value = serde_json::from_str(&cdx_json).expect("valid CycloneDX JSON");
-        assert_eq!(parsed["vulnerabilities"][0]["analysis"]["state"], "not_affected");
+        assert_eq!(
+            parsed["vulnerabilities"][0]["analysis"]["state"],
+            "not_affected"
+        );
         assert_eq!(
             parsed["vulnerabilities"][0]["analysis"]["justification"],
             "code_not_reachable"
         );
-        assert_eq!(parsed["vulnerabilities"][1]["analysis"]["state"], "in_triage");
+        assert_eq!(
+            parsed["vulnerabilities"][1]["analysis"]["state"],
+            "in_triage"
+        );
         assert!(parsed["vulnerabilities"][1]["analysis"]["justification"].is_null());
     }
 }

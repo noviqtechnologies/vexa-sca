@@ -498,10 +498,7 @@ source = { registry = "https://pypi.org/simple" }
         .unwrap();
 
         let graph = PythonRequirementsParser::parse(&uv_lock).expect("should parse uv.lock");
-        let root_deps = &graph
-            .get_node(&graph.root_node_id)
-            .expect("root node")
-            .deps;
+        let root_deps = &graph.get_node(&graph.root_node_id).expect("root node").deps;
         assert!(root_deps.contains(&"pip:fastapi@0.115.0".to_string()));
         assert!(root_deps.contains(&"pip:pytest@8.3.0".to_string()));
         assert!(
@@ -562,11 +559,9 @@ groups = ["dev"]
         )
         .unwrap();
 
-        let graph = PythonRequirementsParser::parse(&poetry_lock).expect("should parse poetry.lock");
-        let root_deps = &graph
-            .get_node(&graph.root_node_id)
-            .expect("root node")
-            .deps;
+        let graph =
+            PythonRequirementsParser::parse(&poetry_lock).expect("should parse poetry.lock");
+        let root_deps = &graph.get_node(&graph.root_node_id).expect("root node").deps;
         assert!(root_deps.contains(&"pip:requests@2.32.3".to_string()));
         assert!(root_deps.contains(&"pip:pytest@8.3.2".to_string()));
         assert!(

@@ -32,8 +32,8 @@ pub fn normalize_python_pkg_name(name: &str) -> String {
 /// Parses `uv.lock` or `poetry.lock` TOML content into a normalized graph with
 /// true transitive edges, virtual root handling, and `prod`/`dev` scope resolution.
 pub fn parse_python_toml_lock(content: &str) -> Result<PythonLockGraph, String> {
-    let parsed: toml::Value =
-        toml::from_str(content).map_err(|e| format!("Failed to parse Python lockfile TOML: {e}"))?;
+    let parsed: toml::Value = toml::from_str(content)
+        .map_err(|e| format!("Failed to parse Python lockfile TOML: {e}"))?;
 
     let Some(packages_arr) = parsed.get("package").and_then(|p| p.as_array()) else {
         return Ok(PythonLockGraph::default());
