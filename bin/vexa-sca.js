@@ -89,30 +89,74 @@ if (!cmd) {
   }
 }
 
-// 4.5. Auto-download prebuilt GitHub release binary if Cargo.toml is not present (e.g. `npx vexa-sca`)
+// 4.5. Auto-download prebuilt GitHub release binary with SHA-256 verification if Cargo.toml is not present (e.g. `npx @vexasec/sca`)
 if (!cmd && !fs.existsSync(path.join(rootDir, 'Cargo.toml'))) {
-  const pkgVersion = require('../package.json').version || '1.3.7';
+  const crypto = require('crypto');
+  const pkgVersion = require('../package.json').version || '1.4.1';
   const tag = `v${pkgVersion}`;
-  const cacheDir = path.join(os.homedir(), '.vexa', 'bin');
+  const cacheDir = path.join(os.homedir(), '.vexa', 'bin', tag);
   const cachedBin = path.join(cacheDir, `vexa-sca${binExt}`);
-  try {
-    fs.mkdirSync(cacheDir, { recursive: true });
-    if (isWin) {
-      const zipUrl = `https://github.com/noviqtechnologies/vexa-sca/releases/download/${tag}/vexa-sca-windows-x86_64.zip`;
-      const tmpZip = path.join(os.tmpdir(), `vexa-sca-${pkgVersion}.zip`);
-      spawnSync('curl.exe', ['-sSLf', '-o', tmpZip, zipUrl], { stdio: 'inherit' });
-      spawnSync('powershell', ['-NoProfile', '-Command', `Expand-Archive -Path '${tmpZip}' -DestinationPath '${cacheDir}' -Force`], { stdio: 'inherit' });
-    } else {
-      const osSlug = process.platform === 'darwin' ? 'darwin' : 'linux';
-      const archSlug = process.arch === 'arm64' ? 'arm64' : 'x86_64';
-      const tarUrl = `https://github.com/noviqtechnologies/vexa-sca/releases/download/${tag}/vexa-sca-${osSlug}-${archSlug}.tar.gz`;
-      spawnSync('sh', ['-c', `curl -sSLf "${tarUrl}" | tar -xz -C "${cacheDir}" && chmod +x "${cachedBin}"`], { stdio: 'inherit' });
+  if (fs.existsSync(cachedBin)) {
+    cmd = cachedBin;
+  } else {
+    try {
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const baseUrl = `https://github.com/noviqtechnologies/vexa-sca/releases/download/${tag}`;
+      const archiveName = isWin
+        ? 'vexa-sca-windows-x86_64.zip'
+        : `vexa-sca-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x86_64'}.tar.gz`;
+      const tmpArchive = path.join(os.tmpdir(), `${archiveName}.${process.pid}`);
+      const tmpSums = path.join(os.tmpdir(), `vexa-sca-sums-${process.pid}.txt`);
+      const curlBin = isWin ? 'curl.exe' : 'curl';
+
+      const dlRes = spawnSync(curlBin, ['-sSLf', '-o', tmpArchive, `${baseUrl}/${archiveName}`], { stdio: 'inherit' });
+      if (dlRes.status === 0 && fs.existsSync(tmpArchive)) {
+        // Verify SHA-256 against release checksums manifest if published
+        let sumsRes = spawnSync(curlBin, ['-sSLf', '-o', tmpSums, `${baseUrl}/SHA256SUMS.txt`], { stdio: 'ignore' });
+        if (sumsRes.status !== 0) {
+          sumsRes = spawnSync(curlBin, ['-sSLf', '-o', tmpSums, `${baseUrl}/checksums.txt`], { stdio: 'ignore' });
+        }
+        if (sumsRes.status === 0 && fs.existsSync(tmpSums)) {
+          const line = fs
+            .readFileSync(tmpSums, 'utf8')
+            .split(/\r?\n/)
+            .find((l) => l.trim().endsWith(` ${archiveName}`) || l.trim().endsWith(`/${archiveName}`));
+          if (line) {
+            const expected = line.trim().split(/\s+/)[0].toLowerCase();
+            const actual = crypto.createHash('sha256').update(fs.readFileSync(tmpArchive)).digest('hex').toLowerCase();
+            if (actual !== expected) {
+              fs.rmSync(tmpArchive, { force: true });
+              fs.rmSync(tmpSums, { force: true });
+              throw new Error(`SHA-256 mismatch for ${archiveName}: expected ${expected}, got ${actual}`);
+            }
+          }
+          fs.rmSync(tmpSums, { force: true });
+        }
+
+        if (isWin) {
+          spawnSync(
+            'powershell',
+            ['-NoProfile', '-Command', `Expand-Archive -Path '${tmpArchive}' -DestinationPath '${cacheDir}' -Force`],
+            { stdio: 'inherit' }
+          );
+        } else {
+          spawnSync('tar', ['-xzf', tmpArchive, '-C', cacheDir], { stdio: 'inherit' });
+          if (fs.existsSync(cachedBin)) {
+            fs.chmodSync(cachedBin, 0o755);
+          }
+        }
+        fs.rmSync(tmpArchive, { force: true });
+      }
+      if (fs.existsSync(cachedBin)) {
+        cmd = cachedBin;
+      }
+    } catch (err) {
+      if (err && String(err.message || '').includes('SHA-256 mismatch')) {
+        process.stderr.write(`[vexa-sca] SECURITY ERROR: ${err.message}\n`);
+        process.exit(1);
+      }
+      // Proceed to cargo fallback
     }
-    if (fs.existsSync(cachedBin)) {
-      cmd = cachedBin;
-    }
-  } catch (_) {
-    // Proceed to cargo fallback
   }
 }
 
