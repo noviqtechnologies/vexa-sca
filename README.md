@@ -45,11 +45,11 @@
 | 📈 [**EPSS Exploit Prediction**](#epss-exploit-prediction-likelihood) | Prioritizes CVEs by real-world 30-day exploit likelihood (FIRST.org EPSS) with fail-closed retention during upstream outages. | `vexa-sca scan --epss-threshold 0.50` |
 | 🚨 [**CISA KEV Integration**](#9-supply-chain-behavioral-analysis) | Flags CVEs confirmed exploited in the wild via the CISA Known Exploited Vulnerabilities catalog (cached, 24h TTL, +35 priority score boost). | `vexa-sca scan` |
 | 🔬 [**Supply Chain Behavioral Analysis**](#9-supply-chain-behavioral-analysis) | 15 static-analysis rules (SC-001–SC-015) detecting typosquatting, CI/CD poisoning, secrets, reverse shells, and MCP prompt-injection in manifests and workflows. | `vexa-sca scan` |
-| 🧪 [**Zero-Code-Sync CI SAST & Secret Detection**](#12-zero-code-sync-ci-sast--secret-detection) | Local fast sink & intra-procedural multi-line taint analysis (`CWE-78` OS Command Injection, `CWE-89` multi-line SQLi / Python f-strings, `CWE-22` Path Traversal, `CWE-918` SSRF, `CWE-94` Eval, `CWE-502` Deserialization) + redacted Secret Scanning (`AKIA****`) + SARIF v2.1.0 ingestion, working even in lockfile-less repositories. | `npx vexa-sca scan --sast --secrets` |
+| 🧪 [**Zero-Code-Sync CI SAST & Secret Detection**](#12-zero-code-sync-ci-sast--secret-detection) | Local fast sink & intra-procedural multi-line taint analysis (`CWE-78` OS Command Injection, `CWE-89` multi-line SQLi / Python f-strings, `CWE-22` Path Traversal, `CWE-918` SSRF, `CWE-94` Eval, `CWE-502` Deserialization) + redacted Secret Scanning (`AKIA****`) + SARIF v2.1.0 ingestion, working even in lockfile-less repositories. | `npx @vexasec/sca@latest scan --sast --secrets` |
 | 🔥 [**Package Manager Firewall (`wrap`)**](#10-package-manager-firewall-wrap) | Pre-installation zero-shell security gate for npm, pnpm, yarn, bun, pip, uv, and cargo. Immediately blocks OpenSSF Malicious Packages (`MAL-*`), typosquatted packages, CISA KEV hits, and OSV advisories before install with bounded cloud telemetry flushing. | `vexa-sca wrap npm install lodash` |
 | 🤖 [**MCP Server (`mcp`)**](#11-mcp-server-integration-mcp) | JSON-RPC 2.0 MCP server exposing 4 tools to AI coding assistants (Cursor, Claude Code, Windsurf, GitHub Copilot) with exact `call_site` (`file:line`) and same-major `fixed_in` remediation targets. | `vexa-sca mcp` |
 | 📤 [**Zero-Code-Retention Facts Export (v2.0)**](#1-vexa-sca-scan) | Generates `.vexa.facts.json` (schema `2.0`) with dependency graph, AST reachability, branch/commit/PR context, and stripped SAST/Secret metadata (`file_path`, `line`, `cwe`, canonical `matched_sink` ≤64 chars)—**zero raw source code ever leaves your machine**. | `vexa-sca scan --upload-facts` |
-| 🛡️ [**Vexa Cloud 60-Second CI Sync**](#12-zero-code-sync-ci-sast--secret-detection) | Set `VEXA_SCA_SECURITY_API_KEY` in GitHub Actions and run `npx vexa-sca scan` to automatically run Dependency SCA + Code SAST + Secret Detection and stream results to Vexa Cloud (`500 / 500` Free Tier monthly scans). | `VEXA_SCA_SECURITY_API_KEY=vexa_sec_... npx vexa-sca scan` |
+| 🛡️ [**Vexa Cloud 60-Second CI Sync**](#12-zero-code-sync-ci-sast--secret-detection) | Set `VEXA_SCA_SECURITY_API_KEY` in GitHub Actions and run `npx --yes @vexasec/sca@1.5.2 scan` to automatically run Dependency SCA + Code SAST + Secret Detection and stream results to Vexa Console (`500 / 500` Free Tier monthly scans). | `VEXA_SCA_SECURITY_API_KEY=vexa_sec_... npx @vexasec/sca@latest scan` |
 | 📦 [**Offline Advisory Bundles (`.vexadb`)**](#12-vexa-sca-db) | Cryptographically verify and use signed offline database bundles via Ed25519 signatures for isolated or air-gapped CI/CD. | `vexa-sca db verify --offline-db bundle.vexadb` |
 | 🚦 [**Process Exit Code Contract**](#process-exit-code-contract) | Deterministic automation contract: `0` (clean/pass), `1` (quality gate failure), `2` (config error), `3` (advisory outage / incomplete data). | `vexa-sca ci` |
 
@@ -175,9 +175,12 @@ npm run scan
 node bin/vexa.js scan
 node bin/sca.js scan
 
-# Zero-install execution via npx (invokes native engine)
-npx vexa-sca scan
-npx vexa scan
+# Zero-install quickstart via npx (invokes SHA-256 verified native binary)
+npx @vexasec/sca@latest scan
+
+# Global install & upgrade via npm (recommended for daily workstation use)
+npm install -g @vexasec/sca@latest
+vexa-sca scan
 ```
 
 ---
@@ -221,12 +224,21 @@ Vexa SCA is fully cross-platform and operates identically on **Linux** (x86_64, 
 
 Install Vexa SCA with automatic architecture detection and cryptographic SHA-256 checksum verification:
 
-**Linux / macOS:**
+**Zero-install via `npx` / Global install via `npm` (Windows, macOS, Linux):**
+```bash
+# Quickstart (zero-install)
+npx @vexasec/sca@latest scan
+
+# Global install & upgrade (recommended for daily use)
+npm install -g @vexasec/sca@latest
+```
+
+**Linux / macOS (standalone, no Node.js required):**
 ```bash
 curl -sSf https://raw.githubusercontent.com/noviqtechnologies/vexa-sca/main/install.sh | sh
 ```
 
-**Windows (PowerShell):**
+**Windows (PowerShell standalone, no Node.js required):**
 ```powershell
 irm https://raw.githubusercontent.com/noviqtechnologies/vexa-sca/main/install.ps1 | iex
 ```

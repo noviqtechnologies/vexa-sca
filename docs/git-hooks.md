@@ -20,7 +20,7 @@ echo "🔍 Running Vexa SCA dependency security check..."
 if command -v vexa-sca >/dev/null 2>&1; then
     vexa-sca scan --fail-on high
 else
-    npx vexa-sca scan --fail-on high
+    npx --yes @vexasec/sca@latest scan --fail-on high
 fi
 
 STATUS=$?
