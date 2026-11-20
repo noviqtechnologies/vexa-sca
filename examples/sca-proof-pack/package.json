@@ -1,0 +1,10 @@
+{
+  "name": "vexa-sca-proof-pack",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal version-pinned fixture demonstrating Vexa SCA AST reachability vs unused dependency classification",
+  "dependencies": {
+    "lodash": "4.17.20",
+    "minimist": "1.2.5"
+  }
+}
