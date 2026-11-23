@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Vexa SCA CLI Official Windows Installer with Cryptographic Checksum Verification.
 .DESCRIPTION
@@ -10,8 +10,7 @@
 
 param(
     [string]$Version = "latest",
-    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "vexa\bin"),
-    [switch]$SkipHashCheck
+    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "vexa\bin")
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,14 +23,14 @@ Write-Host "=============================================" -ForegroundColor Cyan
 $Repo = "noviqtechnologies/vexa-sca"
 if ($Version -eq "latest") {
     $ReleaseUrl = "https://api.github.com/repos/$Repo/releases/latest"
-    try {
-        $Release = Invoke-RestMethod -Uri $ReleaseUrl -Headers @{"User-Agent"="vexa-sca-installer"}
-        $VersionTag = $Release.tag_name
-    } catch {
-        $VersionTag = "v1.5.0"
-    }
+    $Release = Invoke-RestMethod -Uri $ReleaseUrl -Headers @{"User-Agent"="vexa-sca-installer"}
+    $VersionTag = $Release.tag_name
 } else {
     $VersionTag = if ($Version.StartsWith("v")) { $Version } else { "v$Version" }
+}
+
+if ([string]::IsNullOrWhiteSpace($VersionTag) -or ($VersionTag -notmatch '^v\d+\.\d+\.\d+(-[A-Za-z0-9._-]+)?$')) {
+    throw "Invalid or missing release tag '$VersionTag' (expected vX.Y.Z); failing closed."
 }
 
 Write-Host "Installing Vexa SCA $VersionTag..." -ForegroundColor Green
@@ -60,21 +59,63 @@ try {
         }
     }
 
-    if (-not $SkipHashCheck) {
-        try {
-            $ChecksumPath = Join-Path $TempDir "$ZipName.sha256"
-            Invoke-WebRequest -Uri $ChecksumUrl -OutFile $ChecksumPath -UseBasicParsing
-            $ExpectedHash = ((Get-Content $ChecksumPath | Select-Object -First 1) -split '\s+')[0].Trim().ToLower()
-            if ($ExpectedHash) {
-                $ActualHash = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToLower()
-                if ($ActualHash -ne $ExpectedHash) {
-                    throw "SHA256 checksum mismatch! Expected: $ExpectedHash, Computed: $ActualHash"
-                }
-                Write-Host "✔ SHA256 Checksum verified: $ActualHash" -ForegroundColor Green
+    # Mandatory SHA-256 verification (fail-closed)
+    $ChecksumPath = Join-Path $TempDir "$ZipName.sha256"
+    Invoke-WebRequest -Uri $ChecksumUrl -OutFile $ChecksumPath -UseBasicParsing
+    $ExpectedHash = ((Get-Content $ChecksumPath | Select-Object -First 1) -split '\s+')[0].Trim().ToLower()
+    if ($ExpectedHash -notmatch '^[0-9a-f]{64}$') {
+        throw "Invalid or missing SHA-256 digest in $ZipName.sha256; failing closed."
+    }
+    $ActualHash = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToLower()
+    if ($ActualHash -ne $ExpectedHash) {
+        throw "SHA256 checksum mismatch! Expected: $ExpectedHash, Computed: $ActualHash"
+    }
+    Write-Host "✔ SHA256 Checksum verified: $ActualHash" -ForegroundColor Green
+
+    # Rollback protection
+    $ExistingExe = Join-Path $InstallDir "vexa-sca.exe"
+    if ((Test-Path -LiteralPath $ExistingExe) -and ($env:VEXA_ALLOW_DOWNGRADE -ne "1")) {
+        $ExistingOut = & $ExistingExe --version 2>$null
+        if ($ExistingOut -match '(\d+\.\d+\.\d+)') {
+            $ExistingVer = [Version]$Matches[1]
+            $ReqVerStr = ($VersionTag -replace '^v', '') -split '-' | Select-Object -First 1
+            if ([Version]$ReqVerStr -lt $ExistingVer) {
+                throw "Rollback rejected: installed v$ExistingVer is newer than $VersionTag (set VEXA_ALLOW_DOWNGRADE=1 to override)."
             }
-        } catch [System.Management.Automation.ItemNotFoundException], [System.Net.WebException] {
-            Write-Host "Notice: Remote checksum file not found; continuing." -ForegroundColor Yellow
         }
+    }
+
+    # Mandatory publisher signature & provenance verification (fail-closed)
+    $BaseUrl = "https://github.com/$Repo/releases/download/$VersionTag"
+    $CertIdentity = "https://github.com/$Repo/.github/workflows/release-slsa-cosign.yml@refs/tags/$VersionTag"
+    $OidcIssuer = "https://token.actions.githubusercontent.com"
+    $CosignCmd = Get-Command cosign -ErrorAction SilentlyContinue
+    $GhCmd = Get-Command gh -ErrorAction SilentlyContinue
+
+    if ($CosignCmd) {
+        $BundlePath = Join-Path $TempDir "$ZipName.sigstore.json"
+        Invoke-WebRequest -Uri "$BaseUrl/$ZipName.sigstore.json" -OutFile $BundlePath -UseBasicParsing
+        if (-not (Test-Path -LiteralPath $BundlePath) -or ((Get-Item -LiteralPath $BundlePath).Length -eq 0)) {
+            throw "Downloaded $ZipName.sigstore.json is empty or missing; failing closed."
+        }
+        & $CosignCmd.Source verify-blob `
+            --bundle $BundlePath `
+            --certificate-identity $CertIdentity `
+            --certificate-oidc-issuer $OidcIssuer `
+            $ZipPath | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Cosign signature verification failed for $VersionTag; failing closed."
+        }
+    } elseif ($GhCmd) {
+        & $GhCmd.Source attestation verify $ZipPath `
+            --repo $Repo `
+            --signer-workflow "$Repo/.github/workflows/release-slsa-cosign.yml" `
+            --source-ref "refs/tags/$VersionTag" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "GitHub SLSA provenance attestation verification failed for $ZipName; failing closed."
+        }
+    } else {
+        throw "Mandatory publisher signature verification requires 'cosign' or 'gh' (GitHub CLI); neither was found in PATH. Failing closed."
     }
 
     if (-not (Test-Path $InstallDir)) {

@@ -28,16 +28,33 @@ jobs:
           mkdir -p dist
           gh release download ${{ github.event.release.tag_name || 'v2.0.0' }} --dir dist --pattern "*.tar.gz" --pattern "*.zip" || true
 
-      - name: Keyless Sigstore Cosign Signing
+      - name: Keyless Sigstore Cosign Signing (Fail-Closed)
         run: |
-          if [ -d dist ] && [ "$(ls -A dist)" ]; then
-            for file in dist/*; do
-              if [ -f "$file" ]; then
-                echo "Signing $file with Cosign Keyless OIDC (Fulcio/Rekor)..."
-                cosign sign-blob --yes --bundle "$file.sigstore.json" "$file" || echo "Skipping local dummy blob"
-              fi
-            done
+          if [ ! -d dist ] || [ -z "$(ls -A dist)" ]; then
+            echo "::error::No release artifacts downloaded to sign; failing closed."
+            exit 1
           fi
+          for file in dist/*; do
+            if [ -f "$file" ]; then
+              echo "Signing $file with Cosign Keyless OIDC (Fulcio/Rekor)..."
+              cosign sign-blob --yes --bundle "$file.sigstore.json" "$file"
+            fi
+          done
+
+      - name: Sign Artifacts with Pinned Ed25519 Release Key (Zero-Dependency Verifier)
+        if: ${{ secrets.VEXA_RELEASE_SIGNING_KEY_PEM != '' }}
+        env:
+          VEXA_RELEASE_SIGNING_KEY_PEM: ${{ secrets.VEXA_RELEASE_SIGNING_KEY_PEM }}
+        run: |
+          printf '%s\n' "$VEXA_RELEASE_SIGNING_KEY_PEM" > /tmp/vexa-sca-release-key.pem
+          chmod 600 /tmp/vexa-sca-release-key.pem
+          for file in dist/*.tar.gz dist/*.zip; do
+            if [ -f "$file" ]; then
+              openssl pkeyutl -sign -inkey /tmp/vexa-sca-release-key.pem \
+                -rawin -in "$file" -out "$file.ed25519.sig"
+            fi
+          done
+          rm -f /tmp/vexa-sca-release-key.pem
 
       - name: Generate SLSA v1.0 Provenance Attestation
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.2.3
