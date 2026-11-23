@@ -217,6 +217,7 @@ fn discover_recursive(dir: &Path, depth: usize, max_depth: usize, results: &mut 
                     || name == "completed"
                     || name == "fixtures"
                     || name == "test-fixtures"
+                    || name == "examples"
                 {
                     continue;
                 }
