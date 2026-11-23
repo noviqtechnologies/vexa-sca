@@ -237,8 +237,8 @@ impl McpServer {
                 }
 
                 // Check CISA KEV and OSV
-                let kev_catalog =
-                    CisaKevCatalog::load_or_fetch(Path::new(".sca-cache"), None).await;
+                let cache_dir = crate::scanner::paths::default_cache_dir();
+                let kev_catalog = CisaKevCatalog::load_or_fetch(&cache_dir, None).await;
                 let scanner = VulnScanner::new(None);
                 let root_pkg = crate::types::PkgInfo::new("check-target", "1.0.0", eco);
                 let mut graph = crate::core::dep_graph::DepGraph::new(

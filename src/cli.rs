@@ -309,6 +309,10 @@ fn parse_fail_on_licenses(s: &str) -> Result<String, String> {
     version = env!("CARGO_PKG_VERSION")
 )]
 pub struct Cli {
+    /// Override local advisory cache directory (also configurable via VEXA_CACHE_DIR; defaults to OS user cache dir)
+    #[arg(long, global = true)]
+    pub cache_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -924,6 +928,9 @@ pub async fn run() {
             raw_args
         };
     let cli = Cli::parse_from(normalized_args);
+    if let Some(dir) = cli.cache_dir {
+        crate::scanner::paths::set_cache_dir_override(Some(dir));
+    }
 
     match cli.command {
         Commands::Licenses {
@@ -3158,7 +3165,7 @@ ignore:
         }
 
         Commands::Wrap { pm, args } => {
-            let cache_dir = PathBuf::from(".sca-cache");
+            let cache_dir = crate::scanner::paths::default_cache_dir();
             match crate::firewall::FirewallWrapper::execute_wrapped(&pm, &args, &cache_dir).await {
                 Ok(code) => exit(code),
                 Err(e) => {
@@ -3499,11 +3506,9 @@ ignore:
             );
             let _ = graph.add_edge(&graph.root_node_id.clone(), &node_id);
 
-            let kev_catalog = crate::scanner::kev::CisaKevCatalog::load_or_fetch(
-                std::path::Path::new(".sca-cache"),
-                None,
-            )
-            .await;
+            let cache_dir = crate::scanner::paths::default_cache_dir();
+            let kev_catalog =
+                crate::scanner::kev::CisaKevCatalog::load_or_fetch(&cache_dir, None).await;
             let mut vuln_score: i32 = 100;
             let mut vulns_count = 0;
             let mut has_kev = false;

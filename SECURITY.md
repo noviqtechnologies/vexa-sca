@@ -83,4 +83,4 @@ Vexa SCA enforces rigorous supply chain defenses across its build and release pi
 - **Advisory Enrichment:** Scans transmit only package coordinates (`ecosystem`, `name`, `version`) over TLS to the public OSV API (`api.osv.dev`).
 - **Zero First-Party Code Egress:** First-party source code, filenames, git commit histories, developer credentials, and environment variables are **never transmitted** over the network.
 - **Zero-Code-Retention Scan Facts (`.vexa.facts.json`):** When syncing to Vexa SCA Cloud (`--upload`), only dependency tree topology and redacted call-site line numbers are transmitted. No AST source tokens or code contents leave your machine.
-- **Local Disk Cache:** Lookups are cached locally under `.sca-cache/` using SHA-256 keys to minimize external network calls.
+- **Local Disk Cache:** Lookups are cached in the OS-standard user cache directory (`~/.cache/vexa`, `~/Library/Caches/vexa`, `%LOCALAPPDATA%\vexa\cache`; overrideable via `VEXA_CACHE_DIR` or `--cache-dir`) using SHA-256 keys to minimize external network calls without writing into scanned repositories.

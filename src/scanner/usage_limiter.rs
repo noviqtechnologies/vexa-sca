@@ -27,7 +27,7 @@ pub struct CloudUsageLimiter {
 
 impl Default for CloudUsageLimiter {
     fn default() -> Self {
-        Self::new(Path::new(".sca-cache"))
+        Self::new(&crate::scanner::paths::default_data_dir())
     }
 }
 

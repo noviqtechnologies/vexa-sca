@@ -151,19 +151,22 @@ impl VulnScanner {
             .build()
             .unwrap_or_else(|_| Client::new());
 
+        let cache = cache.unwrap_or_default();
+        let epss_resolver = EpssResolver::new(&cache.cache_dir);
+
         Self {
-            cache: cache.unwrap_or_default(),
+            cache,
             batch_api_url: "https://api.osv.dev/v1/querybatch".to_string(),
             vuln_api_url: "https://api.osv.dev/v1/vulns".to_string(),
             client,
-            epss_resolver: EpssResolver::default(),
+            epss_resolver,
             kev_catalog: std::sync::RwLock::new(crate::scanner::kev::CisaKevCatalog::new()),
         }
     }
 
     pub async fn scan_graph(&self, dep_graph: &DepGraph) -> Result<ScanResult, String> {
         let fresh_kev = crate::scanner::kev::CisaKevCatalog::load_or_fetch(
-            std::path::Path::new(".sca-cache"),
+            &self.cache.cache_dir,
             Some(&self.client),
         )
         .await;

@@ -1252,6 +1252,9 @@ impl LocalSupplyChainAnalyzer {
             "toggle-selection",
             "victory-vendor",
             "void-elements",
+            "http",
+            "tokio-rustls",
+            "hyper-rustls",
         ];
 
         if KNOWN_LEGITIMATE_PACKAGES.contains(&lower.as_str()) {
@@ -1442,6 +1445,18 @@ mod tests {
 
         let findings5 = LocalSupplyChainAnalyzer::check_package("playwr1ght", "1.30.0", "npm");
         assert!(findings5.iter().any(|f| f.rule_id == "SC-010"));
+    }
+
+    #[test]
+    fn test_known_legitimate_rust_crates_not_flagged_as_typosquats() {
+        for pkg in ["http", "tokio-rustls", "hyper-rustls"] {
+            let findings = LocalSupplyChainAnalyzer::check_package(pkg, "1.0.0", "crates.io");
+            assert!(
+                !findings.iter().any(|f| f.rule_id == "SC-010"),
+                "Expected legitimate crate '{}' not to trigger SC-010",
+                pkg
+            );
+        }
     }
 
     #[test]

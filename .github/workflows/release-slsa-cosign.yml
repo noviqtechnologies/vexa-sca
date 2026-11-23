@@ -42,10 +42,13 @@ jobs:
           done
 
       - name: Sign Artifacts with Pinned Ed25519 Release Key (Zero-Dependency Verifier)
-        if: ${{ secrets.VEXA_RELEASE_SIGNING_KEY_PEM != '' }}
         env:
           VEXA_RELEASE_SIGNING_KEY_PEM: ${{ secrets.VEXA_RELEASE_SIGNING_KEY_PEM }}
         run: |
+          if [ -z "${VEXA_RELEASE_SIGNING_KEY_PEM:-}" ]; then
+            echo "VEXA_RELEASE_SIGNING_KEY_PEM not configured; skipping optional Ed25519 signing."
+            exit 0
+          fi
           printf '%s\n' "$VEXA_RELEASE_SIGNING_KEY_PEM" > /tmp/vexa-sca-release-key.pem
           chmod 600 /tmp/vexa-sca-release-key.pem
           for file in dist/*.tar.gz dist/*.zip; do

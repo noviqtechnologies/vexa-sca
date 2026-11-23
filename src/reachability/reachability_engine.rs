@@ -335,7 +335,16 @@ impl ReachabilityEngine {
             .ok()
             .filter(|s| !s.trim().is_empty())
             .map(PathBuf::from)
-            .unwrap_or_else(|| source_dir.join(".sca-cache").join("vuln_symbols_v1.json"));
+            .unwrap_or_else(|| {
+                let global_path =
+                    crate::scanner::paths::default_cache_dir().join("vuln_symbols_v1.json");
+                if global_path.exists() {
+                    global_path
+                } else {
+                    // Read-only backwards-compatible fallback if user pre-placed symbols in repo
+                    source_dir.join(".sca-cache").join("vuln_symbols_v1.json")
+                }
+            });
 
         let Ok(raw) = fs::read_to_string(&candidate_path) else {
             return map;

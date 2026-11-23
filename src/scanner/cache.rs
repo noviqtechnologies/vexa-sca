@@ -20,7 +20,7 @@ pub struct VulnCache {
 
 impl Default for VulnCache {
     fn default() -> Self {
-        Self::new(Path::new(".sca-cache"))
+        Self::new(&crate::scanner::paths::default_cache_dir())
     }
 }
 

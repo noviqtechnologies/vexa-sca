@@ -1,6 +1,6 @@
 [package]
 name = "vexa-core"
-version = "1.6.0"
+version = "1.7.0"
 edition = "2021"
 authors = ["Noviq Technologies <support@vexasec.io>"]
 description = "Shared pure-Rust core security engine (CVSS v3/v4, OpenSSF MAL-* malware intel, Python lockfile graphs, single-pass JS/TS AST reachability) used by vexa-sca, vexa-arc, and vexa-sca-cloud."

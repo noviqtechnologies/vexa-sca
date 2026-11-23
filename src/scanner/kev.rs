@@ -101,7 +101,7 @@ impl CisaKevCatalog {
         }
     }
 
-    /// Load KEV catalog from local `.sca-cache/cisa_kev.json` if fresh (<24h),
+    /// Load KEV catalog from `<cache_dir>/cisa_kev.json` if fresh (<24h),
     /// or fetch online from CISA if online and save cache.
     pub async fn load_or_fetch(cache_dir: &Path, client: Option<&reqwest::Client>) -> Self {
         let mut catalog = Self::new();

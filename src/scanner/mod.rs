@@ -4,6 +4,7 @@ pub mod epss;
 pub mod exploit_intel;
 pub mod js_sast;
 pub mod kev;
+pub mod paths;
 pub mod quality_gate;
 pub mod remediator;
 pub mod sarif_ingestor;

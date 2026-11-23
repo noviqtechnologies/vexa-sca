@@ -19,7 +19,7 @@ If any condition is unmet, do not deploy the published image. If you choose to e
 
 Prefer a controlled runner with a reviewed source build and non-blocking report-only scans. Limit filesystem mounts to the target repository and report directory. Do not mount host Docker sockets, pass broad access tokens, run untrusted package lifecycle scripts, or automatically apply fixes. Package-coordinate requests to OSV disclose dependency names and versions; check egress and privacy policy.
 
-The `.sca-cache/` directory can reduce repeat network calls but is not a signed or complete offline advisory database. A containerized scanner does not make OSV data available offline and does not establish complete vulnerability coverage.
+The local Vexa cache directory (`VEXA_CACHE_DIR` / `--cache-dir`, defaulting to the OS user cache dir) can reduce repeat network calls but is not a signed or complete offline advisory database. A containerized scanner does not make OSV data available offline and does not establish complete vulnerability coverage.
 
 ## Reassessment criteria
 

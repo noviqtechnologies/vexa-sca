@@ -12,7 +12,7 @@ Vexa SCA provides a deterministic, zero-external-dependency CLI engine for local
 - **Multi-Language Coverage (v2.0):** JS/TS (full `oxc_parser` AST) and Python (full `rustpython-parser` AST) perform real AST import and call-site resolution; Rust (`use` + direct call matching), Go, and Java use conservative import/call-site matchers. Non-JS files are never fed to `oxc_parser`.
 - **Deterministic Exit Contract:** Exit codes strictly follow the precedence: `2` (Config error) > `3` (Incomplete scan data) > `1` (Quality gate failure) > `0` (Success).
 - **Remediation Safety:** `vexa-sca fix` prioritizes same-major patch and minor updates, providing best-effort byte-for-byte rollback of captured root manifests and lockfiles upon install failure.
-- **Privacy & Upstream Queries:** Scans query public OSV advisories (`api.osv.dev`) with package coordinates (`ecosystem`, `name`, `version`). No first-party source code or git history is transmitted. The `.sca-cache/` directory accelerates repeat runs.
+- **Privacy & Upstream Queries:** Scans query public OSV advisories (`api.osv.dev`) with package coordinates (`ecosystem`, `name`, `version`). No first-party source code or git history is transmitted. The OS user cache directory (`~/.cache/vexa`, `~/Library/Caches/vexa`, `%LOCALAPPDATA%\vexa\cache`; override via `VEXA_CACHE_DIR` or `--cache-dir`) accelerates repeat runs without writing into scanned repositories.
 
 ## Reachability Verdicts at a Glance
 
@@ -38,7 +38,7 @@ The analyzer emits heuristic **Repository Usage Signals** based on selected synt
 
 `UNREACHABLE` verdicts are only emitted when the workspace index achieved full coverage AND found no import or call site for the vulnerable symbol. Any ambiguity (file-limit hit, parse failure, dynamic import, barrel re-export, transitive dependency) produces `UNKNOWN` instead. Use `--reachable-only` only to filter presentation for triage; severity gates must evaluate the complete unsuppressed finding set. Do not use `--allow-unknown-reachability` or `--fail-on-reachable` as a substitute for a validated security policy.
 
-The scanner sends package coordinates to OSV for advisory lookup. Review that data flow against your privacy requirements. `.sca-cache/` can reduce repeat queries but is not a complete, signed, or indefinitely fresh offline advisory database.
+The scanner sends package coordinates to OSV for advisory lookup. Review that data flow against your privacy requirements. The local OS user cache (`VEXA_CACHE_DIR` / `--cache-dir`) can reduce repeat queries but is not a complete, signed, or indefinitely fresh offline advisory database.
 
 ## Reports
 
@@ -113,7 +113,7 @@ vexa-sca wrap npm ci
 1. **Typosquatting detection (SC-010)** — Computes Damerau-Levenshtein edit distance ≤ 1 across a curated index of 250+ popular packages across npm, PyPI, crates.io, Go, and Maven. Employs length pruning for microsecond validation. Blocks `loadsh`, `reqests`, `expres`, `fast1fy`, `playwr1ght`, `serde-json` (vs `serde_json`), etc.
 2. **Pre-flight Manifest & Lifecycle Script Inspection** — Queries the upstream registry API (e.g. `https://registry.npmjs.org/<package>/<version>`) prior to package installation. Inspects lifecycle scripts (`preinstall`, `install`, `postinstall`) for unauthorized network egress (`curl`, `wget`, `powershell`, `Invoke-WebRequest`), reverse shells (`nc -e`, `sh -i`, `bash -i >& /dev/tcp`), and obfuscated execution (`eval()`, base64 decoding). Blocks execution if risky payload patterns are identified.
 3. **Live Slopsquatting Reputation Gate (SC-017)** — Checks live npm and crates.io metadata for newly registered (`< 14 days`) or low-download (`< 500`) packages within edit distance ≤ 2 of popular packages to block AI-hallucinated slopsquat dependencies.
-4. **CISA KEV check** — Fetches and caches the CISA Known Exploited Vulnerabilities catalog (24 h TTL at `.sca-cache/cisa_kev.json`). Blocks any package with a KEV-listed CVE.
+4. **CISA KEV check** — Fetches and caches the CISA Known Exploited Vulnerabilities catalog (24 h TTL at `<vexa-cache>/cisa_kev.json`). Blocks any package with a KEV-listed CVE.
 5. **OSV advisory scan** — Queries `api.osv.dev` for published advisories against each package name + version.
 
 ### Exit codes

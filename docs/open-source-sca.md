@@ -48,7 +48,7 @@ See [COMPATIBILITY_MATRIX.md](../COMPATIBILITY_MATRIX.md) for parser targets, fi
 
 ## Network, data handling, and cache
 
-The scanner sends package names and versions to OSV for advisory lookups. Check this data flow against your privacy and egress requirements. `.sca-cache/` may reduce repeat requests, but it is not a complete, signed, or indefinitely fresh offline advisory snapshot. Do not advertise air-gapped or offline-complete vulnerability coverage based on cache hits.
+The scanner sends package names and versions to OSV for advisory lookups. Check this data flow against your privacy and egress requirements. The local OS user cache (`VEXA_CACHE_DIR` / `--cache-dir`) may reduce repeat requests, but it is not a complete, signed, or indefinitely fresh offline advisory snapshot. Do not advertise air-gapped or offline-complete vulnerability coverage based on cache hits.
 
 ## Safe evaluation workflow
 
@@ -73,7 +73,7 @@ The source analyzer matches selected syntactic patterns using a **single-pass `W
 
 - **JavaScript / TypeScript**: Full single-pass AST parsing via `oxc_parser` — ESM `import`, CJS `require()`, dynamic `import()`, canonicalized cross-OS multi-hop barrel/wrapper resolution, and named call sites.
 - **Python**: Full single-pass Python 3 AST parsing via `rustpython-parser` (`vexa-core::py_ast`) — multiline `from pkg import (...)`, aliases, relative cross-file imports (`.utils`, `..shared`), docstring/comment exclusion, and conservative dynamic-import flagging (`eval`, `exec`, `__import__`, `importlib.import_module`).
-- **Dynamic Vulnerable Symbol Ingestion**: `ReachabilityEngine` automatically ingests synced `vuln_symbols_v1.json` (`VEXA_VULN_SYMBOLS_PATH` or `.sca-cache/vuln_symbols_v1.json`) produced by `vexa-indexer-jobs` alongside built-in curated symbol maps.
+- **Dynamic Vulnerable Symbol Ingestion**: `ReachabilityEngine` automatically ingests synced `vuln_symbols_v1.json` (`VEXA_VULN_SYMBOLS_PATH`, `<vexa-cache>/vuln_symbols_v1.json`, or read-only legacy fallback `.sca-cache/vuln_symbols_v1.json`) produced by `vexa-indexer-jobs` alongside built-in curated symbol maps.
 - **Rust**: `use crate::pkg::fn` import detection plus direct named function call matching (`fn_name(...)`).
 - **Go / Java**: Import statement scanning and method invocation patterns.
 
@@ -145,7 +145,7 @@ Every vulnerability finding is cross-referenced against the **CISA Known Exploit
 
 ### How it works
 
-- The KEV catalog is fetched from `https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json` and cached at `.sca-cache/cisa_kev.json` with a **24-hour TTL**.
+- The KEV catalog is fetched from `https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json` and cached at `<vexa-cache>/cisa_kev.json` with a **24-hour TTL**.
 - If the network is unreachable, a **builtin fallback catalog** of critical CVEs (Log4Shell, Spring4Shell, ProxyLogon, etc.) is used.
 - When a finding's CVE is in KEV:
   - `is_kev: true` is set on the `VulnerabilityFinding`
