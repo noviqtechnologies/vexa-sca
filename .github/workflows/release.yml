@@ -47,12 +47,12 @@ jobs:
 
       - name: Run complete test suite (with real pnpm & npm rollback verification)
         env:
-          GITHUB_STEP_SUMMARY: ""
+          VEXA_NO_STEP_SUMMARY: "1"
         run: cargo test --locked --all-targets --verbose
 
       - name: Validate generated reports against pinned schemas (SARIF 2.1.0, CycloneDX 1.5, SPDX 2.3)
         env:
-          GITHUB_STEP_SUMMARY: ""
+          VEXA_NO_STEP_SUMMARY: "1"
         run: npm run validate:schemas
 
       - name: Dogfood Vexa SCA (Self-Scan Quality Gate)

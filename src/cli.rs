@@ -42,6 +42,24 @@ fn infer_workspace_project_name(path: &std::path::Path) -> String {
         .unwrap_or_else(|| "workspace".to_string())
 }
 
+/// Resolves `$GITHUB_STEP_SUMMARY` unless explicitly suppressed via `VEXA_NO_STEP_SUMMARY`.
+/// Note: GitHub Actions runners overwrite step-level `env: GITHUB_STEP_SUMMARY: ""` with the
+/// real per-step summary file path, so a non-reserved `VEXA_*` opt-out variable is required.
+fn env_step_summary_path() -> Option<PathBuf> {
+    if let Ok(val) = std::env::var("VEXA_NO_STEP_SUMMARY") {
+        let trimmed = val.trim();
+        if trimmed == "1"
+            || trimmed.eq_ignore_ascii_case("true")
+            || trimmed.eq_ignore_ascii_case("yes")
+        {
+            return None;
+        }
+    }
+    std::env::var_os("GITHUB_STEP_SUMMARY")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+}
+
 async fn scan_project_with_code_security(
     path: &std::path::Path,
     options: ScanOptions,
@@ -2187,21 +2205,19 @@ pub async fn run() {
                             );
                         }
                     }
-                    if let Some(summary_env) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-                        if !summary_env.is_empty() {
-                            let summary_md = format_github_step_summary_with_options(
-                                &output.scan_result,
-                                &output.remediations,
-                                &pr_opts,
-                            );
-                            use std::io::Write;
-                            if let Ok(mut f) = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(PathBuf::from(summary_env))
-                            {
-                                let _ = writeln!(f, "{}", summary_md);
-                            }
+                    if let Some(summary_path) = env_step_summary_path() {
+                        let summary_md = format_github_step_summary_with_options(
+                            &output.scan_result,
+                            &output.remediations,
+                            &pr_opts,
+                        );
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(summary_path)
+                        {
+                            let _ = writeln!(f, "{}", summary_md);
                         }
                     }
 
@@ -2642,11 +2658,7 @@ pub async fn run() {
                         &pr_opts,
                     );
 
-                    let summary_target = job_summary_file.or_else(|| {
-                        std::env::var_os("GITHUB_STEP_SUMMARY")
-                            .filter(|s| !s.is_empty())
-                            .map(PathBuf::from)
-                    });
+                    let summary_target = job_summary_file.or_else(env_step_summary_path);
 
                     if let Some(summary_path) = summary_target {
                         use std::io::Write;

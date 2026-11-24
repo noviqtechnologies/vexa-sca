@@ -24,6 +24,13 @@ fn get_bin_path(name: &str) -> PathBuf {
     path
 }
 
+fn vexa_cmd(bin: &Path) -> Command {
+    let mut cmd = Command::new(bin);
+    // Never let E2E test runs append fixture reports into a CI runner's $GITHUB_STEP_SUMMARY.
+    cmd.env_remove("GITHUB_STEP_SUMMARY");
+    cmd
+}
+
 fn ensure_binaries_built() {
     INIT.call_once(|| {
         let status = Command::new("cargo")
@@ -43,7 +50,7 @@ fn test_packaged_binaries_help_and_version() {
         assert!(bin.exists(), "Binary {:?} must exist", bin);
 
         // Test --help
-        let help_output = Command::new(&bin)
+        let help_output = vexa_cmd(&bin)
             .arg("--help")
             .output()
             .unwrap_or_else(|e| panic!("Failed to run {:?} --help: {}", bin, e));
@@ -60,7 +67,7 @@ fn test_packaged_binaries_help_and_version() {
         );
 
         // Test --version
-        let ver_output = Command::new(&bin)
+        let ver_output = vexa_cmd(&bin)
             .arg("--version")
             .output()
             .unwrap_or_else(|e| panic!("Failed to run {:?} --version: {}", bin, e));
@@ -84,7 +91,7 @@ fn test_cli_invalid_sbom_format_rejected_exit_code_2() {
     ensure_binaries_built();
     let bin = get_bin_path("vexa-sca");
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args(["scan", "--sbom", "invalid_format"])
         .output()
         .expect("command failed");
@@ -112,7 +119,7 @@ fn test_cli_invalid_epss_threshold_rejected_exit_code_2() {
     let bin = get_bin_path("vexa-sca");
 
     // Value > 1.0
-    let out_high = Command::new(&bin)
+    let out_high = vexa_cmd(&bin)
         .args(["scan", "--epss-threshold", "2"])
         .output()
         .expect("command failed");
@@ -129,14 +136,14 @@ fn test_cli_invalid_epss_threshold_rejected_exit_code_2() {
     );
 
     // Negative value
-    let out_neg = Command::new(&bin)
+    let out_neg = vexa_cmd(&bin)
         .args(["scan", "--epss-threshold", "-0.5"])
         .output()
         .expect("command failed");
     assert_eq!(out_neg.status.code(), Some(2));
 
     // Non-numeric value
-    let out_str = Command::new(&bin)
+    let out_str = vexa_cmd(&bin)
         .args(["scan", "--epss-threshold", "abc"])
         .output()
         .expect("command failed");
@@ -148,7 +155,7 @@ fn test_cli_invalid_severity_threshold_rejected_exit_code_2() {
     ensure_binaries_built();
     let bin = get_bin_path("vexa-sca");
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args(["scan", "--severity-threshold", "nonsense"])
         .output()
         .expect("command failed");
@@ -171,7 +178,7 @@ fn test_cli_invalid_fail_on_rejected_exit_code_2() {
     ensure_binaries_built();
     let bin = get_bin_path("vexa-sca");
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args(["scan", "--fail-on", "nonsense"])
         .output()
         .expect("command failed");
@@ -194,7 +201,7 @@ fn test_cli_invalid_fail_on_licenses_rejected_exit_code_2() {
     ensure_binaries_built();
     let bin = get_bin_path("vexa-sca");
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args(["licenses", "--fail-on", "nonsense"])
         .output()
         .expect("command failed");
@@ -211,13 +218,13 @@ fn test_cli_container_invalid_options_rejected_exit_code_2() {
     ensure_binaries_built();
     let bin = get_bin_path("vexa-sca");
 
-    let out1 = Command::new(&bin)
+    let out1 = vexa_cmd(&bin)
         .args(["container", ".", "--sbom", "invalid_sbom"])
         .output()
         .expect("command failed");
     assert_eq!(out1.status.code(), Some(2));
 
-    let out2 = Command::new(&bin)
+    let out2 = vexa_cmd(&bin)
         .args(["container", ".", "--fail-on", "nonsense"])
         .output()
         .expect("command failed");
@@ -231,7 +238,7 @@ fn test_cli_scan_report_only_mode_exit_code_0() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/npm-app");
 
     // Without --report-only: npm-app is vulnerable, so exit code must be 1
-    let normal_out = Command::new(&bin)
+    let normal_out = vexa_cmd(&bin)
         .args(["scan", fixture.to_str().unwrap()])
         .output()
         .expect("command failed");
@@ -242,7 +249,7 @@ fn test_cli_scan_report_only_mode_exit_code_0() {
     );
 
     // With --no-fail: must exit 0 while still outputting findings
-    let no_fail_out = Command::new(&bin)
+    let no_fail_out = vexa_cmd(&bin)
         .args(["scan", fixture.to_str().unwrap(), "--no-fail"])
         .output()
         .expect("command failed");
@@ -258,7 +265,7 @@ fn test_cli_scan_report_only_mode_exit_code_0() {
     );
 
     // With alias --report-only: must exit 0
-    let report_only_out = Command::new(&bin)
+    let report_only_out = vexa_cmd(&bin)
         .args(["scan", fixture.to_str().unwrap(), "--report-only"])
         .output()
         .expect("command failed");
@@ -282,7 +289,7 @@ fn test_cli_output_files_and_schema_validation() {
     let sbom_path = temp_dir.join("bom.json");
     let spdx_path = temp_dir.join("bom.spdx.json");
 
-    let out = Command::new(&bin)
+    let out = vexa_cmd(&bin)
         .args([
             "scan",
             fixture.to_str().unwrap(),
@@ -332,7 +339,7 @@ fn test_cli_output_files_and_schema_validation() {
     assert!(!cdx_val["components"].as_array().unwrap().is_empty());
 
     // 4. Test SPDX SBOM output
-    let spdx_out = Command::new(&bin)
+    let spdx_out = vexa_cmd(&bin)
         .args([
             "scan",
             fixture.to_str().unwrap(),
@@ -438,7 +445,7 @@ fn test_cli_scan_advisory_outage_exits_code_3_not_0() {
     // at an unreachable local port. reqwest respects these env vars on all OSes.
     let unreachable_proxy = "http://127.0.0.1:19999";
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args(["scan", fixture.to_str().unwrap(), "--json"])
         // Override the cache location so there is no stale data
         .env("SCA_CACHE_DIR", temp_cache.to_str().unwrap())
@@ -522,7 +529,7 @@ fn test_cli_scan_allow_unavailable_flag_suppresses_exit_3() {
 
     let unreachable_proxy = "http://127.0.0.1:19999";
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args([
             "scan",
             fixture.to_str().unwrap(),
@@ -560,7 +567,7 @@ fn test_cli_init_command_creates_pinned_workflow() {
     let temp_dir = std::env::temp_dir().join(format!("vexa_init_test_{}", std::process::id()));
     let _ = fs::create_dir_all(&temp_dir);
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args(["init", temp_dir.to_str().unwrap(), "--enforce"])
         .output()
         .expect("vexa-sca init failed to run");
@@ -596,7 +603,7 @@ fn test_cli_ci_profile_and_step_summary() {
     let temp_summary =
         std::env::temp_dir().join(format!("vexa_step_summary_{}.md", std::process::id()));
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args([
             "ci",
             fixture.to_str().unwrap(),
@@ -640,7 +647,7 @@ fn test_cli_pr_diff_baseline_mode() {
         std::env::temp_dir().join(format!("vexa_baseline_{}.json", std::process::id()));
 
     // 1. Generate baseline JSON
-    let base_output = Command::new(&bin)
+    let base_output = vexa_cmd(&bin)
         .args(["scan", fixture.to_str().unwrap(), "--no-fail", "--json"])
         .output()
         .expect("baseline scan failed");
@@ -648,7 +655,7 @@ fn test_cli_pr_diff_baseline_mode() {
     fs::write(&temp_baseline, &base_output.stdout).expect("Failed to write baseline file");
 
     // 2. Normal scan with --fail-on high fails with code 1
-    let unbaselined = Command::new(&bin)
+    let unbaselined = vexa_cmd(&bin)
         .args(["scan", fixture.to_str().unwrap(), "--fail-on", "high"])
         .output()
         .expect("scan failed");
@@ -659,7 +666,7 @@ fn test_cli_pr_diff_baseline_mode() {
     );
 
     // 3. Differential scan with --baseline: existing findings are tagged as baseline, gate evaluates ONLY new findings -> exits 0!
-    let baselined = Command::new(&bin)
+    let baselined = vexa_cmd(&bin)
         .args([
             "scan",
             fixture.to_str().unwrap(),
@@ -695,7 +702,7 @@ ignore:
 "#;
     fs::write(&temp_policy, invalid_policy).unwrap();
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args([
             "scan",
             fixture.to_str().unwrap(),
@@ -721,7 +728,7 @@ fn test_cli_conflicting_reachability_flags_exits_code_2() {
     let bin = get_bin_path("vexa-sca");
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/npm-app");
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args([
             "scan",
             fixture.to_str().unwrap(),
@@ -747,7 +754,7 @@ fn test_cli_no_fail_does_not_suppress_exit_code_3() {
 
     // In CI profile with incomplete analysis (file limit hit), scan status is INCOMPLETE.
     // --no-fail must strictly suppress exit code 1 only; it must never suppress exit code 3.
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args([
             "ci",
             fixture.to_str().unwrap(),
@@ -917,7 +924,7 @@ fn test_cli_table_driven_incomplete_scan_matrix() {
         let mut args = vec![tc.profile, reachability_fixture.to_str().unwrap()];
         args.extend(tc.extra_args.clone());
 
-        let output = Command::new(&bin)
+        let output = vexa_cmd(&bin)
             .args(&args)
             .output()
             .unwrap_or_else(|e| panic!("Failed to run test case '{}': {}", tc.name, e));
@@ -933,7 +940,7 @@ fn test_cli_table_driven_incomplete_scan_matrix() {
     }
 
     // Explicitly verify incomplete PLUS gate failure captures both in JSON output
-    let json_output = Command::new(&bin)
+    let json_output = vexa_cmd(&bin)
         .args([
             "scan",
             reachability_fixture.to_str().unwrap(),
@@ -989,7 +996,7 @@ fn test_cli_malformed_manifest_exits_code_3_and_not_suppressed() {
     .unwrap();
 
     // Even with --no-fail and --allow-unavailable, malformed manifest MUST exit 3
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args([
             "scan",
             temp_dir.to_str().unwrap(),
@@ -1022,7 +1029,7 @@ fn test_cli_report_generation_write_failure_exits_code_3() {
         PathBuf::from("/proc/nonexistent_vexa_dir/impossible/results.sarif")
     };
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args([
             "scan",
             fixture.to_str().unwrap(),
@@ -1073,7 +1080,7 @@ fn test_real_pnpm_install_failure_and_byte_for_byte_rollback() {
     let lock_hash_before = file_sha256(&target_lock);
 
     // 1. Verify --dry-run does NOT write files, does NOT create backups, and leaves hashes unchanged
-    let dry_run_output = Command::new(&bin)
+    let dry_run_output = vexa_cmd(&bin)
         .args(["fix", temp_dir.to_str().unwrap(), "--dry-run"])
         .output()
         .expect("CLI dry-run failed to execute");
@@ -1097,7 +1104,7 @@ fn test_real_pnpm_install_failure_and_byte_for_byte_rollback() {
     );
 
     // 2. Run real `vexa-sca fix`
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args(["fix", temp_dir.to_str().unwrap()])
         .output()
         .expect("CLI fix execution failed");
@@ -1184,7 +1191,7 @@ fn test_real_npm_install_failure_and_byte_for_byte_rollback() {
     let lock_hash_before = file_sha256(&target_lock);
 
     // 1. Verify --dry-run
-    let dry_run_output = Command::new(&bin)
+    let dry_run_output = vexa_cmd(&bin)
         .args(["fix", temp_dir.to_str().unwrap(), "--dry-run"])
         .output()
         .expect("CLI dry-run failed to execute");
@@ -1194,7 +1201,7 @@ fn test_real_npm_install_failure_and_byte_for_byte_rollback() {
     assert!(!temp_dir.join("package.json.bak").exists());
 
     // 2. Run real `vexa-sca fix`
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args(["fix", temp_dir.to_str().unwrap()])
         .output()
         .expect("CLI fix execution failed");
@@ -1246,7 +1253,7 @@ fn test_cli_wrap_typosquat_block() {
     ensure_binaries_built();
     let bin = get_bin_path("vexa-sca");
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args(["wrap", "npm", "install", "loadsh"])
         .output()
         .expect("Failed to run vexa-sca wrap");
@@ -1288,7 +1295,7 @@ fn test_cli_upload_facts_generates_file() {
     )
     .unwrap();
 
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args([
             "scan",
             temp_dir.to_str().unwrap(),
@@ -1329,7 +1336,7 @@ fn test_cli_mcp_initialize_and_tools_list() {
     let bin = get_bin_path("vexa-sca");
 
     use std::io::Write;
-    let mut child = Command::new(&bin)
+    let mut child = vexa_cmd(&bin)
         .arg("mcp")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1368,7 +1375,7 @@ fn test_cli_score_command_json_and_terminal() {
     let bin = get_bin_path("vexa-sca");
 
     // Test JSON score output for legitimate package
-    let output = Command::new(&bin)
+    let output = vexa_cmd(&bin)
         .args(["score", "lodash@4.17.21", "--eco", "npm", "--json"])
         .output()
         .expect("Failed to run vexa-sca score");
@@ -1380,7 +1387,7 @@ fn test_cli_score_command_json_and_terminal() {
     assert!(val["composite_score"].as_i64().unwrap_or(0) > 0);
 
     // Test typosquat penalty in score
-    let typosquat_output = Command::new(&bin)
+    let typosquat_output = vexa_cmd(&bin)
         .args(["score", "fast1fy", "--json"])
         .output()
         .expect("Failed to run vexa-sca score for typosquat");
@@ -1390,4 +1397,64 @@ fn test_cli_score_command_json_and_terminal() {
         serde_json::from_str(&t_stdout).expect("Valid JSON output from score");
     assert_eq!(t_val["is_typosquat"], true);
     assert!(t_val["supply_chain_score"].as_i64().unwrap_or(100) < 50);
+}
+
+#[test]
+fn test_cli_vexa_no_step_summary_suppresses_github_step_summary() {
+    ensure_binaries_built();
+    let bin = get_bin_path("vexa-sca");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/npm-app");
+    let temp_summary = std::env::temp_dir().join(format!(
+        "vexa_no_step_summary_test_{}.md",
+        std::process::id()
+    ));
+    let _ = fs::remove_file(&temp_summary);
+
+    // 1. With VEXA_NO_STEP_SUMMARY=1, `scan` must not write to GITHUB_STEP_SUMMARY.
+    let scan_out = Command::new(&bin)
+        .args(["scan", fixture.to_str().unwrap(), "--no-fail"])
+        .env("GITHUB_STEP_SUMMARY", &temp_summary)
+        .env("VEXA_NO_STEP_SUMMARY", "1")
+        .output()
+        .expect("vexa-sca scan failed to run");
+    assert!(
+        scan_out.status.success(),
+        "vexa-sca scan --no-fail should exit 0, stderr: {}",
+        String::from_utf8_lossy(&scan_out.stderr)
+    );
+    assert!(
+        !temp_summary.exists(),
+        "VEXA_NO_STEP_SUMMARY=1 must suppress GITHUB_STEP_SUMMARY writes for `scan`"
+    );
+
+    // 2. With VEXA_NO_STEP_SUMMARY=1, `ci` must not write to GITHUB_STEP_SUMMARY.
+    let ci_out = Command::new(&bin)
+        .args(["ci", fixture.to_str().unwrap(), "--no-fail"])
+        .env("GITHUB_STEP_SUMMARY", &temp_summary)
+        .env("VEXA_NO_STEP_SUMMARY", "1")
+        .output()
+        .expect("vexa-sca ci failed to run");
+    assert!(
+        ci_out.status.success(),
+        "vexa-sca ci --no-fail should exit 0, stderr: {}",
+        String::from_utf8_lossy(&ci_out.stderr)
+    );
+    assert!(
+        !temp_summary.exists(),
+        "VEXA_NO_STEP_SUMMARY=1 must suppress GITHUB_STEP_SUMMARY writes for `ci`"
+    );
+
+    // 3. Without VEXA_NO_STEP_SUMMARY, `ci` writes to GITHUB_STEP_SUMMARY normally.
+    let ci_enabled_out = Command::new(&bin)
+        .args(["ci", fixture.to_str().unwrap(), "--no-fail"])
+        .env("GITHUB_STEP_SUMMARY", &temp_summary)
+        .env_remove("VEXA_NO_STEP_SUMMARY")
+        .output()
+        .expect("vexa-sca ci failed to run");
+    assert!(ci_enabled_out.status.success());
+    let summary_md =
+        fs::read_to_string(&temp_summary).expect("GITHUB_STEP_SUMMARY should be written");
+    assert!(summary_md.contains("Vexa SCA Security Report"));
+
+    let _ = fs::remove_file(&temp_summary);
 }

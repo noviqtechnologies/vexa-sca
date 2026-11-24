@@ -175,7 +175,7 @@ for (const tc of testCases) {
     execFileSync(bin, tc.args, {
       cwd: rootDir,
       stdio: 'pipe',
-      env: { ...process.env, GITHUB_STEP_SUMMARY: '' }
+      env: { ...process.env, GITHUB_STEP_SUMMARY: '', VEXA_NO_STEP_SUMMARY: '1' }
     });
   } catch (err) {
     exitCode = err.status || -1;
