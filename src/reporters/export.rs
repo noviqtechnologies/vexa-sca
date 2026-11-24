@@ -797,7 +797,20 @@ pub fn format_github_step_summary_with_options(
     remediations: &[RemediationAction],
     opts: &PrReportOptions<'_>,
 ) -> String {
-    let mut out = format_pr_comment_report(scan_result, remediations, opts);
+    let mut out = String::new();
+    out.push_str("## 🛡️ Vexa SCA Security Report\n\n");
+    let status_badge = match scan_result.scan_status {
+        crate::types::ScanStatus::Pass => "🟢 **PASS**",
+        crate::types::ScanStatus::Fail => "🔴 **FAIL**",
+        crate::types::ScanStatus::Incomplete => "🟡 **INCOMPLETE**",
+    };
+    out.push_str(&format!(
+        "**Status:** {} | **Dependencies:** {} | **Active Vulnerabilities:** {}\n\n",
+        status_badge,
+        scan_result.scanned_packages_count,
+        scan_result.vulnerabilities.len()
+    ));
+    out.push_str(&format_pr_comment_report(scan_result, remediations, opts));
     out.push_str("\n<details>\n<summary>🔍 <b>Vulnerability Intelligence & Exploit Threat Provenance</b></summary>\n\n");
     out.push_str("- **Google OSV & GHSA:** Canonical identifiers, fixed release versions, and CWE classifications.\n");
     out.push_str("- **NVD / CVSS v3.1:** Industry baseline severity metrics and vector strings.\n");
