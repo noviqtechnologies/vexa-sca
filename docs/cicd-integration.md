@@ -218,13 +218,17 @@ When running in CI or via the Vexa GitHub App, Vexa SCA surfaces findings direct
 - Emits line-level annotations on modified dependency manifests (`package-lock.json`, `Cargo.lock`, etc.).
 - Evaluates policy-based merge blocking based on configured thresholds (e.g., `--fail-on high`, active CISA KEV weaponization, or public exploit availability).
 
-### 2. Sticky PR Review Comments
-Posts and updates a single, deduplicated PR comment containing the consolidated Threat Table:
+### 2. Sticky PR Review Comments (`comment-pr: 'true'` / `--pr-comment-file`)
+When running via `action.yml` with `pull-requests: write` permission (or generating Markdown directly with `vexa-sca scan . --sast --secrets --pr-comment-file report.md`), Vexa SCA posts and updates a single deduplicated PR comment (`<!-- vexa-sca-pr-report -->`) with a multi-engine severity matrix and collapsible details:
 
-| Package | Version | Severity (CVSS) | Threat Signal | AST Reachability | Safest Fix |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `tar` | `6.1.11` | CRITICAL (9.8) | 🚨 **Active KEV** | **REACHABLE** | `6.2.1` |
-| `axios` | `0.21.1` | HIGH (7.5) | 🔥 **Public PoC** | NOT_REACHABLE | `0.21.2` |
+| Status | Scan Engine | Critical | High | Medium | Low | Total (0) |
+| :---: | :--- | :---: | :---: | :---: | :---: | :---: |
+| ✅ | **Open Source Security (SCA)** | 0 | 0 | 0 | 0 | 0 issues |
+| ✅ | **Licenses** | 0 | 0 | 0 | 0 | 0 issues |
+| ✅ | **Code Security (SAST)** | 0 | 0 | 0 | 0 | 0 issues |
+| ✅ | **Secrets** | 0 | 0 | 0 | 0 | 0 issues |
+
+Disabled engines are explicitly marked `⏭️ skipped` (never reported as false `0`s). When findings are present, collapsible `<details>` tables include prioritized SCA threat signals (`Active KEV`, `Public PoC`, `High EPSS`, AST reachability, and fixed versions), non-permissive license packages, and Zero-Code-Retention SAST/Secret locations without leaking raw source code or secret values.
 
 #### Exploit Threat Tiers:
 - 🚨 **Active KEV:** Confirmed active in-the-wild exploitation campaigns (CISA KEV catalog).

@@ -10,8 +10,9 @@ use crate::parsers::detector::detect_and_parse;
 use crate::patcher;
 use crate::patcher::pr_creator::PrCreator;
 use crate::reporters::export::{
-    emit_github_annotations, format_cyclonedx_sbom, format_github_step_summary, format_html_report,
-    format_json_report, format_markdown_report, format_sarif_report, format_spdx_sbom, SbomFormat,
+    emit_github_annotations, format_cyclonedx_sbom, format_github_step_summary_with_options,
+    format_html_report, format_json_report, format_markdown_report, format_pr_comment_report,
+    format_sarif_report, format_spdx_sbom, PrReportOptions, SbomFormat,
 };
 use crate::reporters::terminal::render_terminal_report;
 use crate::scanner::quality_gate::{QualityGate, QualityGateOptions};
@@ -479,6 +480,10 @@ pub enum Commands {
         /// Ingest external SARIF v2.1.0 report (CodeQL, Semgrep, Bandit, Gosec) with automatic snippet stripping
         #[arg(long)]
         ingest_sarif: Option<PathBuf>,
+
+        /// Write deduplicated multi-engine PR security matrix Markdown report to a file
+        #[arg(long)]
+        pr_comment_file: Option<PathBuf>,
     },
 
     /// Automated scan profile for CI/CD pipelines (fails closed on incomplete data/advisory outage)
@@ -635,6 +640,10 @@ pub enum Commands {
         /// Ingest external SARIF v2.1.0 report (CodeQL, Semgrep, Bandit, Gosec) with automatic snippet stripping
         #[arg(long)]
         ingest_sarif: Option<PathBuf>,
+
+        /// Write deduplicated multi-engine PR security matrix Markdown report to a file
+        #[arg(long)]
+        pr_comment_file: Option<PathBuf>,
     },
 
     /// Initialize pinned GitHub Actions workflow for Vexa SCA in .github/workflows/vexa-sca.yml
@@ -1769,6 +1778,7 @@ pub async fn run() {
             sast,
             secrets,
             ingest_sarif,
+            pr_comment_file,
         } => {
             if let Some(db_path) = &offline_db {
                 match crate::cloud::OfflineBundleVerifier::verify_bundle_file(db_path, None) {
@@ -2151,12 +2161,38 @@ pub async fn run() {
                     }
 
                     // Write GitHub Step Summary if env var is set and non-empty
+                    let pr_opts = PrReportOptions {
+                        license_audit: output.license_audit.as_ref(),
+                        quality_gate: Some(&gate_res),
+                        sast_enabled: effective_sast,
+                        secrets_enabled: effective_secrets,
+                        dashboard_url: None,
+                    };
+                    if let Some(pr_path) = &pr_comment_file {
+                        if let Some(parent) = pr_path.parent().filter(|p| !p.as_os_str().is_empty())
+                        {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let pr_md = format_pr_comment_report(
+                            &output.scan_result,
+                            &output.remediations,
+                            &pr_opts,
+                        );
+                        if let Err(e) = std::fs::write(pr_path, pr_md.as_bytes()) {
+                            eprintln!(
+                                "{} Failed to write PR comment report to {}: {}",
+                                "Error:".red().bold(),
+                                pr_path.display(),
+                                e
+                            );
+                        }
+                    }
                     if let Some(summary_env) = std::env::var_os("GITHUB_STEP_SUMMARY") {
                         if !summary_env.is_empty() {
-                            let summary_md = format_github_step_summary(
+                            let summary_md = format_github_step_summary_with_options(
                                 &output.scan_result,
                                 &output.remediations,
-                                Some(&gate_res),
+                                &pr_opts,
                             );
                             use std::io::Write;
                             if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -2341,6 +2377,7 @@ pub async fn run() {
             sast,
             secrets,
             ingest_sarif,
+            pr_comment_file,
         } => {
             if let Some(db_path) = &offline_db {
                 match crate::cloud::OfflineBundleVerifier::verify_bundle_file(db_path, None) {
@@ -2572,11 +2609,37 @@ pub async fn run() {
                         }
                     }
 
-                    // Write GitHub Step Summary ($GITHUB_STEP_SUMMARY or custom file)
-                    let summary_md = format_github_step_summary(
+                    // Write GitHub Step Summary ($GITHUB_STEP_SUMMARY or custom file) and optional PR comment report
+                    let pr_opts = PrReportOptions {
+                        license_audit: output.license_audit.as_ref(),
+                        quality_gate: Some(&gate_res),
+                        sast_enabled: effective_sast,
+                        secrets_enabled: effective_secrets,
+                        dashboard_url: None,
+                    };
+                    if let Some(pr_path) = &pr_comment_file {
+                        if let Some(parent) = pr_path.parent().filter(|p| !p.as_os_str().is_empty())
+                        {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let pr_md = format_pr_comment_report(
+                            &output.scan_result,
+                            &output.remediations,
+                            &pr_opts,
+                        );
+                        if let Err(e) = std::fs::write(pr_path, pr_md.as_bytes()) {
+                            eprintln!(
+                                "{} Failed to write PR comment report to {}: {}",
+                                "Error:".red(),
+                                pr_path.display(),
+                                e
+                            );
+                        }
+                    }
+                    let summary_md = format_github_step_summary_with_options(
                         &output.scan_result,
                         &output.remediations,
-                        Some(&gate_res),
+                        &pr_opts,
                     );
 
                     let summary_target = job_summary_file.or_else(|| {

@@ -279,7 +279,534 @@ pub fn format_markdown_report(
         }
     }
 
+    if !scan_result.code_findings.is_empty() {
+        let sast_findings: Vec<_> = scan_result
+            .code_findings
+            .iter()
+            .filter(|f| !f.category.eq_ignore_ascii_case("SECRET"))
+            .collect();
+        let secret_findings: Vec<_> = scan_result
+            .code_findings
+            .iter()
+            .filter(|f| f.category.eq_ignore_ascii_case("SECRET"))
+            .collect();
+
+        if !sast_findings.is_empty() {
+            md.push_str("## Code Security Findings (SAST)\n\n");
+            md.push_str("| Severity | Rule | CWE | Location | Sink |\n");
+            md.push_str("| :--- | :--- | :--- | :--- | :--- |\n");
+            for f in &sast_findings {
+                let cwe = f.cwe.as_deref().unwrap_or("—");
+                let sink = f.matched_sink.as_deref().unwrap_or("—");
+                md.push_str(&format!(
+                    "| **{}** | `{}` | {} | `{}:{}` | `{}` |\n",
+                    escape_md_cell(&f.severity),
+                    escape_md_cell(&f.rule_id),
+                    escape_md_cell(cwe),
+                    escape_md_cell(&f.file_path),
+                    f.line,
+                    escape_md_cell(sink),
+                ));
+            }
+            md.push('\n');
+        }
+
+        if !secret_findings.is_empty() {
+            md.push_str("## Secret Detection Findings\n\n");
+            md.push_str("| Severity | Rule | Location | Sanitized Match |\n");
+            md.push_str("| :--- | :--- | :--- | :--- |\n");
+            for f in &secret_findings {
+                let sink = f.matched_sink.as_deref().unwrap_or("redacted");
+                md.push_str(&format!(
+                    "| **{}** | `{}` | `{}:{}` | `{}` |\n",
+                    escape_md_cell(&f.severity),
+                    escape_md_cell(&f.rule_id),
+                    escape_md_cell(&f.file_path),
+                    f.line,
+                    escape_md_cell(sink),
+                ));
+            }
+            md.push('\n');
+        }
+    }
+
     md
+}
+
+pub const PR_COMMENT_MARKER: &str = "<!-- vexa-sca-pr-report -->";
+
+#[derive(Debug, Clone, Default)]
+pub struct PrReportOptions<'a> {
+    pub license_audit: Option<&'a LicenseAudit>,
+    pub quality_gate: Option<&'a crate::scanner::quality_gate::QualityGateResult>,
+    pub sast_enabled: bool,
+    pub secrets_enabled: bool,
+    pub dashboard_url: Option<&'a str>,
+}
+
+fn escape_md_cell(raw: &str) -> String {
+    raw.replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace('`', "'")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace(['\r', '\n'], " ")
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SeverityCounts {
+    critical: usize,
+    high: usize,
+    medium: usize,
+    low: usize,
+}
+
+impl SeverityCounts {
+    fn total(&self) -> usize {
+        self.critical + self.high + self.medium + self.low
+    }
+
+    fn add_str_severity(&mut self, sev: &str) {
+        match sev.trim().to_ascii_uppercase().as_str() {
+            "CRITICAL" => self.critical += 1,
+            "HIGH" => self.high += 1,
+            "MEDIUM" => self.medium += 1,
+            _ => self.low += 1,
+        }
+    }
+}
+
+fn format_engine_row(
+    status: &str,
+    engine: &str,
+    counts: Option<SeverityCounts>,
+    total_cell: String,
+) -> String {
+    match counts {
+        Some(c) => format!(
+            "| {} | **{}** | {} | {} | {} | {} | {} |\n",
+            status, engine, c.critical, c.high, c.medium, c.low, total_cell
+        ),
+        None => format!(
+            "| {} | **{}** | — | — | — | — | {} |\n",
+            status, engine, total_cell
+        ),
+    }
+}
+
+/// Formats a deduplicated, Snyk-style Pull Request security matrix comment (Zero-Code-Retention).
+pub fn format_pr_comment_report(
+    scan_result: &ScanResult,
+    remediations: &[RemediationAction],
+    opts: &PrReportOptions<'_>,
+) -> String {
+    let mut out = String::new();
+    out.push_str(PR_COMMENT_MARKER);
+    out.push('\n');
+
+    // 1. Aggregate Open Source Security (SCA) counts
+    let mut sca_counts = SeverityCounts::default();
+    let mut reachable_count = 0usize;
+    for v in &scan_result.vulnerabilities {
+        match v.severity.level {
+            crate::types::SeverityLevel::Critical => sca_counts.critical += 1,
+            crate::types::SeverityLevel::High => sca_counts.high += 1,
+            crate::types::SeverityLevel::Medium => sca_counts.medium += 1,
+            crate::types::SeverityLevel::Low | crate::types::SeverityLevel::Unknown => {
+                sca_counts.low += 1
+            }
+        }
+        if v.reachability
+            .as_ref()
+            .map(|r| r.status == ReachabilityStatus::Reachable)
+            .unwrap_or(false)
+        {
+            reachable_count += 1;
+        }
+    }
+
+    // 2. Aggregate License counts (non-permissive items only; permissive licenses are not issues)
+    let license_counts = opts.license_audit.map(|audit| SeverityCounts {
+        critical: 0,
+        high: audit.summary.strong_copyleft,
+        medium: audit.summary.weak_copyleft,
+        low: audit.summary.unknown,
+    });
+
+    // 3. Aggregate SAST and Secret counts from code_findings
+    let sast_findings: Vec<_> = scan_result
+        .code_findings
+        .iter()
+        .filter(|f| !f.category.eq_ignore_ascii_case("SECRET"))
+        .collect();
+    let secret_findings: Vec<_> = scan_result
+        .code_findings
+        .iter()
+        .filter(|f| f.category.eq_ignore_ascii_case("SECRET"))
+        .collect();
+
+    let mut sast_counts = SeverityCounts::default();
+    for f in &sast_findings {
+        sast_counts.add_str_severity(&f.severity);
+    }
+    let mut secret_counts = SeverityCounts::default();
+    for f in &secret_findings {
+        secret_counts.add_str_severity(&f.severity);
+    }
+
+    let show_sast = opts.sast_enabled || !sast_findings.is_empty();
+    let show_secrets = opts.secrets_enabled || !secret_findings.is_empty();
+
+    let total_all_issues = sca_counts.total()
+        + license_counts.map(|c| c.total()).unwrap_or(0)
+        + if show_sast { sast_counts.total() } else { 0 }
+        + if show_secrets {
+            secret_counts.total()
+        } else {
+            0
+        };
+
+    let no_fail = opts.quality_gate.map(|g| g.no_fail).unwrap_or(false);
+    let gate_passed = opts
+        .quality_gate
+        .map(|g| g.passed)
+        .unwrap_or(scan_result.scan_status == crate::types::ScanStatus::Pass);
+    let is_incomplete = scan_result.scan_status == crate::types::ScanStatus::Incomplete;
+
+    // Headline
+    if is_incomplete {
+        out.push_str("### ⚠️ Vexa SCA checks are incomplete. Review scan diagnostics.\n\n");
+    } else if gate_passed && total_all_issues == 0 {
+        out.push_str("### ✅ Vexa SCA checks have passed. No issues have been found so far.\n\n");
+    } else if gate_passed {
+        let mode_note = if no_fail {
+            "report-only (`--no-fail`)"
+        } else {
+            "below fail threshold or advisory"
+        };
+        out.push_str(&format!(
+            "### ✅ Vexa SCA checks have passed ({total_all_issues} issue(s) {mode_note}).\n\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "### ❌ Vexa SCA checks failed ({total_all_issues} total issue(s) found).\n\n"
+        ));
+    }
+
+    // 7-column severity matrix
+    out.push_str(&format!(
+        "| Status | Scan Engine | Critical | High | Medium | Low | Total ({total_all_issues}) |\n"
+    ));
+    out.push_str("| :---: | :--- | :---: | :---: | :---: | :---: | :---: |\n");
+
+    let sca_failed = opts
+        .quality_gate
+        .map(|g| !g.passed && g.has_severity_failure())
+        .unwrap_or(sca_counts.total() > 0 && !no_fail);
+    let sca_status = if sca_failed {
+        "❌"
+    } else if sca_counts.total() > 0 {
+        "⚠️"
+    } else {
+        "✅"
+    };
+    let sca_total_cell = if sca_counts.total() > 0 && reachable_count > 0 {
+        format!(
+            "{} issues ({} reachable)",
+            sca_counts.total(),
+            reachable_count
+        )
+    } else {
+        format!("{} issues", sca_counts.total())
+    };
+    out.push_str(&format_engine_row(
+        sca_status,
+        "Open Source Security (SCA)",
+        Some(sca_counts),
+        sca_total_cell,
+    ));
+
+    let license_failed = opts
+        .quality_gate
+        .map(|g| {
+            !g.passed
+                && g.failure_reasons
+                    .iter()
+                    .any(|r| r.to_ascii_lowercase().contains("license"))
+        })
+        .unwrap_or(false);
+    if let Some(lc) = license_counts {
+        let lic_status = if license_failed {
+            "❌"
+        } else if lc.total() > 0 {
+            "⚠️"
+        } else {
+            "✅"
+        };
+        out.push_str(&format_engine_row(
+            lic_status,
+            "Licenses",
+            Some(lc),
+            format!("{} issues", lc.total()),
+        ));
+    } else {
+        out.push_str(&format_engine_row(
+            "⏭️",
+            "Licenses",
+            None,
+            "skipped".to_string(),
+        ));
+    }
+
+    if show_sast {
+        let sast_status = if sast_counts.total() > 0 && !no_fail {
+            "❌"
+        } else if sast_counts.total() > 0 {
+            "⚠️"
+        } else {
+            "✅"
+        };
+        out.push_str(&format_engine_row(
+            sast_status,
+            "Code Security (SAST)",
+            Some(sast_counts),
+            format!("{} issues", sast_counts.total()),
+        ));
+    } else {
+        out.push_str(&format_engine_row(
+            "⏭️",
+            "Code Security (SAST)",
+            None,
+            "skipped".to_string(),
+        ));
+    }
+
+    if show_secrets {
+        let sec_status = if secret_counts.total() > 0 && !no_fail {
+            "❌"
+        } else if secret_counts.total() > 0 {
+            "⚠️"
+        } else {
+            "✅"
+        };
+        out.push_str(&format_engine_row(
+            sec_status,
+            "Secrets",
+            Some(secret_counts),
+            format!("{} issues", secret_counts.total()),
+        ));
+    } else {
+        out.push_str(&format_engine_row(
+            "⏭️",
+            "Secrets",
+            None,
+            "skipped".to_string(),
+        ));
+    }
+
+    out.push('\n');
+
+    if scan_result.baseline_vulnerabilities_count > 0 {
+        out.push_str(&format!(
+            "**PR Diff Baseline:** {} new finding(s) | {} baseline finding(s)\n\n",
+            scan_result.new_vulnerabilities_count, scan_result.baseline_vulnerabilities_count
+        ));
+    }
+
+    if let Some(gate) = opts.quality_gate {
+        if !gate.failure_reasons.is_empty() {
+            let heading = if gate.no_fail {
+                "#### 🚦 Quality Gate Findings (Report-Only)\n\n"
+            } else {
+                "#### 🚦 Quality Gate Failures\n\n"
+            };
+            out.push_str(heading);
+            for reason in &gate.failure_reasons {
+                out.push_str(&format!("- {}\n", escape_md_cell(reason)));
+            }
+            out.push('\n');
+        }
+    }
+
+    // Collapsible details: Open Source Security
+    if !scan_result.vulnerabilities.is_empty() {
+        let mut prioritized = scan_result.vulnerabilities.clone();
+        prioritized.sort_by(|a, b| {
+            b.priority_score
+                .partial_cmp(&a.priority_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        out.push_str(&format!(
+            "<details>\n<summary>📦 <b>Open Source Security Details ({} finding(s))</b></summary>\n\n",
+            prioritized.len()
+        ));
+        out.push_str("| Package | Severity | Threat Signal | Reachability | Fixed In |\n");
+        out.push_str("| :--- | :---: | :---: | :---: | :--- |\n");
+        for v in prioritized.iter().take(20) {
+            let fix = v
+                .fixed_in
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "No fix".to_string());
+            let reach = match &v.reachability {
+                Some(r) if r.status == ReachabilityStatus::Reachable => "**REACHABLE**",
+                Some(r) if r.status == ReachabilityStatus::Unreachable => "NOT_REACHABLE",
+                _ => "UNKNOWN",
+            };
+            let threat = match v.exploit_maturity {
+                crate::types::ExploitMaturity::ActiveKev => "🚨 Active KEV",
+                crate::types::ExploitMaturity::PublicPoc => "🔥 Public PoC",
+                crate::types::ExploitMaturity::HighProbability => "⚠️ High EPSS",
+                crate::types::ExploitMaturity::Theoretical => "—",
+            };
+            out.push_str(&format!(
+                "| `{}` | `{}` | {} | {} | `{}` |\n",
+                escape_md_cell(&v.package),
+                escape_md_cell(v.severity.level.as_str()),
+                threat,
+                reach,
+                escape_md_cell(&fix),
+            ));
+        }
+        if prioritized.len() > 20 {
+            out.push_str(&format!(
+                "\n*...and {} more vulnerability finding(s).*\n",
+                prioritized.len() - 20
+            ));
+        }
+        out.push_str("\n</details>\n\n");
+    }
+
+    // Collapsible details: Licenses
+    if let Some(audit) = opts.license_audit {
+        let flagged: Vec<_> = audit
+            .results
+            .iter()
+            .filter(|r| r.category != crate::licenses::license_scanner::LicenseCategory::Permissive)
+            .collect();
+        if !flagged.is_empty() {
+            out.push_str(&format!(
+                "<details>\n<summary>⚖️ <b>License Compliance Details ({} non-permissive package(s))</b></summary>\n\n",
+                flagged.len()
+            ));
+            out.push_str("| Package | Version | License | Category | Risk |\n");
+            out.push_str("| :--- | :--- | :--- | :---: | :---: |\n");
+            for r in flagged.iter().take(20) {
+                out.push_str(&format!(
+                    "| `{}` | `{}` | `{}` | {} | `{}` |\n",
+                    escape_md_cell(&r.package),
+                    escape_md_cell(&r.version),
+                    escape_md_cell(&r.license),
+                    escape_md_cell(r.category.as_str()),
+                    escape_md_cell(&r.risk.level),
+                ));
+            }
+            if flagged.len() > 20 {
+                out.push_str(&format!(
+                    "\n*...and {} more package(s).*\n",
+                    flagged.len() - 20
+                ));
+            }
+            out.push_str("\n</details>\n\n");
+        }
+    }
+
+    // Collapsible details: Code Security (SAST)
+    if !sast_findings.is_empty() {
+        out.push_str(&format!(
+            "<details>\n<summary>🔎 <b>Code Security (SAST) Details ({} finding(s))</b></summary>\n\n",
+            sast_findings.len()
+        ));
+        out.push_str("| Severity | Rule | CWE | Location | Sink |\n");
+        out.push_str("| :---: | :--- | :---: | :--- | :--- |\n");
+        for f in sast_findings.iter().take(20) {
+            let cwe = f.cwe.as_deref().unwrap_or("—");
+            let sink = f.matched_sink.as_deref().unwrap_or("—");
+            out.push_str(&format!(
+                "| `{}` | `{}` | {} | `{}:{}` | `{}` |\n",
+                escape_md_cell(&f.severity),
+                escape_md_cell(&f.rule_id),
+                escape_md_cell(cwe),
+                escape_md_cell(&f.file_path),
+                f.line,
+                escape_md_cell(sink),
+            ));
+        }
+        if sast_findings.len() > 20 {
+            out.push_str(&format!(
+                "\n*...and {} more SAST finding(s).*\n",
+                sast_findings.len() - 20
+            ));
+        }
+        out.push_str("\n</details>\n\n");
+    }
+
+    // Collapsible details: Secrets (Zero-Code-Retention: never prints raw secret values)
+    if !secret_findings.is_empty() {
+        out.push_str(&format!(
+            "<details>\n<summary>🔑 <b>Secret Detection Details ({} finding(s))</b></summary>\n\n",
+            secret_findings.len()
+        ));
+        out.push_str("| Severity | Rule | Location | Sanitized Match |\n");
+        out.push_str("| :---: | :--- | :--- | :--- |\n");
+        for f in secret_findings.iter().take(20) {
+            let sink = f.matched_sink.as_deref().unwrap_or("redacted");
+            out.push_str(&format!(
+                "| `{}` | `{}` | `{}:{}` | `{}` |\n",
+                escape_md_cell(&f.severity),
+                escape_md_cell(&f.rule_id),
+                escape_md_cell(&f.file_path),
+                f.line,
+                escape_md_cell(sink),
+            ));
+        }
+        if secret_findings.len() > 20 {
+            out.push_str(&format!(
+                "\n*...and {} more secret finding(s).*\n",
+                secret_findings.len() - 20
+            ));
+        }
+        out.push_str("\n</details>\n\n");
+    }
+
+    if !remediations.is_empty() {
+        out.push_str("<details>\n<summary>🛠️ <b>Recommended Remediations</b></summary>\n\n");
+        for rem in remediations.iter().take(10) {
+            out.push_str(&format!(
+                "- **`{}`**: {}\n",
+                escape_md_cell(&rem.package),
+                escape_md_cell(&rem.advice)
+            ));
+        }
+        out.push_str("\n</details>\n\n");
+    }
+
+    if let Some(url) = opts.dashboard_url.filter(|u| !u.trim().is_empty()) {
+        out.push_str(&format!(
+            "🔗 [View full scan report in Vexa Cloud]({url})\n\n"
+        ));
+    }
+
+    out.push_str("💻 Catch issues earlier locally with `vexa-sca scan . --sast --secrets` or via MCP (`vexa-sca mcp`).\n");
+    out
+}
+
+/// Formats the GitHub Actions job summary per PRD v2.2 FR-017a with full multi-engine matrix.
+pub fn format_github_step_summary_with_options(
+    scan_result: &ScanResult,
+    remediations: &[RemediationAction],
+    opts: &PrReportOptions<'_>,
+) -> String {
+    let mut out = format_pr_comment_report(scan_result, remediations, opts);
+    out.push_str("\n<details>\n<summary>🔍 <b>Vulnerability Intelligence & Exploit Threat Provenance</b></summary>\n\n");
+    out.push_str("- **Google OSV & GHSA:** Canonical identifiers, fixed release versions, and CWE classifications.\n");
+    out.push_str("- **NVD / CVSS v3.1:** Industry baseline severity metrics and vector strings.\n");
+    out.push_str(
+        "- **FIRST.org EPSS:** Empirical 30-day statistical exploit prediction likelihood.\n",
+    );
+    out.push_str("- **CISA KEV & Exploit Repositories:** Real-world in-the-wild weaponized threats and public PoC code.\n\n");
+    out.push_str("</details>\n");
+    out
 }
 
 /// Formats the GitHub Actions job summary per PRD v2.2 FR-017a.
@@ -288,121 +815,17 @@ pub fn format_github_step_summary(
     remediations: &[RemediationAction],
     quality_gate: Option<&crate::scanner::quality_gate::QualityGateResult>,
 ) -> String {
-    let mut out = String::new();
-    out.push_str("## 🛡️ Vexa SCA Security Report\n\n");
-    let status_badge = match scan_result.scan_status {
-        crate::types::ScanStatus::Pass => "🟢 **PASS**",
-        crate::types::ScanStatus::Fail => "🔴 **FAIL**",
-        crate::types::ScanStatus::Incomplete => "🟡 **INCOMPLETE**",
-    };
-    if let Some(gate) = quality_gate {
-        let gate_badge = if gate.passed {
-            if gate.no_fail && !gate.failure_reasons.is_empty() {
-                "🟢 **PASSED (via --no-fail)**"
-            } else {
-                "🟢 **PASSED**"
-            }
-        } else {
-            "🔴 **FAILED**"
-        };
-        out.push_str(&format!(
-            "**Status:** {} | **Quality Gate:** {} | **Dependencies:** {} | **Active Vulnerabilities:** {}\n\n",
-            status_badge,
-            gate_badge,
-            scan_result.scanned_packages_count,
-            scan_result.vulnerabilities.len()
-        ));
-        if !gate.passed || (gate.no_fail && !gate.failure_reasons.is_empty()) {
-            out.push_str("### 🚦 Quality Gate Details\n\n");
-            for reason in &gate.failure_reasons {
-                out.push_str(&format!("- ✖ {}\n", reason));
-            }
-            out.push('\n');
-        }
-    } else {
-        out.push_str(&format!(
-            "**Status:** {} | **Dependencies:** {} | **Active Vulnerabilities:** {}\n\n",
-            status_badge,
-            scan_result.scanned_packages_count,
-            scan_result.vulnerabilities.len()
-        ));
-    }
-
-    if scan_result.baseline_vulnerabilities_count > 0 {
-        out.push_str(&format!(
-            "- **New Findings (PR):** {}\n- **Baseline Findings:** {}\n\n",
-            scan_result.new_vulnerabilities_count, scan_result.baseline_vulnerabilities_count
-        ));
-    }
-
-    if !scan_result.vulnerabilities.is_empty() {
-        out.push_str("### ⚡ Top Priority Findings\n\n");
-        out.push_str(
-            "| Package | Severity | Threat Signal | Reachability | Priority | Safest Fix |\n",
-        );
-        out.push_str("| :--- | :--- | :--- | :--- | :--- | :--- |\n");
-
-        let mut prioritized = scan_result.vulnerabilities.clone();
-        prioritized.sort_by(|a, b| {
-            b.priority_score
-                .partial_cmp(&a.priority_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        for v in prioritized.iter().take(5) {
-            let fix = v
-                .fixed_in
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "No fix published".to_string());
-            let reach = match &v.reachability {
-                Some(r) if r.status == crate::types::ReachabilityStatus::Reachable => {
-                    "**REACHABLE**"
-                }
-                Some(r) if r.status == crate::types::ReachabilityStatus::Unreachable => {
-                    "NOT_REACHABLE"
-                }
-                _ => "UNKNOWN",
-            };
-            let threat_signal = match v.exploit_maturity {
-                crate::types::ExploitMaturity::ActiveKev => "🚨 **Active KEV**",
-                crate::types::ExploitMaturity::PublicPoc => "🔥 **Public PoC**",
-                crate::types::ExploitMaturity::HighProbability => "⚠️ **High EPSS**",
-                crate::types::ExploitMaturity::Theoretical => "—",
-            };
-            out.push_str(&format!(
-                "| `{}` | `{}` | {} | {} | `{:.1}` | `{}` |\n",
-                v.package,
-                v.severity.level.as_str(),
-                threat_signal,
-                reach,
-                v.priority_score,
-                fix
-            ));
-        }
-        out.push('\n');
-
-        out.push_str("<details>\n<summary>🔍 <b>Vulnerability Intelligence & Exploit Threat Provenance</b></summary>\n\n");
-        out.push_str("- **Google OSV & GHSA:** Canonical identifiers, fixed release versions, and CWE classifications.\n");
-        out.push_str(
-            "- **NVD / CVSS v3.1:** Industry baseline severity metrics and vector strings.\n",
-        );
-        out.push_str(
-            "- **FIRST.org EPSS:** Empirical 30-day statistical exploit prediction likelihood.\n",
-        );
-        out.push_str("- **CISA KEV & Exploit Repositories:** Real-world in-the-wild weaponized threats and public PoC code.\n\n");
-        out.push_str("</details>\n\n");
-    }
-
-    if !remediations.is_empty() {
-        out.push_str("### 🛠️ Recommended Remediation Actions\n\n");
-        for rem in remediations.iter().take(5) {
-            out.push_str(&format!("- **{}**: {}\n", rem.package, rem.advice));
-        }
-        out.push('\n');
-    }
-
-    out
+    format_github_step_summary_with_options(
+        scan_result,
+        remediations,
+        &PrReportOptions {
+            license_audit: None,
+            quality_gate,
+            sast_enabled: false,
+            secrets_enabled: false,
+            dashboard_url: None,
+        },
+    )
 }
 
 /// Emits workflow annotations to stdout/stderr in GitHub Actions per PRD v2.2 FR-017a.
@@ -659,5 +1082,120 @@ mod tests {
         // Zero-code-retention: ensure no source code lines are leaked
         assert!(!json_str.contains("console.log"));
         assert!(!json_str.contains("function "));
+    }
+
+    #[test]
+    fn pr_comment_report_renders_clean_pass_and_skipped_engines() {
+        let scan_result = ScanResult::default();
+        let report = super::format_pr_comment_report(
+            &scan_result,
+            &[],
+            &super::PrReportOptions {
+                license_audit: None,
+                quality_gate: None,
+                sast_enabled: false,
+                secrets_enabled: false,
+                dashboard_url: None,
+            },
+        );
+        assert!(report.contains(super::PR_COMMENT_MARKER));
+        assert!(report.contains("Vexa SCA checks have passed. No issues have been found so far."));
+        assert!(report
+            .contains("| Status | Scan Engine | Critical | High | Medium | Low | Total (0) |"));
+        assert!(
+            report.contains("| ✅ | **Open Source Security (SCA)** | 0 | 0 | 0 | 0 | 0 issues |")
+        );
+        assert!(report.contains("| ⏭️ | **Licenses** | — | — | — | — | skipped |"));
+        assert!(report.contains("| ⏭️ | **Code Security (SAST)** | — | — | — | — | skipped |"));
+        assert!(report.contains("| ⏭️ | **Secrets** | — | — | — | — | skipped |"));
+    }
+
+    #[test]
+    fn pr_comment_report_renders_all_four_engines_and_escapes_markdown() {
+        let mut scan_result = ScanResult {
+            scan_status: crate::types::ScanStatus::Fail,
+            ..Default::default()
+        };
+        scan_result.vulnerabilities.push(VulnerabilityFinding {
+            id: "CVE-2026-0001".to_string(),
+            package: "lodash".to_string(),
+            severity: crate::types::SeverityInfo {
+                level: crate::types::SeverityLevel::High,
+                score: 7.5,
+                vector: None,
+            },
+            ..Default::default()
+        });
+        scan_result
+            .code_findings
+            .push(crate::scanner::sast::CodeFinding {
+                rule_id: "VEXA-SAST-001".to_string(),
+                category: "SAST".to_string(),
+                severity: "CRITICAL".to_string(),
+                title: "OS Command Injection".to_string(),
+                cwe: Some("CWE-78".to_string()),
+                file_path: "src/<evil>|file.js".to_string(),
+                line: 12,
+                matched_sink: Some("exec(cmd)".to_string()),
+                remediation: None,
+            });
+        scan_result
+            .code_findings
+            .push(crate::scanner::sast::CodeFinding {
+                rule_id: "VEXA-SEC-001".to_string(),
+                category: "SECRET".to_string(),
+                severity: "CRITICAL".to_string(),
+                title: "AWS Key".to_string(),
+                cwe: Some("CWE-798".to_string()),
+                file_path: ".env".to_string(),
+                line: 1,
+                matched_sink: Some("AKIA...XXXX".to_string()),
+                remediation: None,
+            });
+
+        let license_audit = crate::licenses::license_scanner::LicenseAudit {
+            summary: crate::licenses::license_scanner::LicenseSummary {
+                total: 2,
+                permissive: 1,
+                weak_copyleft: 1,
+                strong_copyleft: 0,
+                unknown: 0,
+            },
+            results: vec![crate::licenses::license_scanner::PackageLicenseResult {
+                package: "lgpl-lib".to_string(),
+                version: "1.0.0".to_string(),
+                ecosystem: "npm".to_string(),
+                license: "LGPL-2.1".to_string(),
+                category: crate::licenses::license_scanner::LicenseCategory::WeakCopyleft,
+                risk: crate::licenses::license_scanner::LicenseRisk {
+                    level: "MEDIUM".to_string(),
+                    score: 2,
+                },
+                dep_path: None,
+                resolution_note: None,
+            }],
+        };
+
+        let report = super::format_pr_comment_report(
+            &scan_result,
+            &[],
+            &super::PrReportOptions {
+                license_audit: Some(&license_audit),
+                quality_gate: None,
+                sast_enabled: true,
+                secrets_enabled: true,
+                dashboard_url: Some("https://cloud.vexasec.io/scans/123"),
+            },
+        );
+
+        assert!(report.contains("Total (4)"));
+        assert!(
+            report.contains("| ❌ | **Open Source Security (SCA)** | 0 | 1 | 0 | 0 | 1 issues |")
+        );
+        assert!(report.contains("| ⚠️ | **Licenses** | 0 | 0 | 1 | 0 | 1 issues |"));
+        assert!(report.contains("| ❌ | **Code Security (SAST)** | 1 | 0 | 0 | 0 | 1 issues |"));
+        assert!(report.contains("| ❌ | **Secrets** | 1 | 0 | 0 | 0 | 1 issues |"));
+        assert!(report.contains("src/&lt;evil&gt;\\|file.js:12"));
+        assert!(report.contains("https://cloud.vexasec.io/scans/123"));
     }
 }

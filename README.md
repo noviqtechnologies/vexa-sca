@@ -1029,7 +1029,7 @@ vexa-sca scan . --offline-db /var/vexa/bundles/production-2026.11.01.vexadb
 
 ### 13. Official GitHub Action (`noviqtechnologies/vexa-sca`)
 
-Automate Vexa SCA in any GitHub repository using the official composite action:
+Automate Vexa SCA in any GitHub repository (Linux, macOS, or Windows runners) with SARIF Code Scanning upload and a deduplicated multi-engine PR security matrix comment (**Open Source Security**, **Licenses**, **Code Security (SAST)**, and **Secrets**):
 
 ```yaml
 name: Vexa SCA Security Scan
@@ -1042,11 +1042,12 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
   security-events: write
 
 jobs:
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # also supports macos-latest and windows-latest
     steps:
       - uses: actions/checkout@v4
       - name: Run Vexa SCA
@@ -1054,8 +1055,18 @@ jobs:
         with:
           token: ${{ secrets.VEXA_SCA_SECURITY_API_KEY }}
           fail-on: "high"
+          fail-on-licenses: "" # optional: strong-copyleft | weak-copyleft | unknown
+          sast: "true"
+          secrets: "true"
+          comment-pr: "true"
           sarif-file: "results.sarif"
           upload-sarif: "true"
+```
+
+You can also generate the same PR security matrix locally or in custom CI pipelines via `--pr-comment-file`:
+
+```bash
+vexa-sca scan . --sast --secrets --fail-on high --pr-comment-file vexa-sca-pr-report.md
 ```
 
 ---
