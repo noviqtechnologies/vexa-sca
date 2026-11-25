@@ -121,15 +121,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Validate tag matches Cargo.toml version
+      - name: Validate tag matches Cargo.toml and package.json versions
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           CARGO_VERSION=$(grep '^version = ' Cargo.toml | head -n1 | cut -d'"' -f2)
+          NPM_VERSION=$(node -p "require('./package.json').version")
           TAG_VERSION=${GITHUB_REF_NAME#v}
-          echo "Cargo version: $CARGO_VERSION, Tag version: $TAG_VERSION"
+          echo "Cargo version: $CARGO_VERSION, package.json version: $NPM_VERSION, Tag version: $TAG_VERSION"
           if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
-            echo "Error: Git tag $GITHUB_REF_NAME does not match Cargo.toml version $CARGO_VERSION"
+            echo "::error::Git tag $GITHUB_REF_NAME does not match Cargo.toml version $CARGO_VERSION"
+            exit 1
+          fi
+          if [ "$NPM_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Git tag $GITHUB_REF_NAME does not match package.json version $NPM_VERSION"
             exit 1
           fi
 
@@ -253,7 +258,7 @@ jobs:
           git push origin "$MAJOR_TAG" --force
 
   # -------------------------------------------------------------
-  # Job 2b: Publish npm wrapper (npx vexa-sca) & crates.io package
+  # Job 2b: Publish @vexasec/sca npm package & crates.io package
   # -------------------------------------------------------------
   publish-package-registries:
     name: Publish to npm & crates.io
@@ -269,23 +274,70 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Publish @vexasec/sca to npm (if NPM_TOKEN configured)
-        if: env.NODE_AUTH_TOKEN != ''
+      - name: Smoke-test @vexasec/sca npm tarball against published GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TARBALL=$(npm pack --silent)
+          SMOKE_DIR=$(mktemp -d)
+          HOME_DIR=$(mktemp -d)
+          trap 'rm -rf "$SMOKE_DIR" "$HOME_DIR" "$TARBALL"' EXIT
+          tar -xzf "$TARBALL" -C "$SMOKE_DIR"
+          OUT=$(HOME="$HOME_DIR" node "$SMOKE_DIR/package/bin/vexa-sca.js" --version)
+          echo "npm tarball smoke-test output: $OUT"
+          echo "$OUT" | grep -F "$PKG_VERSION"
+
+      - name: Publish @vexasec/sca to npm
+        shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+          NPM_TRUSTED_PUBLISHING: ${{ vars.NPM_TRUSTED_PUBLISHING }}
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+
+          if [ -z "${NODE_AUTH_TOKEN:-}" ] && [ "${NPM_TRUSTED_PUBLISHING:-false}" != "true" ]; then
+            echo "::notice::Skipping npm publish: configure secrets.NPM_TOKEN or set vars.NPM_TRUSTED_PUBLISHING=true for OIDC Trusted Publishing."
+            exit 0
+          fi
+
+          if npm view "${PKG_NAME}@${PKG_VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::${PKG_NAME}@${PKG_VERSION} is already published on npm; skipping."
+            exit 0
+          fi
+
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            # Unset NODE_AUTH_TOKEN so npm uses OIDC Trusted Publishing cleanly
+            unset NODE_AUTH_TOKEN
+          fi
+
+          npm publish --provenance --access public
+
+      - name: Check crates.io publish credentials
+        id: crates-auth
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -n "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping crates.io publish: secrets.CARGO_REGISTRY_TOKEN is not configured."
+          fi
 
       - name: Set up Rust toolchain
-        if: env.CARGO_REGISTRY_TOKEN != ''
+        if: steps.crates-auth.outputs.enabled == 'true'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: "1.99.1"
 
-      - name: Publish to crates.io (if CARGO_REGISTRY_TOKEN configured)
-        if: env.CARGO_REGISTRY_TOKEN != ''
+      - name: Publish to crates.io
+        if: steps.crates-auth.outputs.enabled == 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked
