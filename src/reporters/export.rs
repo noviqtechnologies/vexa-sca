@@ -36,34 +36,40 @@ pub fn format_json_report(
                 .unwrap_or(false)
         })
         .count();
+    let unknown_reachability_count = scan_result
+        .vulnerabilities
+        .iter()
+        .filter(|v| {
+            v.reachability
+                .as_ref()
+                .map(|r| r.status == ReachabilityStatus::Unknown)
+                .unwrap_or(true)
+        })
+        .count();
 
-    let signal_matched_count = scan_result
-        .vulnerabilities
-        .iter()
-        .filter(|v| {
-            v.usage_signal == UsageSignal::ImportedSource
-                || v.usage_signal == UsageSignal::ReferencedConfigOrScript
-                || v.reachability
-                    .as_ref()
-                    .map(|r| r.status == ReachabilityStatus::Reachable)
-                    .unwrap_or(false)
-        })
-        .count();
-    let no_signal_count = scan_result
-        .vulnerabilities
-        .iter()
-        .filter(|v| {
-            v.usage_signal == UsageSignal::NoReferenceFoundWithinScope
-                || v.reachability
-                    .as_ref()
-                    .map(|r| r.status == ReachabilityStatus::Unreachable)
-                    .unwrap_or(false)
-        })
-        .count();
-    let unknown_signal_count = scan_result
-        .vulnerabilities
-        .len()
-        .saturating_sub(signal_matched_count + no_signal_count);
+    let mut signal_matched_count = 0usize;
+    let mut no_signal_count = 0usize;
+    let mut unknown_signal_count = 0usize;
+    for v in &scan_result.vulnerabilities {
+        let is_matched = v.usage_signal == UsageSignal::ImportedSource
+            || v.usage_signal == UsageSignal::ReferencedConfigOrScript
+            || v.reachability
+                .as_ref()
+                .map(|r| r.status == ReachabilityStatus::Reachable)
+                .unwrap_or(false);
+        if is_matched {
+            signal_matched_count += 1;
+        } else if v.usage_signal == UsageSignal::NoReferenceFoundWithinScope
+            || v.reachability
+                .as_ref()
+                .map(|r| r.status == ReachabilityStatus::Unreachable)
+                .unwrap_or(false)
+        {
+            no_signal_count += 1;
+        } else {
+            unknown_signal_count += 1;
+        }
+    }
 
     let data = serde_json::json!({
         "meta": {
@@ -79,6 +85,7 @@ pub fn format_json_report(
             "reachabilitySummary": {
                 "reachable": reachable_count,
                 "unreachable": unreachable_count,
+                "unknown": unknown_reachability_count,
             },
             "usageSignalsSummary": {
                 "signalMatched": signal_matched_count,
@@ -1210,5 +1217,50 @@ mod tests {
         assert!(report.contains("| ❌ | **Secrets** | 1 | 0 | 0 | 0 | 1 issues |"));
         assert!(report.contains("src/&lt;evil&gt;\\|file.js:12"));
         assert!(report.contains("https://cloud.vexasec.io/scans/123"));
+    }
+
+    #[test]
+    fn json_report_reachability_summary_preserves_unknown_count() {
+        use crate::types::{ReachabilityResult, ReachabilityStatus};
+
+        let mk = |id: &str, status: Option<ReachabilityStatus>| VulnerabilityFinding {
+            id: id.to_string(),
+            package: "pkg".to_string(),
+            reachability: status.map(|s| ReachabilityResult {
+                status: s,
+                is_direct_call: matches!(s, ReachabilityStatus::Reachable),
+                call_sites: vec![],
+                target_functions: vec![],
+                reason_code: None,
+                analyzer_version: "1.8.0".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let scan_result = ScanResult {
+            scanned_packages_count: 10,
+            vulnerabilities_count: 4,
+            vulnerabilities: vec![
+                mk("CVE-1", Some(ReachabilityStatus::Reachable)),
+                mk("CVE-2", Some(ReachabilityStatus::Unreachable)),
+                mk("CVE-3", Some(ReachabilityStatus::Unknown)),
+                mk("CVE-4", None),
+            ],
+            ..Default::default()
+        };
+
+        let json_str = super::format_json_report(&scan_result, &[], &[], None, None, None);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json_str).expect("json report must parse");
+
+        assert_eq!(parsed["summary"]["reachabilitySummary"]["reachable"], 1);
+        assert_eq!(parsed["summary"]["reachabilitySummary"]["unreachable"], 1);
+        assert_eq!(parsed["summary"]["reachabilitySummary"]["unknown"], 2);
+        assert_eq!(
+            parsed["summary"]["usageSignalsSummary"]["signalMatched"].as_u64().unwrap()
+                + parsed["summary"]["usageSignalsSummary"]["noSignalObserved"].as_u64().unwrap()
+                + parsed["summary"]["usageSignalsSummary"]["unknown"].as_u64().unwrap(),
+            4
+        );
     }
 }
