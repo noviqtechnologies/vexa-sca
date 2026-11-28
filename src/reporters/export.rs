@@ -461,10 +461,24 @@ pub fn format_pr_comment_report(
         secret_counts.add_str_severity(&f.severity);
     }
 
+    // 4. Aggregate Supply-Chain & AI-Native findings
+    let mut supply_chain_counts = SeverityCounts::default();
+    for sc in &scan_result.supply_chain_findings {
+        match sc.severity {
+            crate::types::SeverityLevel::Critical => supply_chain_counts.critical += 1,
+            crate::types::SeverityLevel::High => supply_chain_counts.high += 1,
+            crate::types::SeverityLevel::Medium => supply_chain_counts.medium += 1,
+            crate::types::SeverityLevel::Low | crate::types::SeverityLevel::Unknown => {
+                supply_chain_counts.low += 1
+            }
+        }
+    }
+
     let show_sast = opts.sast_enabled || !sast_findings.is_empty();
     let show_secrets = opts.secrets_enabled || !secret_findings.is_empty();
 
     let total_all_issues = sca_counts.total()
+        + supply_chain_counts.total()
         + license_counts.map(|c| c.total()).unwrap_or(0)
         + if show_sast { sast_counts.total() } else { 0 }
         + if show_secrets {
@@ -531,6 +545,29 @@ pub fn format_pr_comment_report(
         "Open Source Security (SCA)",
         Some(sca_counts),
         sca_total_cell,
+    ));
+
+    let sc_failed = opts
+        .quality_gate
+        .map(|g| {
+            !g.passed
+                && g.failure_reasons
+                    .iter()
+                    .any(|r| r.contains("Supply-Chain") || r.contains("AI-Native"))
+        })
+        .unwrap_or(supply_chain_counts.total() > 0 && !no_fail);
+    let sc_status = if sc_failed {
+        "❌"
+    } else if supply_chain_counts.total() > 0 {
+        "⚠️"
+    } else {
+        "✅"
+    };
+    out.push_str(&format_engine_row(
+        sc_status,
+        "Supply-Chain & AI Security",
+        Some(supply_chain_counts),
+        format!("{} findings", supply_chain_counts.total()),
     ));
 
     let license_failed = opts
@@ -633,6 +670,38 @@ pub fn format_pr_comment_report(
             }
             out.push('\n');
         }
+    }
+
+    // Collapsible details: Supply-Chain & AI-Native Security
+    if !scan_result.supply_chain_findings.is_empty() {
+        out.push_str(&format!(
+            "<details>\n<summary>⛓️ <b>Supply-Chain & AI-Native Security Details ({} finding(s))</b></summary>\n\n",
+            scan_result.supply_chain_findings.len()
+        ));
+        out.push_str("| Severity | Rule | Signal | Location | Description |\n");
+        out.push_str("| :---: | :--- | :--- | :--- | :--- |\n");
+        for sc in scan_result.supply_chain_findings.iter().take(20) {
+            let loc = match (&sc.file_path, sc.line) {
+                (Some(p), Some(l)) => format!("{}:{}", p, l),
+                (Some(p), None) => p.clone(),
+                _ => "—".to_string(),
+            };
+            out.push_str(&format!(
+                "| `{}` | `{}` | `{}` | `{}` | {} |\n",
+                escape_md_cell(sc.severity.as_str()),
+                escape_md_cell(&sc.rule_id),
+                escape_md_cell(&sc.signal_name),
+                escape_md_cell(&loc),
+                escape_md_cell(&sc.message),
+            ));
+        }
+        if scan_result.supply_chain_findings.len() > 20 {
+            out.push_str(&format!(
+                "\n*...and {} more supply-chain finding(s).*\n",
+                scan_result.supply_chain_findings.len() - 20
+            ));
+        }
+        out.push_str("\n</details>\n\n");
     }
 
     // Collapsible details: Open Source Security
@@ -1212,11 +1281,52 @@ mod tests {
         assert!(
             report.contains("| ❌ | **Open Source Security (SCA)** | 0 | 1 | 0 | 0 | 1 issues |")
         );
+        assert!(
+            report.contains("| ✅ | **Supply-Chain & AI Security** | 0 | 0 | 0 | 0 | 0 findings |")
+        );
         assert!(report.contains("| ⚠️ | **Licenses** | 0 | 0 | 1 | 0 | 1 issues |"));
         assert!(report.contains("| ❌ | **Code Security (SAST)** | 1 | 0 | 0 | 0 | 1 issues |"));
         assert!(report.contains("| ❌ | **Secrets** | 1 | 0 | 0 | 0 | 1 issues |"));
         assert!(report.contains("src/&lt;evil&gt;\\|file.js:12"));
         assert!(report.contains("https://cloud.vexasec.io/scans/123"));
+    }
+
+    #[test]
+    fn pr_comment_report_renders_supply_chain_findings_and_collapsible_details() {
+        use crate::supply_chain::local_analyzer::SupplyChainFinding;
+
+        let mut scan_result = ScanResult {
+            scan_status: crate::types::ScanStatus::Fail,
+            ..Default::default()
+        };
+        scan_result.supply_chain_findings.push(SupplyChainFinding {
+            rule_id: "SC-015".to_string(),
+            signal_name: "mcp_unsafe_tool_config".to_string(),
+            severity: crate::types::SeverityLevel::High,
+            message: "Unpinned MCP server".to_string(),
+            file_path: Some(".mcp.json".to_string()),
+            line: Some(5),
+            snippet: None,
+        });
+
+        let report = super::format_pr_comment_report(
+            &scan_result,
+            &[],
+            &super::PrReportOptions {
+                license_audit: None,
+                quality_gate: None,
+                sast_enabled: false,
+                secrets_enabled: false,
+                dashboard_url: None,
+            },
+        );
+
+        assert!(report.contains("Total (1)"));
+        assert!(
+            report.contains("| ❌ | **Supply-Chain & AI Security** | 0 | 1 | 0 | 0 | 1 findings |")
+        );
+        assert!(report.contains("Supply-Chain & AI-Native Security Details (1 finding(s))"));
+        assert!(report.contains("| `HIGH` | `SC-015` | `mcp_unsafe_tool_config` | `.mcp.json:5` | Unpinned MCP server |"));
     }
 
     #[test]

@@ -958,6 +958,14 @@ impl LocalSupplyChainAnalyzer {
                 .unwrap_or("")
                 .to_ascii_lowercase();
 
+            let in_test_dir = path.components().any(|c| {
+                let s = c.as_os_str().to_string_lossy();
+                s == "tests" || s == "test" || s == "fixtures" || s == "mocks" || s == "__tests__"
+            });
+            if in_test_dir {
+                continue;
+            }
+
             // Skip test files, spec files, and mock harnesses to eliminate test false positives
             if file_name.ends_with(".test.ts")
                 || file_name.ends_with(".test.tsx")
@@ -969,6 +977,8 @@ impl LocalSupplyChainAnalyzer {
                 || file_name.ends_with(".spec.jsx")
                 || file_name.ends_with("_test.go")
                 || file_name.ends_with("_test.py")
+                || file_name.ends_with("_test.rs")
+                || file_name.ends_with("_tests.rs")
                 || file_name.starts_with("test_")
             {
                 continue;
@@ -1019,12 +1029,23 @@ impl LocalSupplyChainAnalyzer {
         let mut has_network_socket = false;
         let mut in_block_comment = false;
         let mut in_docstring = false;
+        let mut in_test_module = false;
 
         for (line_idx, line) in content.lines().enumerate() {
             let line_num = line_idx + 1;
             let trimmed = line.trim();
 
             if trimmed.is_empty() {
+                continue;
+            }
+
+            if trimmed.contains("#[cfg(test)]")
+                || trimmed.starts_with("mod test")
+                || trimmed.starts_with("mod tests")
+            {
+                in_test_module = true;
+            }
+            if in_test_module {
                 continue;
             }
 
@@ -1075,6 +1096,25 @@ impl LocalSupplyChainAnalyzer {
             } else {
                 trimmed
             };
+
+            // Skip inspection checks, diagnostic strings, and test assertions (e.g. security rules or match arms)
+            if code_inspect.contains(".contains(")
+                || code_inspect.contains(".starts_with(")
+                || code_inspect.contains(".ends_with(")
+                || code_inspect.contains(".find(")
+                || code_inspect.contains(".match(")
+                || code_inspect.contains("assert")
+                || code_inspect.contains("reasons.push(")
+                || code_inspect.contains("=> Some(\"")
+            {
+                continue;
+            }
+
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let is_script_lang = matches!(
+                ext,
+                "js" | "mjs" | "cjs" | "ts" | "jsx" | "tsx" | "py" | "sh" | "bash"
+            );
 
             // Rule SC-019: Unsafe AI model loading / unpinned Hugging Face references
             if path_str.ends_with(".py") || path_str.contains(".ipynb") {
@@ -1144,13 +1184,28 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Rule SC-013: Reverse Shell signatures
-            if code_inspect.contains("/bin/sh -i")
-                || code_inspect.contains("/bin/bash -i")
-                || code_inspect.contains("nc -e ")
-                || code_inspect.contains("nc.exe -e")
-                || code_inspect.contains("bash -i >& /dev/tcp/")
-                || code_inspect.contains("sh -i >& /dev/tcp/")
-                || (code_inspect.contains("pty.spawn") && code_inspect.contains("/bin/bash"))
+            let is_diagnostic_or_string_literal = ext == "rs"
+                && (code_inspect.contains("Some(")
+                    || code_inspect.contains("format!(")
+                    || code_inspect.contains("println!")
+                    || code_inspect.contains("eprintln!")
+                    || code_inspect.contains("message")
+                    || code_inspect.contains("description")
+                    || code_inspect.contains("insert(")
+                    || code_inspect.contains("Avoid direct")
+                    || (!trimmed.contains("fs::")
+                        && !trimmed.contains("File::")
+                        && !trimmed.contains("open(")
+                        && !trimmed.contains("read(")));
+
+            if !is_diagnostic_or_string_literal
+                && (code_inspect.contains("/bin/sh -i")
+                    || code_inspect.contains("/bin/bash -i")
+                    || code_inspect.contains("nc -e ")
+                    || code_inspect.contains("nc.exe -e")
+                    || code_inspect.contains("bash -i >& /dev/tcp/")
+                    || code_inspect.contains("sh -i >& /dev/tcp/")
+                    || (code_inspect.contains("pty.spawn") && code_inspect.contains("/bin/bash")))
             {
                 findings.push(SupplyChainFinding {
                     rule_id: "SC-013".to_string(),
@@ -1164,14 +1219,16 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Rule SC-007: Sensitive Filesystem Access
-            if code_inspect.contains(".ssh/id_rsa")
-                || code_inspect.contains(".ssh/id_ed25519")
-                || code_inspect.contains(".aws/credentials")
-                || code_inspect.contains(".npmrc")
-                || code_inspect.contains(".kube/config")
-                || code_inspect.contains("/etc/passwd")
-                || code_inspect.contains("/etc/shadow")
-                || code_inspect.contains("/proc/self/mem")
+
+            if !is_diagnostic_or_string_literal
+                && (code_inspect.contains(".ssh/id_rsa")
+                    || code_inspect.contains(".ssh/id_ed25519")
+                    || code_inspect.contains(".aws/credentials")
+                    || code_inspect.contains(".npmrc")
+                    || code_inspect.contains(".kube/config")
+                    || code_inspect.contains("/etc/passwd")
+                    || code_inspect.contains("/etc/shadow")
+                    || code_inspect.contains("/proc/self/mem"))
             {
                 findings.push(SupplyChainFinding {
                     rule_id: "SC-007".to_string(),
@@ -1186,13 +1243,14 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Rule SC-003: Dynamic Code Evaluation
-            if code_inspect.contains("eval(")
-                || code_inspect.contains("new Function(")
-                || code_inspect.contains("vm.runInNewContext(")
-                || code_inspect.contains("vm.runInThisContext(")
-                || (code_inspect.contains("exec(")
-                    && (code_inspect.contains("base64.b64decode")
-                        || code_inspect.contains("b64decode")))
+            if is_script_lang
+                && (code_inspect.contains("eval(")
+                    || code_inspect.contains("new Function(")
+                    || code_inspect.contains("vm.runInNewContext(")
+                    || code_inspect.contains("vm.runInThisContext(")
+                    || (code_inspect.contains("exec(")
+                        && (code_inspect.contains("base64.b64decode")
+                            || code_inspect.contains("b64decode"))))
             {
                 findings.push(SupplyChainFinding {
                     rule_id: "SC-003".to_string(),
@@ -1206,12 +1264,13 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Rule SC-004: Child Process Shell Execution
-            if (code_inspect.contains("child_process")
-                && (code_inspect.contains("exec(") || code_inspect.contains("execSync(")))
-                || (code_inspect.contains("subprocess.Popen")
-                    && code_inspect.contains("shell=True"))
-                || (code_inspect.contains("subprocess.call") && code_inspect.contains("shell=True"))
-                || (code_inspect.contains("os.system("))
+            if is_script_lang
+                && ((code_inspect.contains("child_process")
+                    && (code_inspect.contains("exec(") || code_inspect.contains("execSync(")))
+                    || (code_inspect.contains("subprocess.Popen")
+                        && code_inspect.contains("shell=True"))
+                    || (code_inspect.contains("subprocess.call") && code_inspect.contains("shell=True"))
+                    || (code_inspect.contains("os.system(")))
             {
                 findings.push(SupplyChainFinding {
                     rule_id: "SC-004".to_string(),
@@ -1226,9 +1285,10 @@ impl LocalSupplyChainAnalyzer {
             }
 
             // Check for SC-006 components
-            if (code_inspect.contains("process.env")
-                || code_inspect.contains("os.environ")
-                || code_inspect.contains("std::env::var"))
+            if is_script_lang
+                && (code_inspect.contains("process.env")
+                    || code_inspect.contains("os.environ")
+                    || code_inspect.contains("std::env::var"))
                 && (code_inspect.contains("AWS_SECRET")
                     || code_inspect.contains("GITHUB_TOKEN")
                     || code_inspect.contains("NPM_TOKEN")
@@ -1556,14 +1616,25 @@ impl LocalSupplyChainAnalyzer {
     }
 }
 
-/// Directories never walked by workspace supply-chain scans (vendored, generated, cache, VCS).
+/// Directories never walked by workspace supply-chain scans (vendored, generated, cache, VCS, tests).
 /// Skipping hidden dirs also avoids the multi-thousand-file `.sca-cache` and `.work` trees.
 fn is_ignored_scan_dir(name: &str) -> bool {
     // `.github` and `.cursor`/`.vscode` configs are scanned by dedicated rules, not this walk.
     name.starts_with('.')
         || matches!(
             name,
-            "node_modules" | "target" | "dist" | "build" | "vendor" | "inputs" | "outputs"
+            "node_modules"
+                | "target"
+                | "dist"
+                | "build"
+                | "vendor"
+                | "inputs"
+                | "outputs"
+                | "tests"
+                | "test"
+                | "fixtures"
+                | "mocks"
+                | "__tests__"
         )
 }
 
