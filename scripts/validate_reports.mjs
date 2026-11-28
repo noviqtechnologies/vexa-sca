@@ -45,10 +45,10 @@ const schemas = {
     draft: 'draft-04'
   },
   cyclonedx: {
-    name: 'CycloneDX 1.5',
-    file: path.join(rootDir, 'tests', 'schemas', 'bom-1.5.schema.json'),
-    expectedSha256: '2d956c1d05c092695457a91f3b5c57c749793c013ec224a0935807cfc8ae4480',
-    sourceUrl: 'https://raw.githubusercontent.com/CycloneDX/specification/master/schema/bom-1.5.schema.json',
+    name: 'CycloneDX 1.6',
+    file: path.join(rootDir, 'tests', 'schemas', 'bom-1.6.schema.json'),
+    expectedSha256: '18f57f7482593bad9f21b4feed09084640cbeff419d62ad5090c5ceccca5b37d',
+    sourceUrl: 'https://raw.githubusercontent.com/CycloneDX/specification/master/schema/bom-1.6.schema.json',
     draft: 'draft-07'
   },
   spdx: {
@@ -232,7 +232,7 @@ const mdLines = [
   '| Specification | Standard Version | Official Source | Pinned Schema SHA-256 |',
   '|---|---|---|---|',
   `| **SARIF** | 2.1.0 | [OASIS Spec](${schemas.sarif.sourceUrl}) | \`${schemas.sarif.expectedSha256}\` |`,
-  `| **CycloneDX** | 1.5 JSON | [CycloneDX Specification](${schemas.cyclonedx.sourceUrl}) | \`${schemas.cyclonedx.expectedSha256}\` |`,
+  `| **CycloneDX** | 1.6 JSON | [CycloneDX Specification](${schemas.cyclonedx.sourceUrl}) | \`${schemas.cyclonedx.expectedSha256}\` |`,
   `| **SPDX** | 2.3 JSON | [SPDX 2.3 Specification](${schemas.spdx.sourceUrl}) | \`${schemas.spdx.expectedSha256}\` |`,
   '',
   '## Validation Test Results',
@@ -259,5 +259,5 @@ if (!allValid) {
   console.error('\n✖ One or more reports failed schema validation!');
   process.exit(1);
 } else {
-  console.log('\n✔ All generated SARIF 2.1.0, CycloneDX 1.5, and SPDX 2.3 reports conform strictly to pinned official schemas with 0 errors.');
+  console.log('\n✔ All generated SARIF 2.1.0, CycloneDX 1.6, and SPDX 2.3 reports conform strictly to pinned official schemas with 0 errors.');
 }

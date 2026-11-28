@@ -39,6 +39,14 @@ inputs:
     description: 'Optional external SARIF v2.1.0 file to ingest with automatic code snippet stripping'
     required: false
     default: ''
+  offline-db:
+    description: 'Optional path to Ed25519-signed .vexadb offline advisory bundle for zero-network CI scans'
+    required: false
+    default: ''
+  cache:
+    description: 'Cache Vexa advisory/EPSS/KEV data across CI runs for sub-10s scans (true/false)'
+    required: false
+    default: 'true'
   sarif-file:
     description: 'Output path for OASIS SARIF v2.1.0 security report'
     required: false
@@ -93,6 +101,7 @@ runs:
         INPUT_FAIL_ON_REACHABLE: ${{ inputs.fail-on-reachable }}
         INPUT_SAST: ${{ inputs.sast }}
         INPUT_SECRETS: ${{ inputs.secrets }}
+        INPUT_CACHE: ${{ inputs.cache }}
         INPUT_UPLOAD_SARIF: ${{ inputs.upload-sarif }}
         INPUT_UPLOAD_FACTS: ${{ inputs.upload-facts }}
         INPUT_COMMENT_PR: ${{ inputs.comment-pr }}
@@ -127,6 +136,15 @@ runs:
           printf 'VEXA_ORG=%s\n' "${INPUT_ORG}" >> "$GITHUB_ENV"
           printf 'VEXA_ORG_SLUG=%s\n' "${INPUT_ORG}" >> "$GITHUB_ENV"
         fi
+
+    - name: Cache Vexa Advisory Intelligence
+      if: inputs.cache == 'true' && inputs.offline-db == ''
+      uses: actions/cache@5a3ec84eff668545956fd18022155c479e4e2c89 # v4.2.3
+      with:
+        path: ${{ runner.temp }}/vexa-cache
+        key: vexa-sca-intel-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock', '**/uv.lock', '**/poetry.lock', '**/requirements.txt', '**/Cargo.lock', '**/go.sum', '**/pom.xml') }}
+        restore-keys: |
+          vexa-sca-intel-${{ runner.os }}-
 
     - name: Build Vexa SCA from Source
       if: inputs.version == 'source'
@@ -182,24 +200,59 @@ runs:
         else
           DOWNLOAD_URL="https://github.com/noviqtechnologies/vexa-sca/releases/download/${VERSION}/${ASSET}"
         fi
-        echo "Attempting to download prebuilt Vexa SCA binary from $DOWNLOAD_URL..."
+        CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
+        ARCHIVE_PATH="${RUNNER_TEMP}/${ASSET}"
+        CHECKSUM_PATH="${RUNNER_TEMP}/${ASSET}.sha256"
+        echo "Downloading prebuilt Vexa SCA binary from $DOWNLOAD_URL..."
 
         SUCCESS=false
-        if [ "$OS" = "Windows" ]; then
-          if curl -sSL -f -o "${RUNNER_TEMP}/${ASSET}" "$DOWNLOAD_URL"; then
+        if curl -sSL -f -o "$ARCHIVE_PATH" "$DOWNLOAD_URL"; then
+          if ! curl -sSL -f -o "$CHECKSUM_PATH" "$CHECKSUM_URL"; then
+            echo "::error::Failed to download required SHA-256 checksum ($CHECKSUM_URL); failing closed."
+            exit 1
+          fi
+          EXPECTED_HASH=$(awk '{print $1}' "$CHECKSUM_PATH" | tr '[:upper:]' '[:lower:]' | head -n 1)
+          if ! printf '%s' "$EXPECTED_HASH" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::Invalid SHA-256 digest in ${ASSET}.sha256; failing closed."
+            exit 1
+          fi
+
+          if [ "$OS" = "Windows" ]; then
+            ACTUAL_HASH=$(powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath '${ARCHIVE_PATH}').Hash.ToLowerInvariant()" | tr -d '\r\n')
+          elif command -v sha256sum &> /dev/null; then
+            ACTUAL_HASH=$(sha256sum "$ARCHIVE_PATH" | awk '{print $1}' | tr '[:upper:]' '[:lower:]')
+          elif command -v shasum &> /dev/null; then
+            ACTUAL_HASH=$(shasum -a 256 "$ARCHIVE_PATH" | awk '{print $1}' | tr '[:upper:]' '[:lower:]')
+          elif command -v openssl &> /dev/null; then
+            ACTUAL_HASH=$(openssl dgst -sha256 "$ARCHIVE_PATH" | awk '{print tolower($NF)}')
+          else
+            echo "::error::No SHA-256 verification tool available on runner; failing closed."
+            exit 1
+          fi
+
+          if [ "$ACTUAL_HASH" != "$EXPECTED_HASH" ]; then
+            echo "::error::SHA-256 verification failed for ${ASSET}! Expected ${EXPECTED_HASH}, got ${ACTUAL_HASH}."
+            rm -f "$ARCHIVE_PATH" "$CHECKSUM_PATH"
+            exit 1
+          fi
+          echo "SHA-256 verified (${ACTUAL_HASH})."
+
+          if [ "$OS" = "Windows" ]; then
             if command -v unzip &> /dev/null; then
-              unzip -q -o "${RUNNER_TEMP}/${ASSET}" -d "$INSTALL_DIR" && SUCCESS=true
+              unzip -q -o "$ARCHIVE_PATH" -d "$INSTALL_DIR" && SUCCESS=true
             else
-              powershell -NoProfile -Command "Expand-Archive -LiteralPath '${RUNNER_TEMP}/${ASSET}' -DestinationPath '${INSTALL_DIR}' -Force" && SUCCESS=true
+              powershell -NoProfile -Command "Expand-Archive -LiteralPath '${ARCHIVE_PATH}' -DestinationPath '${INSTALL_DIR}' -Force" && SUCCESS=true
+            fi
+          else
+            if tar -xzf "$ARCHIVE_PATH" -C "$INSTALL_DIR" 2>/dev/null; then
+              chmod +x "$INSTALL_DIR/vexa-sca" 2>/dev/null || true
+              chmod +x "$INSTALL_DIR/vexa" 2>/dev/null || true
+              chmod +x "$INSTALL_DIR/sca" 2>/dev/null || true
+              SUCCESS=true
             fi
           fi
         else
-          if curl -sSL -f "$DOWNLOAD_URL" | tar -xz -C "$INSTALL_DIR" 2>/dev/null; then
-            chmod +x "$INSTALL_DIR/vexa-sca" 2>/dev/null || true
-            chmod +x "$INSTALL_DIR/vexa" 2>/dev/null || true
-            chmod +x "$INSTALL_DIR/sca" 2>/dev/null || true
-            SUCCESS=true
-          fi
+          echo "::warning::Release asset download failed for $DOWNLOAD_URL. Proceeding to fallback launchers."
         fi
 
         if [ "$SUCCESS" = "true" ]; then
@@ -222,7 +275,10 @@ runs:
         INPUT_SAST: ${{ inputs.sast }}
         INPUT_SECRETS: ${{ inputs.secrets }}
         INPUT_INGEST_SARIF: ${{ inputs.ingest-sarif }}
+        INPUT_OFFLINE_DB: ${{ inputs.offline-db }}
+        INPUT_CACHE: ${{ inputs.cache }}
         INPUT_UPLOAD_FACTS: ${{ inputs.upload-facts }}
+        VEXA_CACHE_DIR: ${{ runner.temp }}/vexa-cache
         INPUT_API_URL: ${{ inputs.api-url }}
         INPUT_ORG: ${{ inputs.org }}
         INPUT_PROJECT: ${{ inputs.project }}
@@ -266,6 +322,10 @@ runs:
 
         if [ -n "${INPUT_INGEST_SARIF}" ]; then
           ARGS+=("--ingest-sarif" "${INPUT_INGEST_SARIF}")
+        fi
+
+        if [ -n "${INPUT_OFFLINE_DB}" ]; then
+          ARGS+=("--offline-db" "${INPUT_OFFLINE_DB}")
         fi
 
         if [ "${INPUT_UPLOAD_FACTS}" = "true" ]; then

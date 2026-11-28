@@ -47,6 +47,8 @@ pub struct ScanOptions {
     pub is_ci_profile: bool,
     /// Maximum number of source files to analyze for AST reachability (0 for unlimited).
     pub max_source_files: Option<usize>,
+    /// Optional path to verified Ed25519-signed offline advisory bundle (.vexadb).
+    pub offline_db: Option<PathBuf>,
 }
 
 impl Default for ScanOptions {
@@ -63,6 +65,7 @@ impl Default for ScanOptions {
             baseline_file: None,
             is_ci_profile: false,
             max_source_files: None,
+            offline_db: None,
         }
     }
 }
@@ -162,8 +165,12 @@ pub async fn scan_project(
         .collect();
     let multiple_project_scopes = distinct_project_dirs.len() > 1;
 
-    // 2. Scan graph for vulnerabilities
-    let scanner = VulnScanner::new(None);
+    // 2. Scan graph for vulnerabilities (using verified offline .vexadb bundle if provided)
+    let scanner = if let Some(ref db_path) = options.offline_db {
+        VulnScanner::with_offline_bundle(db_path)?
+    } else {
+        VulnScanner::new(None)
+    };
     let mut raw_scan_result = scanner.scan_graph(&detection.graph).await?;
 
     // 3. Apply Policy Suppression Engine
@@ -595,7 +602,7 @@ mod tests {
 
         let parsed: serde_json::Value = serde_json::from_str(&cdx_json).unwrap();
         assert_eq!(parsed["bomFormat"], "CycloneDX");
-        assert_eq!(parsed["specVersion"], "1.5");
+        assert_eq!(parsed["specVersion"], "1.6");
         assert!(parsed["components"].as_array().unwrap().len() >= 2);
     }
 

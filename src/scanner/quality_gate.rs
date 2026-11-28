@@ -221,6 +221,23 @@ impl QualityGate {
             }
         }
 
+        // 7. Supply-Chain & AI-Native Security Gate (MCP configs, AI instructions, model artifacts, workflows)
+        if !scan_result.supply_chain_findings.is_empty() && options.fail_on_licenses.is_none() {
+            let threshold = options.fail_on_severity.unwrap_or(SeverityLevel::High);
+            let violating_sc_findings = scan_result
+                .supply_chain_findings
+                .iter()
+                .filter(|sc| sc.severity.weight() >= threshold.weight())
+                .count();
+            if violating_sc_findings > 0 {
+                failure_reasons.push(format!(
+                    "Found {} Supply-Chain / AI-Native security findings at or above '{}' threshold",
+                    violating_sc_findings,
+                    threshold.as_str()
+                ));
+            }
+        }
+
         let passed = if options.no_fail {
             true
         } else {
@@ -373,5 +390,60 @@ mod tests {
             "Ordinary fail_on high must evaluate all high findings"
         );
         assert!(res.failure_reasons[0].contains("2 vulnerabilities at or above 'HIGH' threshold"));
+    }
+
+    #[test]
+    fn test_supply_chain_findings_respect_severity_gate() {
+        use crate::supply_chain::local_analyzer::SupplyChainFinding;
+
+        let scan_result = ScanResult {
+            supply_chain_findings: vec![
+                SupplyChainFinding {
+                    rule_id: "SC-015".to_string(),
+                    signal_name: "mcp_unsafe_tool_config".to_string(),
+                    severity: SeverityLevel::High,
+                    message: "Unpinned npx -y MCP server".to_string(),
+                    file_path: Some(".mcp.json".to_string()),
+                    line: None,
+                    snippet: None,
+                },
+                SupplyChainFinding {
+                    rule_id: "SC-014".to_string(),
+                    signal_name: "github_actions_unpinned_ref".to_string(),
+                    severity: SeverityLevel::Medium,
+                    message: "Unpinned GitHub Action".to_string(),
+                    file_path: Some(".github/workflows/ci.yml".to_string()),
+                    line: Some(10),
+                    snippet: None,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let high_opts = QualityGateOptions {
+            fail_on_severity: Some(SeverityLevel::High),
+            ..Default::default()
+        };
+        let high_res = QualityGate::evaluate(&scan_result, None, &high_opts);
+        assert!(!high_res.passed);
+        assert!(high_res.failure_reasons[0]
+            .contains("1 Supply-Chain / AI-Native security findings at or above 'HIGH' threshold"));
+
+        let crit_opts = QualityGateOptions {
+            fail_on_severity: Some(SeverityLevel::Critical),
+            ..Default::default()
+        };
+        let crit_res = QualityGate::evaluate(&scan_result, None, &crit_opts);
+        assert!(crit_res.passed);
+
+        let med_opts = QualityGateOptions {
+            fail_on_severity: Some(SeverityLevel::Medium),
+            ..Default::default()
+        };
+        let med_res = QualityGate::evaluate(&scan_result, None, &med_opts);
+        assert!(!med_res.passed);
+        assert!(med_res.failure_reasons[0].contains(
+            "2 Supply-Chain / AI-Native security findings at or above 'MEDIUM' threshold"
+        ));
     }
 }

@@ -331,7 +331,7 @@ fn test_cli_output_files_and_schema_validation() {
     let cdx_content = fs::read_to_string(&sbom_path).unwrap();
     let cdx_val: serde_json::Value = serde_json::from_str(&cdx_content).unwrap();
     assert_eq!(cdx_val["bomFormat"], "CycloneDX");
-    assert_eq!(cdx_val["specVersion"], "1.5");
+    assert_eq!(cdx_val["specVersion"], "1.6");
     assert!(cdx_val["serialNumber"]
         .as_str()
         .unwrap()

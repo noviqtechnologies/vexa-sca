@@ -55,7 +55,7 @@ fn decode_base64_to_hex(input: &str) -> Option<String> {
     Some(hex::encode(decoded))
 }
 
-/// Generates a standard CycloneDX v1.5 JSON Software Bill of Materials (SBOM)
+/// Generates a standard CycloneDX v1.6 JSON Software & AI Bill of Materials (SBOM + AI-BOM)
 pub fn format_cyclonedx_sbom(
     dep_graph: &DepGraph,
     scan_result: Option<&ScanResult>,
@@ -290,10 +290,54 @@ pub fn format_cyclonedx_sbom(
         }
     }
 
+    let mut services = Vec::new();
+    let mut seen_model_refs = std::collections::HashSet::new();
+    let mut seen_service_refs = std::collections::HashSet::new();
+
+    if let Some(sr) = scan_result {
+        for sc in &sr.supply_chain_findings {
+            if sc.rule_id == "SC-018" {
+                if let Some(ref fp) = sc.file_path {
+                    let bom_ref = format!("model:{}", fp);
+                    if seen_model_refs.insert(bom_ref.clone()) {
+                        let name = fp.rsplit('/').next().unwrap_or(fp.as_str()).to_string();
+                        components.push(json!({
+                            "type": "machine-learning-model",
+                            "bom-ref": bom_ref,
+                            "name": name,
+                            "properties": [
+                                { "name": "vexa:ai:asset_kind", "value": "ml-model" },
+                                { "name": "vexa:ai:file_path", "value": fp },
+                                { "name": "vexa:ai:rule_id", "value": sc.rule_id },
+                                { "name": "vexa:ai:signal", "value": sc.signal_name }
+                            ]
+                        }));
+                    }
+                }
+            } else if sc.rule_id == "SC-015" {
+                if let Some(ref fp) = sc.file_path {
+                    let bom_ref = format!("mcp:{}", fp);
+                    if seen_service_refs.insert(bom_ref.clone()) {
+                        services.push(json!({
+                            "bom-ref": bom_ref,
+                            "name": fp,
+                            "x-trust-boundary": true,
+                            "properties": [
+                                { "name": "vexa:ai:asset_kind", "value": "mcp-server" },
+                                { "name": "vexa:ai:rule_id", "value": sc.rule_id },
+                                { "name": "vexa:ai:signal", "value": sc.signal_name }
+                            ]
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
     let mut cyclonedx = json!({
-        "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
+        "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
         "bomFormat": "CycloneDX",
-        "specVersion": "1.5",
+        "specVersion": "1.6",
         "serialNumber": serial_number,
         "version": 1,
         "metadata": {
@@ -310,6 +354,10 @@ pub fn format_cyclonedx_sbom(
         "components": components,
         "dependencies": dependencies
     });
+
+    if !services.is_empty() {
+        cyclonedx["services"] = json!(services);
+    }
 
     if !vulnerabilities.is_empty() {
         cyclonedx["vulnerabilities"] = json!(vulnerabilities);
@@ -553,7 +601,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&cdx_json).expect("valid CycloneDX JSON");
 
         assert_eq!(parsed["bomFormat"], "CycloneDX");
-        assert_eq!(parsed["specVersion"], "1.5");
+        assert_eq!(parsed["specVersion"], "1.6");
         assert_eq!(parsed["components"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["components"][0]["name"], "lodash");
         assert_eq!(parsed["components"][0]["version"], "4.17.15");
@@ -873,5 +921,58 @@ mod tests {
             "in_triage"
         );
         assert!(parsed["vulnerabilities"][1]["analysis"]["justification"].is_null());
+    }
+
+    #[test]
+    fn test_cyclonedx_1_6_includes_ai_models_and_mcp_services() {
+        use crate::scanner::vuln_scanner::ScanResult;
+        use crate::supply_chain::local_analyzer::SupplyChainFinding;
+        use crate::types::SeverityLevel;
+
+        let root_pkg = crate::types::PkgInfo::new("ai-app", "1.0.0", "PyPI");
+        let graph = DepGraph::new(
+            root_pkg,
+            crate::core::dep_graph::PkgManagerInfo {
+                name: "uv".to_string(),
+                version: "0.4.0".to_string(),
+            },
+        );
+        let sr = ScanResult {
+            supply_chain_findings: vec![
+                SupplyChainFinding {
+                    rule_id: "SC-018".to_string(),
+                    signal_name: "ai_model_pickle_rce".to_string(),
+                    severity: SeverityLevel::Critical,
+                    message: "Pickle RCE".to_string(),
+                    file_path: Some("models/evil.pkl".to_string()),
+                    line: None,
+                    snippet: None,
+                },
+                SupplyChainFinding {
+                    rule_id: "SC-015".to_string(),
+                    signal_name: "mcp_unsafe_tool_config".to_string(),
+                    severity: SeverityLevel::High,
+                    message: "Unpinned npx".to_string(),
+                    file_path: Some("claude_desktop_config.json".to_string()),
+                    line: None,
+                    snippet: None,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let out = format_cyclonedx_sbom(&graph, Some(&sr), None);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["specVersion"], "1.6");
+        assert!(parsed["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["type"] == "machine-learning-model" && c["name"] == "evil.pkl"));
+        assert!(parsed["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == "claude_desktop_config.json"));
     }
 }

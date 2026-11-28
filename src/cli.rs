@@ -1845,6 +1845,7 @@ pub async fn run() {
                 baseline_file: baseline.clone(),
                 is_ci_profile: false,
                 max_source_files,
+                offline_db: offline_db.clone(),
             };
 
             match scan_project_with_code_security(
@@ -2442,6 +2443,7 @@ pub async fn run() {
                 baseline_file: baseline.clone(),
                 is_ci_profile: true,
                 max_source_files,
+                offline_db: offline_db.clone(),
             };
 
             match scan_project_with_code_security(

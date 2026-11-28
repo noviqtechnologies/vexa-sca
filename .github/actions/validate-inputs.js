@@ -42,6 +42,7 @@ function validateInputs(env) {
     "INPUT_FAIL_ON_REACHABLE",
     "INPUT_SAST",
     "INPUT_SECRETS",
+    "INPUT_CACHE",
     "INPUT_UPLOAD_SARIF",
     "INPUT_UPLOAD_FACTS",
     "INPUT_COMMENT_PR",

@@ -259,6 +259,9 @@ impl LocalSupplyChainAnalyzer {
         // 2b. Scan AI instruction & skill files (CLAUDE.md, .cursorrules, .windsurfrules, SKILL.md, .cursor/rules/*.mdc)
         Self::scan_ai_instruction_files(root, &mut findings);
 
+        // 2c. Scan AI model serialization artifacts, Jupyter notebooks (.ipynb), and Dockerfiles (SC-017, SC-018)
+        Self::scan_ai_models_and_notebooks(root, &mut findings);
+
         // 3. Scan manifests and lockfiles
         Self::scan_manifests(root, &mut findings);
 
@@ -269,6 +272,209 @@ impl LocalSupplyChainAnalyzer {
         Self::scan_node_modules(root, &mut findings);
 
         findings
+    }
+
+    /// Rule SC-018 & SC-019: Scans AI model serialization artifacts (.pkl, .pt, .pth, .ckpt, .joblib),
+    /// Jupyter notebooks (.ipynb), and Dockerfiles for Hugging Face / pickle supply-chain risks.
+    pub fn scan_ai_models_and_notebooks(root: &Path, findings: &mut Vec<SupplyChainFinding>) {
+        use std::io::Read;
+
+        for entry in WalkDir::new(root)
+            .max_depth(6)
+            .into_iter()
+            .filter_entry(|e| {
+                if e.depth() == 0 {
+                    return true;
+                }
+                let name = e.file_name().to_string_lossy();
+                !(e.file_type().is_dir() && is_ignored_scan_dir(&name))
+            })
+            .flatten()
+        {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let lower = file_name.to_ascii_lowercase();
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            // 1. Pickle-based model serialization artifacts (.pkl, .pickle, .pt, .pth, .ckpt, .joblib)
+            if lower.ends_with(".pkl")
+                || lower.ends_with(".pickle")
+                || lower.ends_with(".pt")
+                || lower.ends_with(".pth")
+                || lower.ends_with(".ckpt")
+                || lower.ends_with(".joblib")
+            {
+                if let Ok(mut f) = fs::File::open(path) {
+                    let mut buf = vec![0u8; 256 * 1024];
+                    let n = f.read(&mut buf).unwrap_or(0);
+                    let slice = &buf[..n];
+                    let text_lossy = String::from_utf8_lossy(slice);
+                    if text_lossy.starts_with("version https://git-lfs.github.com/spec/v1") {
+                        findings.push(SupplyChainFinding {
+                            rule_id: "SC-018".to_string(),
+                            signal_name: "ai_model_unsafe_serialization".to_string(),
+                            severity: SeverityLevel::Medium,
+                            message: format!(
+                                "Git LFS pointer references pickle-based model '{}' — migrate to SafeTensors or verify SHA-256 + weights_only=True",
+                                rel
+                            ),
+                            file_path: Some(rel),
+                            line: None,
+                            snippet: None,
+                        });
+                    } else {
+                        let has_dangerous_pickle_symbol = [
+                            "posix",
+                            "subprocess",
+                            "builtins",
+                            "os\nsystem",
+                            "nt\nsystem",
+                            "marshal\nloads",
+                            "webbrowser",
+                            "importlib",
+                        ]
+                        .iter()
+                        .any(|pat| slice.windows(pat.len()).any(|w| w == pat.as_bytes()));
+                        let has_pickle_opcode =
+                            slice.contains(&0x80) || slice.contains(&b'R') || slice.contains(&0x93);
+
+                        if has_dangerous_pickle_symbol && has_pickle_opcode {
+                            findings.push(SupplyChainFinding {
+                                rule_id: "SC-018".to_string(),
+                                signal_name: "ai_model_pickle_rce".to_string(),
+                                severity: SeverityLevel::Critical,
+                                message: format!(
+                                    "Model artifact '{}' contains executable pickle deserialization opcodes/modules (RCE risk on load); replace with SafeTensors",
+                                    rel
+                                ),
+                                file_path: Some(rel),
+                                line: None,
+                                snippet: None,
+                            });
+                        } else {
+                            findings.push(SupplyChainFinding {
+                                rule_id: "SC-018".to_string(),
+                                signal_name: "ai_model_unsafe_serialization".to_string(),
+                                severity: SeverityLevel::High,
+                                message: format!(
+                                    "Unsafe pickle-based model serialization artifact '{}' committed to repo; migrate to SafeTensors",
+                                    rel
+                                ),
+                                file_path: Some(rel),
+                                line: None,
+                                snippet: None,
+                            });
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // 2. Jupyter Notebooks (.ipynb)
+            if lower.ends_with(".ipynb") {
+                if let Ok(content) = fs::read_to_string(path) {
+                    if let Ok(nb) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if let Some(cells) = nb.get("cells").and_then(|c| c.as_array()) {
+                            for (idx, cell) in cells.iter().enumerate() {
+                                if cell.get("cell_type").and_then(|t| t.as_str()) != Some("code") {
+                                    continue;
+                                }
+                                let cell_src: String = match cell.get("source") {
+                                    Some(serde_json::Value::Array(arr)) => arr
+                                        .iter()
+                                        .filter_map(|v| v.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(""),
+                                    Some(serde_json::Value::String(s)) => s.clone(),
+                                    _ => continue,
+                                };
+                                let cell_loc = format!("{}#cell-{}", rel, idx + 1);
+                                for line in cell_src.lines() {
+                                    let t = line.trim();
+                                    if t.starts_with("!pip install")
+                                        || t.starts_with("%pip install")
+                                        || t.starts_with("!uv pip install")
+                                    {
+                                        for tok in t.split_whitespace().skip(2) {
+                                            if tok.starts_with('-')
+                                                || tok == "install"
+                                                || tok == "pip"
+                                            {
+                                                continue;
+                                            }
+                                            let pkg_name = tok
+                                                .split(&['=', '<', '>', '!', '~', '['][..])
+                                                .next()
+                                                .unwrap_or("")
+                                                .trim();
+                                            if !pkg_name.is_empty() {
+                                                let mut sc =
+                                                    Self::check_package(pkg_name, "0.0.0", "PyPI");
+                                                for f in &mut sc {
+                                                    f.file_path = Some(cell_loc.clone());
+                                                }
+                                                findings.extend(sc);
+                                            }
+                                            if !tok.contains("==") && !tok.contains('@') {
+                                                findings.push(SupplyChainFinding {
+                                                    rule_id: "SC-019".to_string(),
+                                                    signal_name: "notebook_unpinned_pip_install"
+                                                        .to_string(),
+                                                    severity: SeverityLevel::Medium,
+                                                    message: format!(
+                                                        "Jupyter notebook cell executes unpinned package install '{}'",
+                                                        tok
+                                                    ),
+                                                    file_path: Some(cell_loc.clone()),
+                                                    line: None,
+                                                    snippet: Some(t.chars().take(64).collect()),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                                let mut cell_findings =
+                                    Self::analyze_file_content(Path::new(&cell_loc), &cell_src);
+                                for f in &mut cell_findings {
+                                    f.file_path = Some(cell_loc.clone());
+                                }
+                                findings.extend(cell_findings);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // 3. Dockerfiles: unpinned Hugging Face CLI model downloads
+            if lower == "dockerfile" || lower.starts_with("dockerfile.") {
+                if let Ok(content) = fs::read_to_string(path) {
+                    for (idx, line) in content.lines().enumerate() {
+                        let t = line.trim();
+                        if (t.contains("huggingface-cli download") || t.contains("hf download"))
+                            && !t.contains("--revision")
+                        {
+                            findings.push(SupplyChainFinding {
+                                rule_id: "SC-019".to_string(),
+                                signal_name: "ai_model_unpinned_revision".to_string(),
+                                severity: SeverityLevel::Medium,
+                                message: "Dockerfile downloads Hugging Face model without pinned --revision commit SHA".to_string(),
+                                file_path: Some(rel.clone()),
+                                line: Some(idx + 1),
+                                snippet: Some(t.chars().take(64).collect()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn scan_github_workflows(root: &Path, findings: &mut Vec<SupplyChainFinding>) {
@@ -348,131 +554,98 @@ impl LocalSupplyChainAnalyzer {
     }
 
     pub fn scan_mcp_configs(root: &Path, findings: &mut Vec<SupplyChainFinding>) {
-        let candidates = [
-            root.join("mcp.json"),
-            root.join(".mcp.json"),
-            root.join(".claude.json"),
-            root.join(".cursor").join("mcp.json"),
-            root.join(".vscode").join("mcp.json"),
-            root.join(".windsurf").join("mcp.json"),
-        ];
+        for srv in vexa_core::ai_bom::discover_mcp_configs(root) {
+            let command = srv.command.as_deref().unwrap_or("");
+            let args: Vec<&str> = srv.args.iter().map(|s| s.as_str()).collect();
+            let rel = srv.source_file.clone();
+            let srv_name = srv.name.as_str();
 
-        for path in &candidates {
-            if path.is_file() {
-                if let Ok(content) = fs::read_to_string(path) {
-                    let rel = path
-                        .strip_prefix(root)
-                        .unwrap_or(path)
-                        .to_string_lossy()
-                        .replace('\\', "/");
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                        if let Some(servers) = val.get("mcpServers").and_then(|s| s.as_object()) {
-                            for (srv_name, srv_val) in servers {
-                                let command = srv_val
-                                    .get("command")
-                                    .and_then(|c| c.as_str())
-                                    .unwrap_or("");
-                                let args: Vec<&str> = srv_val
-                                    .get("args")
-                                    .and_then(|a| a.as_array())
-                                    .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-                                    .unwrap_or_default();
+            // Rule SC-015: npx -y without pinned version
+            if (command == "npx" || args.contains(&"npx"))
+                && (args.contains(&"-y") || args.contains(&"--yes"))
+            {
+                let unpinned = args.iter().any(|arg| {
+                    !arg.starts_with('-')
+                        && !arg.trim_start_matches('@').contains('@')
+                        && *arg != "npx"
+                });
+                if unpinned {
+                    findings.push(SupplyChainFinding {
+                        rule_id: "SC-015".to_string(),
+                        signal_name: "mcp_unsafe_tool_config".to_string(),
+                        severity: SeverityLevel::High,
+                        message: format!(
+                            "MCP server '{}' configures dynamic unpinned package execution via 'npx -y'",
+                            srv_name
+                        ),
+                        file_path: Some(rel.clone()),
+                        line: None,
+                        snippet: Some(args.join(" ").chars().take(64).collect()),
+                    });
+                }
+            }
 
-                                // Rule SC-015: npx -y without pinned version
-                                if (command == "npx" || args.contains(&"npx"))
-                                    && (args.contains(&"-y") || args.contains(&"--yes"))
-                                {
-                                    let unpinned = args.iter().any(|arg| {
-                                        !arg.starts_with('-')
-                                            && !arg.trim_start_matches('@').contains('@')
-                                            && *arg != "npx"
-                                    });
-                                    if unpinned {
-                                        findings.push(SupplyChainFinding {
-                                            rule_id: "SC-015".to_string(),
-                                            signal_name: "mcp_unsafe_tool_config".to_string(),
-                                            severity: SeverityLevel::High,
-                                            message: format!(
-                                                "MCP server '{}' configures dynamic unpinned package execution via 'npx -y'",
-                                                srv_name
-                                            ),
-                                            file_path: Some(rel.clone()),
-                                            line: None,
-                                            snippet: Some(srv_val.to_string()),
-                                        });
-                                    }
-                                }
+            // Rule SC-015: uvx / pipx run without pinned '==' version
+            if command == "uvx" || command == "pipx" {
+                let unpinned = args.iter().any(|arg| {
+                    !arg.starts_with('-')
+                        && *arg != "run"
+                        && !arg.contains("==")
+                        && !arg.contains('@')
+                });
+                if unpinned {
+                    findings.push(SupplyChainFinding {
+                        rule_id: "SC-015".to_string(),
+                        signal_name: "mcp_unsafe_tool_config".to_string(),
+                        severity: SeverityLevel::High,
+                        message: format!(
+                            "MCP server '{}' configures dynamic unpinned Python package execution via '{}'",
+                            srv_name, command
+                        ),
+                        file_path: Some(rel.clone()),
+                        line: None,
+                        snippet: Some(args.join(" ").chars().take(64).collect()),
+                    });
+                }
+            }
 
-                                // Rule SC-015: uvx / pipx run without pinned '==' version
-                                if command == "uvx" || command == "pipx" {
-                                    let unpinned = args.iter().any(|arg| {
-                                        !arg.starts_with('-')
-                                            && *arg != "run"
-                                            && !arg.contains("==")
-                                            && !arg.contains('@')
-                                    });
-                                    if unpinned {
-                                        findings.push(SupplyChainFinding {
-                                            rule_id: "SC-015".to_string(),
-                                            signal_name: "mcp_unsafe_tool_config".to_string(),
-                                            severity: SeverityLevel::High,
-                                            message: format!(
-                                                "MCP server '{}' configures dynamic unpinned Python package execution via '{}'",
-                                                srv_name, command
-                                            ),
-                                            file_path: Some(rel.clone()),
-                                            line: None,
-                                            snippet: Some(srv_val.to_string()),
-                                        });
-                                    }
-                                }
+            // Rule SC-015: unencrypted non-loopback http:// remote MCP server URL
+            if let Some(ref url) = srv.url {
+                let lower_url = url.trim().to_ascii_lowercase();
+                if lower_url.starts_with("http://")
+                    && !lower_url.starts_with("http://localhost")
+                    && !lower_url.starts_with("http://127.0.0.1")
+                {
+                    findings.push(SupplyChainFinding {
+                        rule_id: "SC-015".to_string(),
+                        signal_name: "mcp_unsafe_tool_config".to_string(),
+                        severity: SeverityLevel::High,
+                        message: format!(
+                            "MCP server '{}' connects to unencrypted remote endpoint '{}'",
+                            srv_name, url
+                        ),
+                        file_path: Some(rel.clone()),
+                        line: None,
+                        snippet: Some(url.clone()),
+                    });
+                }
+            }
 
-                                // Rule SC-015: unencrypted non-loopback http:// remote MCP server URL
-                                if let Some(url) = srv_val
-                                    .get("url")
-                                    .or_else(|| srv_val.get("serverUrl"))
-                                    .and_then(|u| u.as_str())
-                                {
-                                    let lower_url = url.trim().to_ascii_lowercase();
-                                    if lower_url.starts_with("http://")
-                                        && !lower_url.starts_with("http://localhost")
-                                        && !lower_url.starts_with("http://127.0.0.1")
-                                    {
-                                        findings.push(SupplyChainFinding {
-                                            rule_id: "SC-015".to_string(),
-                                            signal_name: "mcp_unsafe_tool_config".to_string(),
-                                            severity: SeverityLevel::High,
-                                            message: format!(
-                                                "MCP server '{}' connects to unencrypted remote endpoint '{}'",
-                                                srv_name, url
-                                            ),
-                                            file_path: Some(rel.clone()),
-                                            line: None,
-                                            snippet: Some(url.to_string()),
-                                        });
-                                    }
-                                }
-
-                                // Rule SC-015: unrestricted filesystem root "/" or "C:\" in args
-                                for arg in &args {
-                                    if *arg == "/" || *arg == "C:\\" || *arg == "C:/" {
-                                        findings.push(SupplyChainFinding {
-                                            rule_id: "SC-015".to_string(),
-                                            signal_name: "mcp_unsafe_tool_config".to_string(),
-                                            severity: SeverityLevel::High,
-                                            message: format!(
-                                                "MCP server '{}' grants unrestricted host filesystem root '{}'",
-                                                srv_name, arg
-                                            ),
-                                            file_path: Some(rel.clone()),
-                                            line: None,
-                                            snippet: Some(arg.to_string()),
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
+            // Rule SC-015: unrestricted filesystem root "/" or "C:\" in args
+            for arg in &args {
+                if *arg == "/" || *arg == "C:\\" || *arg == "C:/" {
+                    findings.push(SupplyChainFinding {
+                        rule_id: "SC-015".to_string(),
+                        signal_name: "mcp_unsafe_tool_config".to_string(),
+                        severity: SeverityLevel::High,
+                        message: format!(
+                            "MCP server '{}' grants unrestricted host filesystem root '{}'",
+                            srv_name, arg
+                        ),
+                        file_path: Some(rel.clone()),
+                        line: None,
+                        snippet: Some((*arg).to_string()),
+                    });
                 }
             }
         }
@@ -902,6 +1075,51 @@ impl LocalSupplyChainAnalyzer {
             } else {
                 trimmed
             };
+
+            // Rule SC-019: Unsafe AI model loading / unpinned Hugging Face references
+            if path_str.ends_with(".py") || path_str.contains(".ipynb") {
+                let compact = code_inspect.replace(' ', "");
+                if compact.contains("trust_remote_code=True") {
+                    findings.push(SupplyChainFinding {
+                        rule_id: "SC-019".to_string(),
+                        signal_name: "ai_model_unsafe_load".to_string(),
+                        severity: SeverityLevel::High,
+                        message: "Hugging Face model loader enables trust_remote_code=True, executing arbitrary remote Python code".to_string(),
+                        file_path: Some(path_str.clone()),
+                        line: Some(line_num),
+                        snippet: Some(trimmed.chars().take(64).collect()),
+                    });
+                }
+                if (code_inspect.contains("from_pretrained(")
+                    || code_inspect.contains("hf_hub_download("))
+                    && !compact.contains("revision=")
+                    && !code_inspect.contains("\"./")
+                    && !code_inspect.contains("'./")
+                    && !code_inspect.contains("\"/")
+                    && !code_inspect.contains("'/")
+                {
+                    findings.push(SupplyChainFinding {
+                        rule_id: "SC-019".to_string(),
+                        signal_name: "ai_model_unpinned_revision".to_string(),
+                        severity: SeverityLevel::Medium,
+                        message: "Hugging Face model reference is unpinned (missing immutable commit-SHA revision=)".to_string(),
+                        file_path: Some(path_str.clone()),
+                        line: Some(line_num),
+                        snippet: Some(trimmed.chars().take(64).collect()),
+                    });
+                }
+                if code_inspect.contains("torch.load(") && !compact.contains("weights_only=True") {
+                    findings.push(SupplyChainFinding {
+                        rule_id: "SC-019".to_string(),
+                        signal_name: "ai_model_unsafe_load".to_string(),
+                        severity: SeverityLevel::High,
+                        message: "PyTorch torch.load() called without weights_only=True, allowing arbitrary pickle RCE".to_string(),
+                        file_path: Some(path_str.clone()),
+                        line: Some(line_num),
+                        snippet: Some(trimmed.chars().take(64).collect()),
+                    });
+                }
+            }
 
             // Rule SC-012: Crypto miner signatures & WebAssembly crypto-mining
             if code_inspect.contains("stratum+tcp://")
@@ -1562,6 +1780,78 @@ mod tests {
         assert!(
             findings.iter().filter(|f| f.rule_id == "SC-016").count() >= 2,
             "expected SC-016 findings for hidden Unicode in CLAUDE.md and prompt injection in .cursorrules"
+        );
+    }
+
+    #[test]
+    fn test_sc018_pickle_rce_and_sc019_huggingface_ipynb_dockerfile() {
+        let temp_dir = std::env::temp_dir().join("vexa_sca_ai_supply_chain_test");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // 1. claude_desktop_config.json with unpinned npx -y
+        std::fs::write(
+            temp_dir.join("claude_desktop_config.json"),
+            r#"{"mcpServers":{"fs":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/"]}}}"#,
+        )
+        .unwrap();
+
+        // 2. Malicious pickle payload (.pkl)
+        let mut malicious_pkl = vec![0x80u8, 0x04, 0x95];
+        malicious_pkl.extend_from_slice(b"posix\nsystem\n(S'id'\ntR.");
+        std::fs::write(temp_dir.join("evil_model.pkl"), &malicious_pkl).unwrap();
+
+        // 3. Git LFS pointer (.pt)
+        std::fs::write(
+            temp_dir.join("weights.pt"),
+            "version https://git-lfs.github.com/spec/v1\noid sha256:0000\nsize 12345\n",
+        )
+        .unwrap();
+
+        // 4. Python file with trust_remote_code=True, unpinned from_pretrained, unsafe torch.load
+        std::fs::write(
+            temp_dir.join("infer.py"),
+            "m = AutoModel.from_pretrained('org/model', trust_remote_code=True)\nw = torch.load('weights.pt')\n",
+        )
+        .unwrap();
+
+        // 5. Jupyter notebook with unpinned !pip install
+        std::fs::write(
+            temp_dir.join("notebook.ipynb"),
+            r#"{"cells":[{"cell_type":"code","source":["!pip install langchain\n","AutoModel.from_pretrained('org/rag')\n"]}]}"#,
+        )
+        .unwrap();
+
+        // 6. Dockerfile with unpinned huggingface-cli download
+        std::fs::write(
+            temp_dir.join("Dockerfile"),
+            "FROM python:3.11\nRUN huggingface-cli download meta-llama/Llama-3-8B\n",
+        )
+        .unwrap();
+
+        let findings = LocalSupplyChainAnalyzer::scan_workspace(&temp_dir);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        assert!(
+            findings.iter().any(|f| f.rule_id == "SC-015"
+                && f.file_path.as_deref() == Some("claude_desktop_config.json")),
+            "expected SC-015 for claude_desktop_config.json"
+        );
+        assert!(
+            findings.iter().any(|f| f.rule_id == "SC-018"
+                && f.severity == SeverityLevel::Critical
+                && f.file_path.as_deref() == Some("evil_model.pkl")),
+            "expected Critical SC-018 for pickle RCE payload"
+        );
+        assert!(
+            findings.iter().any(|f| f.rule_id == "SC-018"
+                && f.severity == SeverityLevel::Medium
+                && f.file_path.as_deref() == Some("weights.pt")),
+            "expected Medium SC-018 for Git LFS pointer"
+        );
+        assert!(
+            findings.iter().filter(|f| f.rule_id == "SC-019").count() >= 5,
+            "expected SC-019 findings across infer.py, notebook.ipynb, and Dockerfile"
         );
     }
 }

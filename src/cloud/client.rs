@@ -51,6 +51,34 @@ pub struct VexaFactsPayload {
     pub repo_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage: Option<FactCoverage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<FactModelItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<FactMcpServerItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FactModelItem {
+    pub name: String,
+    pub file_path: String,
+    pub format: String,
+    pub rule_id: String,
+    pub severity: String,
+    pub signal_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FactMcpServerItem {
+    pub name: String,
+    pub source_file: String,
+    pub transport: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    pub unpinned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,6 +383,8 @@ impl CloudClient {
                 "SC-014" | "SC-015" => Some("CWE-829".to_string()),
                 "SC-016" => Some("CWE-1036".to_string()),
                 "SC-017" => Some("CWE-506".to_string()),
+                "SC-018" => Some("CWE-502".to_string()),
+                "SC-019" => Some("CWE-829".to_string()),
                 "SC-007" => Some("CWE-200".to_string()),
                 "SC-003" => Some("CWE-94".to_string()),
                 "SC-004" => Some("CWE-78".to_string()),
@@ -378,6 +408,14 @@ impl CloudClient {
                 ),
                 "SC-007" => Some(
                     "Avoid direct access to host filesystem credentials or sensitive configuration files (/etc/passwd, .ssh, .aws)."
+                        .to_string(),
+                ),
+                "SC-018" => Some(
+                    "Migrate pickle-based model checkpoints (.pkl/.pt/.ckpt/.joblib) to SafeTensors or enforce torch.load(..., weights_only=True)."
+                        .to_string(),
+                ),
+                "SC-019" => Some(
+                    "Pin Hugging Face models to an immutable commit-SHA revision=, remove trust_remote_code=True, and pin notebook pip installs with ==."
                         .to_string(),
                 ),
                 _ => Some(format!("Review supply chain signal '{}'", sc.signal_name)),
@@ -437,6 +475,51 @@ impl CloudClient {
             .saturating_sub(reachable_count + unreachable_count);
         let git_ctx = Self::detect_git_context(Path::new("."));
 
+        let mut models = Vec::new();
+        let mut seen_models = std::collections::HashSet::new();
+        for sc in &result.supply_chain_findings {
+            if sc.rule_id == "SC-018" || sc.rule_id == "SC-019" {
+                if let Some(ref fp) = sc.file_path {
+                    if seen_models.insert(fp.clone()) {
+                        let name = fp.rsplit('/').next().unwrap_or(fp.as_str()).to_string();
+                        let format = fp
+                            .rsplit('.')
+                            .next()
+                            .unwrap_or("unknown")
+                            .to_ascii_lowercase();
+                        models.push(FactModelItem {
+                            name,
+                            file_path: fp.clone(),
+                            format,
+                            rule_id: sc.rule_id.clone(),
+                            severity: sc.severity.as_str().to_string(),
+                            signal_name: sc.signal_name.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        let mcp_servers: Vec<FactMcpServerItem> =
+            vexa_core::ai_bom::discover_mcp_configs(Path::new("."))
+                .into_iter()
+                .map(|m| {
+                    let matching_sc = result.supply_chain_findings.iter().find(|sc| {
+                        sc.rule_id == "SC-015"
+                            && sc.file_path.as_deref() == Some(m.source_file.as_str())
+                    });
+                    FactMcpServerItem {
+                        name: m.name,
+                        source_file: m.source_file,
+                        transport: m.transport,
+                        command: m.command,
+                        unpinned: matching_sc.is_some(),
+                        rule_id: matching_sc.map(|s| s.rule_id.clone()),
+                        severity: matching_sc.map(|s| s.severity.as_str().to_string()),
+                    }
+                })
+                .collect();
+
         VexaFactsPayload {
             version: 2,
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -460,6 +543,8 @@ impl CloudClient {
             pr_number: git_ctx.pr_number,
             repo_url: git_ctx.repo_url,
             coverage: None,
+            models,
+            mcp_servers,
         }
     }
 

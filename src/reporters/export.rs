@@ -1257,9 +1257,15 @@ mod tests {
         assert_eq!(parsed["summary"]["reachabilitySummary"]["unreachable"], 1);
         assert_eq!(parsed["summary"]["reachabilitySummary"]["unknown"], 2);
         assert_eq!(
-            parsed["summary"]["usageSignalsSummary"]["signalMatched"].as_u64().unwrap()
-                + parsed["summary"]["usageSignalsSummary"]["noSignalObserved"].as_u64().unwrap()
-                + parsed["summary"]["usageSignalsSummary"]["unknown"].as_u64().unwrap(),
+            parsed["summary"]["usageSignalsSummary"]["signalMatched"]
+                .as_u64()
+                .unwrap()
+                + parsed["summary"]["usageSignalsSummary"]["noSignalObserved"]
+                    .as_u64()
+                    .unwrap()
+                + parsed["summary"]["usageSignalsSummary"]["unknown"]
+                    .as_u64()
+                    .unwrap(),
             4
         );
     }

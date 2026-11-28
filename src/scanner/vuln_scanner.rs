@@ -136,6 +136,9 @@ pub struct VulnScanner {
     pub client: Client,
     pub epss_resolver: EpssResolver,
     pub kev_catalog: std::sync::RwLock<crate::scanner::kev::CisaKevCatalog>,
+    /// Optional pre-loaded OSV advisories from a verified `.vexadb` offline bundle,
+    /// keyed by lowercase `(ecosystem, package_name)`.
+    pub offline_advisories: Option<HashMap<(String, String), Vec<Value>>>,
 }
 
 impl Default for VulnScanner {
@@ -161,15 +164,75 @@ impl VulnScanner {
             client,
             epss_resolver,
             kev_catalog: std::sync::RwLock::new(crate::scanner::kev::CisaKevCatalog::new()),
+            offline_advisories: None,
         }
     }
 
+    /// Creates a `VulnScanner` backed by a verified Ed25519-signed `.vexadb` offline bundle,
+    /// eliminating live `api.osv.dev` network calls during CI/CD or air-gapped scans.
+    pub fn with_offline_bundle(bundle_path: &std::path::Path) -> Result<Self, String> {
+        let (_verified, envelope) =
+            crate::cloud::OfflineBundleVerifier::verify_bundle_file(bundle_path, None)?;
+        let payload: Value = serde_json::from_str(&envelope.payload_json)
+            .map_err(|e| format!("Invalid offline bundle payload JSON: {}", e))?;
+
+        let advisories_arr: Vec<Value> = if let Some(arr) = payload.as_array() {
+            arr.clone()
+        } else if let Some(arr) = payload.get("advisories").and_then(|v| v.as_array()) {
+            arr.clone()
+        } else if let Some(arr) = payload.get("vulns").and_then(|v| v.as_array()) {
+            arr.clone()
+        } else {
+            return Err(
+                "Offline bundle payload must be a JSON array or object with 'advisories'/'vulns'"
+                    .to_string(),
+            );
+        };
+
+        let cache = VulnCache {
+            offline: true,
+            ..Default::default()
+        };
+        let mut by_pkg: HashMap<(String, String), Vec<Value>> = HashMap::new();
+
+        for adv in advisories_arr {
+            if let Some(id) = adv.get("id").and_then(|v| v.as_str()) {
+                cache.set_advisory(id, &adv);
+            }
+            if let Some(affected) = adv.get("affected").and_then(|v| v.as_array()) {
+                for item in affected {
+                    let pkg = item.get("package");
+                    let name = pkg
+                        .and_then(|p| p.get("name"))
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    let eco = pkg
+                        .and_then(|p| p.get("ecosystem"))
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    if !name.is_empty() {
+                        by_pkg.entry((eco, name)).or_default().push(adv.clone());
+                    }
+                }
+            }
+        }
+
+        let mut scanner = Self::new(Some(cache));
+        scanner.offline_advisories = Some(by_pkg);
+        Ok(scanner)
+    }
+
     pub async fn scan_graph(&self, dep_graph: &DepGraph) -> Result<ScanResult, String> {
-        let fresh_kev = crate::scanner::kev::CisaKevCatalog::load_or_fetch(
-            &self.cache.cache_dir,
-            Some(&self.client),
-        )
-        .await;
+        let http_client = if self.offline_advisories.is_some() || self.cache.offline {
+            None
+        } else {
+            Some(&self.client)
+        };
+        let fresh_kev =
+            crate::scanner::kev::CisaKevCatalog::load_or_fetch(&self.cache.cache_dir, http_client)
+                .await;
         if let Ok(mut guard) = self.kev_catalog.write() {
             *guard = fresh_kev;
         }
@@ -179,12 +242,23 @@ impl VulnScanner {
         let mut results_map: HashMap<String, Vec<Value>> = HashMap::new();
         let total_pkgs = pkgs.len();
 
-        // 1. Check cache
-        for pkg in &pkgs {
-            if let Some(cached) = self.cache.get(pkg) {
-                results_map.insert(pkg.id.clone(), cached);
-            } else {
-                uncached.push(pkg.clone());
+        // 1. Check verified offline bundle or local cache
+        if let Some(ref offline_map) = self.offline_advisories {
+            for pkg in &pkgs {
+                let key = (
+                    pkg.ecosystem.to_ascii_lowercase(),
+                    pkg.name.to_ascii_lowercase(),
+                );
+                let matches = offline_map.get(&key).cloned().unwrap_or_default();
+                results_map.insert(pkg.id.clone(), matches);
+            }
+        } else {
+            for pkg in &pkgs {
+                if let Some(cached) = self.cache.get(pkg) {
+                    results_map.insert(pkg.id.clone(), cached);
+                } else {
+                    uncached.push(pkg.clone());
+                }
             }
         }
 

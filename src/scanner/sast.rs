@@ -208,7 +208,7 @@ impl SastScanner {
 
         let is_supported = matches!(
             ext.as_str(),
-            "py" | "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "go" | "rs" | "java"
+            "py" | "ipynb" | "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "go" | "rs" | "java"
         );
         if !is_supported {
             return;
@@ -227,7 +227,7 @@ impl SastScanner {
             }
         }
 
-        let content = match fs::read_to_string(file_path) {
+        let raw_content = match fs::read_to_string(file_path) {
             Ok(c) => c,
             Err(_) => {
                 coverage.files_failed += 1;
@@ -237,6 +237,36 @@ impl SastScanner {
                 return;
             }
         };
+
+        let (content, effective_ext) = if ext == "ipynb" {
+            let mut extracted = String::new();
+            if let Ok(nb) = serde_json::from_str::<serde_json::Value>(&raw_content) {
+                if let Some(cells) = nb.get("cells").and_then(|c| c.as_array()) {
+                    for cell in cells {
+                        if cell.get("cell_type").and_then(|t| t.as_str()) != Some("code") {
+                            continue;
+                        }
+                        match cell.get("source") {
+                            Some(serde_json::Value::Array(arr)) => {
+                                for s in arr.iter().filter_map(|v| v.as_str()) {
+                                    extracted.push_str(s);
+                                }
+                                extracted.push('\n');
+                            }
+                            Some(serde_json::Value::String(s)) => {
+                                extracted.push_str(s);
+                                extracted.push('\n');
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            (extracted, "py".to_string())
+        } else {
+            (raw_content, ext)
+        };
+        let ext = effective_ext;
 
         coverage.files_analysed += 1;
 
@@ -630,6 +660,15 @@ impl SastScanner {
                 return Some((
                     "pickle.loads(...)",
                     "Do not unpickle untrusted data. Use JSON or a schema-validated format like Pydantic/Protobuf.",
+                ));
+            }
+            if line.contains("torch.load(")
+                && !line.contains("weights_only=True")
+                && !line.contains("weights_only = True")
+            {
+                return Some((
+                    "torch.load(...)",
+                    "Pass weights_only=True to torch.load() or migrate model checkpoints to SafeTensors.",
                 ));
             }
             if line.contains("yaml.load(")
@@ -1312,6 +1351,47 @@ func run(db *sql.DB, userInput string) {
         assert_eq!(
             f.matched_sink.as_deref(),
             Some("cursor.execute(f\"SELECT ...\")")
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_torch_load_and_ipynb_notebook_scanning() {
+        let temp_dir = std::env::temp_dir().join("vexa_sast_ipynb_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        fs::write(
+            temp_dir.join("load.py"),
+            "import torch\nm = torch.load('weights.pt')\nsafe = torch.load('weights.pt', weights_only=True)\n",
+        )
+        .unwrap();
+
+        fs::write(
+            temp_dir.join("train.ipynb"),
+            r#"{"cells":[{"cell_type":"code","source":["import pickle\n","pickle.loads(raw_data)\n"]}]}"#,
+        )
+        .unwrap();
+
+        let findings = SastScanner::scan_workspace(&temp_dir);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file_path == "load.py" && f.line == 2 && f.rule_id == "VEXA-SAST-003"),
+            "Expected torch.load without weights_only=True to trigger VEXA-SAST-003"
+        );
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.file_path == "load.py" && f.line == 3),
+            "Expected torch.load with weights_only=True not to trigger"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.file_path == "train.ipynb" && f.rule_id == "VEXA-SAST-003"),
+            "Expected .ipynb code cell pickle.loads to trigger VEXA-SAST-003"
         );
 
         let _ = fs::remove_dir_all(&temp_dir);

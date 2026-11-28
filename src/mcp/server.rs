@@ -324,6 +324,7 @@ impl McpServer {
                     baseline_file: None,
                     is_ci_profile: false,
                     max_source_files: Some(5000),
+                    offline_db: None,
                 };
 
                 match scan_project(Path::new(target), scan_opts).await {

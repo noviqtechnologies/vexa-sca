@@ -2,14 +2,15 @@
 
 ## Scope and Status
 
-Vexa SCA is **Generally Available (GA)** for Tier 1 ecosystems (Node.js / JavaScript / TypeScript: `package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9). It provides deterministic quality-gate exit codes (`0`, `1`, `2`, `3`), native PR-differential scanning (`--baseline`), GitHub Actions Step Summaries, workflow annotations, and schema-validated SARIF v2.1.0 and CycloneDX v1.5 / SPDX v2.3 SBOM exports.
+Vexa SCA is **Generally Available (GA)** for Tier 1 ecosystems (Node.js / JavaScript / TypeScript: `package-lock.json` v2/v3, `npm-shrinkwrap.json`, `pnpm-lock.yaml` v5/v6/v9). It provides deterministic quality-gate exit codes (`0`, `1`, `2`, `3`), native PR-differential scanning (`--baseline`), GitHub Actions Step Summaries, workflow annotations, and schema-validated SARIF v2.1.0 and CycloneDX v1.6 (SBOM + AI-BOM) / SPDX v2.3 exports.
 
 In enterprise DevSecOps pipelines, Vexa SCA supports two deployment patterns:
 1. **Enforcement Gate (Blocking):** Fails builds (`exit 1`) when vulnerabilities breach defined thresholds (e.g., `--fail-on high`), preventing risky dependencies from merging into protected branches.
 2. **Audit / Report-Only (Non-blocking):** Uses `--no-fail` to record security findings, upload SARIF alerts to GitHub Code Scanning, and generate audit dashboards without breaking builds during team onboarding.
 
 ### Security & Integrity Principles for CI
-- **Immutable Action Pinning:** Pin all third-party CI actions to full commit SHAs (e.g. `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`) to protect against supply chain tampering.
+- **Immutable Action Pinning & Binary Verification:** Pin all third-party CI actions to full commit SHAs (e.g. `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`). The official `action.yml` verifies downloaded release archives against `.sha256` digests fail-closed across Linux, macOS, and Windows, caches advisory intelligence (`cache: 'true'`), and supports air-gapped `.vexadb` bundles (`offline-db`).
+- **Supply-Chain & AI-Native Gating:** `QualityGate` enforces `SC-001`–`SC-019` (including unpinned `npx -y` MCP servers in `mcp.json`/`claude_desktop_config.json`, prompt-injection in `CLAUDE.md`/`.cursorrules`, unsafe pickle/PyTorch checkpoints, `.ipynb` notebooks, and unpinned Hugging Face loaders) against `--fail-on`.
 - **Least-Privilege Token Scopes:** Use `contents: read` for audit-only runs, adding `security-events: write` only when uploading SARIF to GitHub Code Scanning.
 - **Verdict Integrity:** Repository Usage Signals (`IMPORTED_SOURCE`, `REFERENCED_CONFIG_OR_SCRIPT`) are heuristic triage aids. Quality gates must evaluate the full unsuppressed finding set; `--reachable-only` is for presentation filtering, not for suppressing unverified findings.
 - **Exit Code Contract:** Precedence ensures configuration errors (`2`) and incomplete scan data (`3`) are never hidden as clean passes. `--no-fail` waives gate failure (`1`) only.
