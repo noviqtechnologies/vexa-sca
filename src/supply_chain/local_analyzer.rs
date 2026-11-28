@@ -1269,7 +1269,8 @@ impl LocalSupplyChainAnalyzer {
                     && (code_inspect.contains("exec(") || code_inspect.contains("execSync(")))
                     || (code_inspect.contains("subprocess.Popen")
                         && code_inspect.contains("shell=True"))
-                    || (code_inspect.contains("subprocess.call") && code_inspect.contains("shell=True"))
+                    || (code_inspect.contains("subprocess.call")
+                        && code_inspect.contains("shell=True"))
                     || (code_inspect.contains("os.system(")))
             {
                 findings.push(SupplyChainFinding {
